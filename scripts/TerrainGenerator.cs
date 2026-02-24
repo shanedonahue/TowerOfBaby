@@ -18,20 +18,20 @@ public partial class TerrainGenerator : StaticBody3D
 		_meshInstance = GetNode<MeshInstance3D>("MeshInstance3D");
 		_collisionShape = GetNode<CollisionShape3D>("CollisionShape3D");
 
-		// var noise = new FastNoiseLite
-		// {
-		// 	Seed = Seed,
-		// 	Frequency = Frequency,
-		// 	NoiseType = FastNoiseLite.NoiseTypeEnum.OpenSimplex2
-		// };
+		var noise = new FastNoiseLite
+		{
+			Seed = Seed,
+			Frequency = Frequency,
+			NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex
+		};
 
-		// var mesh = BuildMesh(noise);
-		// _meshInstance.Mesh = mesh;
+		var mesh = BuildMesh(noise);
+		_meshInstance.Mesh = mesh;
 
-		// // Collision from mesh
-		// var shape = new ConcavePolygonShape3D();
-		// shape.Data = mesh.GetFaces(); // triangles
-		// _collisionShape.Shape = shape;
+		// Collision from mesh
+		var shape = new ConcavePolygonShape3D();
+		shape.Data = mesh.GetFaces(); // triangles
+		_collisionShape.Shape = shape;
 	}
 
 	private ArrayMesh BuildMesh(FastNoiseLite noise)
@@ -43,37 +43,37 @@ public partial class TerrainGenerator : StaticBody3D
 		for (int x = 0; x < Size; x++)
 		{
 			// four corners of a quad
-			// var p00 = Vertex(x,     z,     noise);
-			// var p10 = Vertex(x + 1, z,     noise);
-			// var p01 = Vertex(x,     z + 1, noise);
-			// var p11 = Vertex(x + 1, z + 1, noise);
+			var p00 = Vertex(x,     z,     noise);
+			var p10 = Vertex(x + 1, z,     noise);
+			var p01 = Vertex(x,     z + 1, noise);
+			var p11 = Vertex(x + 1, z + 1, noise);
 
-			// // two triangles: (p00, p01, p11) and (p00, p11, p10)
-			// AddTri(st, p00, p01, p11);
-			// AddTri(st, p00, p11, p10);
+			// two triangles: (p00, p01, p11) and (p00, p11, p10)
+			AddTri(st, p00, p01, p11);
+			AddTri(st, p00, p11, p10);
 		}
 
 		st.GenerateNormals();
-		st.GenerateTangents();
+		// st.GenerateTangents();
 
 		return st.Commit();
 	}
 
-	// private Vector3 Vertex(int gx, int gz, FastNoiseLite noise)
-	// {
-	// 	float x = gx * CellSize;
-	// 	float z = gz * CellSize;
+	private Vector3 Vertex(int gx, int gz, FastNoiseLite noise)
+	{
+		float x = gx * CellSize;
+		float z = gz * CellSize;
 
-	// 	// Noise is [-1,1] → scale to height
-	// 	float y = noise.GetNoise2D(x, z) * Height;
+		// Noise is [-1,1] → scale to height
+		float y = noise.GetNoise2D(x, z) * Height;
 
-	// 	return new Vector3(x, y, z);
-	// }
+		return new Vector3(x, y, z);
+	}
 
-	// private void AddTri(SurfaceTool st, Vector3 a, Vector3 b, Vector3 c)
-	// {
-	// 	st.AddVertex(a);
-	// 	st.AddVertex(b);
-	// 	st.AddVertex(c);
-	// }
+	private void AddTri(SurfaceTool st, Vector3 a, Vector3 b, Vector3 c)
+	{
+		st.AddVertex(a);
+		st.AddVertex(b);
+		st.AddVertex(c);
+	}
 }
