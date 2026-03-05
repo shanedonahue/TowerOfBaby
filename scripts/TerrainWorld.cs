@@ -4,7 +4,7 @@ using System.Collections.Generic;
 public partial class TerrainWorld : Node3D
 {
     [Export] public PackedScene ChunkScene;
-    [Export] public int Radius = 1; // 1 => 3x3 chunks
+    [Export] public int Radius = 32; // 1 => 3x3 chunks
 
     private readonly Dictionary<Vector2I, TerrainChunk> _chunks = new();
 

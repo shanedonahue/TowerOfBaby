@@ -4,19 +4,44 @@
 [ext_resource type="PackedScene" uid="uid://civ285j3qt0oc" path="res://scenes/TerrainWorld.tscn" id="1_elqb8"]
 [ext_resource type="PackedScene" uid="uid://moaig7vpjwi7" path="res://scenes/TerrainChunk.tscn" id="2_rvslj"]
 
-[sub_resource type="Environment" id="Environment_elqb8"]
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0bbpv"]
+
+[sub_resource type="Sky" id="Sky_rarhs"]
+sky_material = SubResource("ProceduralSkyMaterial_0bbpv")
+
+[sub_resource type="Environment" id="Environment_vcsgt"]
+background_mode = 2
+sky = SubResource("Sky_rarhs")
+ambient_light_source = 3
+ambient_light_color = Color(0.61745477, 0.61745477, 0.6174547, 1)
+reflected_light_source = 2
+tonemap_mode = 2
+glow_intensity = 0.5
+fog_mode = 1
+fog_light_energy = 0.0
+fog_sun_scatter = 0.66
+fog_density = 0.245
+fog_aerial_perspective = 0.21
+fog_sky_affect = 0.138
+fog_depth_curve = 3.1383367
 
 [node name="Node3D" type="Node3D" unique_id=291864519]
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=1925700580]
-transform = Transform3D(1, 0, 0, 0, 0.76604456, 0.64278764, 0, -0.64278764, 0.76604456, 0, 40, 40)
-environment = SubResource("Environment_elqb8")
-fov = 37.849285
-script = ExtResource("1_0bbpv")
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=908968563]
-transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.7071068, 0, -0.70710677, 0.7071068, 0, 45, 45)
-light_bake_mode = 1
-
 [node name="TerrainWorld" parent="." unique_id=1007583092 instance=ExtResource("1_elqb8")]
 ChunkScene = ExtResource("2_rvslj")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=756392238]
+environment = SubResource("Environment_vcsgt")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=1925700580]
+transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70710677, 0, 40, 40)
+fov = 37.849285
+script = ExtResource("1_0bbpv")
+Speed = 200.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=908968563]
+transform = Transform3D(1, 0, 0, 0, 0.9348257, 0.355107, 0, -0.355107, 0.9348257, -1.9073486e-06, 46.761982, 108.78279)
+light_energy = 0.167
+light_indirect_energy = 0.333
+shadow_enabled = true
+shadow_blur = 4.715

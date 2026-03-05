@@ -4,10 +4,10 @@ using Godot;
 public partial class TerrainChunk : Node3D
 {
     // [Export] public int Resolution = 32;     // vertices per side
-    [Export] public float Size = 64f;        // world meters per chunk
+    [Export] public float Size = 128;        // world meters per chunk
 	[Export] public int Seed = 12345;
-	[Export] public float Frequency = 0.02f;
-	[Export] public float Height = 8.0f;     // amplitude
+	[Export] public float Frequency = 0.002f;
+	[Export] public float Height = 88.0f;     // amplitude
 
     private MeshInstance3D _mesh;
 	private FastNoiseLite _noise;
@@ -45,8 +45,17 @@ public partial class TerrainChunk : Node3D
 
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+		
 
         _mesh.Mesh = mesh;
+
+		var mat = new StandardMaterial3D
+		{
+			AlbedoColor = Colors.Burlywood,
+			Roughness = 5 
+		};
+		_mesh.SetSurfaceOverrideMaterial(0, mat);
+
     }
 
 
