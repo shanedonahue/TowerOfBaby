@@ -1,37 +1,22 @@
 [gd_scene format=3 uid="uid://cr6w384dkxwtq"]
 
-[ext_resource type="Script" uid="uid://dsn07y6k1j7xk" path="res://scripts/TerrainGenerator.cs" id="1_elqb8"]
+[ext_resource type="Script" uid="uid://dtsd1g3dbn7cp" path="res://scenes/DebugCamera.cs" id="1_0bbpv"]
+[ext_resource type="PackedScene" uid="uid://civ285j3qt0oc" path="res://scenes/TerrainWorld.tscn" id="1_elqb8"]
+[ext_resource type="PackedScene" uid="uid://moaig7vpjwi7" path="res://scenes/TerrainChunk.tscn" id="2_rvslj"]
 
-[sub_resource type="Environment" id="Environment_qnwvq"]
-
-[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_elqb8"]
-
-[sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_elqb8"]
-
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_qnwvq"]
+[sub_resource type="Environment" id="Environment_elqb8"]
 
 [node name="Node3D" type="Node3D" unique_id=291864519]
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=131887139]
+[node name="Camera3D" type="Camera3D" parent="." unique_id=1925700580]
+transform = Transform3D(1, 0, 0, 0, 0.76604456, 0.64278764, 0, -0.64278764, 0.76604456, 0, 40, 40)
+environment = SubResource("Environment_elqb8")
+fov = 37.849285
+script = ExtResource("1_0bbpv")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1835684314]
-environment = SubResource("Environment_qnwvq")
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=908968563]
+transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.7071068, 0, -0.70710677, 0.7071068, 0, 45, 45)
+light_bake_mode = 1
 
-[node name="Terrain" type="StaticBody3D" parent="." unique_id=1857280181]
-physics_material_override = SubResource("PhysicsMaterial_elqb8")
-script = ExtResource("1_elqb8")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Terrain" unique_id=73773954]
-shape = SubResource("WorldBoundaryShape3D_elqb8")
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Terrain" unique_id=916823261]
-
-[node name="Player" type="CharacterBody3D" parent="." unique_id=1909572618]
-visible = false
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1677830771]
-shape = SubResource("CapsuleShape3D_qnwvq")
-
-[node name="Camera3D" type="Camera3D" parent="Player" unique_id=576620357]
-
-[node name="Camera3D" type="Camera3D" parent="." unique_id=2057319039]
+[node name="TerrainWorld" parent="." unique_id=1007583092 instance=ExtResource("1_elqb8")]
+ChunkScene = ExtResource("2_rvslj")
