@@ -5,16 +5,17 @@
 [ext_resource type="Script" uid="uid://cevwysi0uynd2" path="res://scripts/HumanoidController.cs" id="3_player"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/VoxelPrototypeController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/FpsOverlay.cs" id="5_fps"]
+[ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/TimeOfDayController.cs" id="6_time"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.38
 height = 1.1
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.22352941, 0.4392157, 0.6156863, 1)
-sky_horizon_color = Color(0.7607843, 0.81960785, 0.8627451, 1)
-ground_bottom_color = Color(0.09019608, 0.105882354, 0.08627451, 1)
-ground_horizon_color = Color(0.4117647, 0.39607844, 0.34117648, 1)
+sky_top_color = Color(0.34117648, 0.68235296, 0.98039216, 1)
+sky_horizon_color = Color(0.7411765, 0.8901961, 1, 1)
+ground_bottom_color = Color(0.14901961, 0.27450982, 0.4117647, 1)
+ground_horizon_color = Color(0.45490196, 0.6901961, 0.9019608, 1)
 sun_angle_max = 22.0
 
 [sub_resource type="Sky" id="Sky_sky"]
@@ -27,18 +28,24 @@ ambient_light_source = 3
 ambient_light_sky_contribution = 0.6
 reflected_light_source = 2
 tonemap_mode = 2
-tonemap_exposure = 1.1
+tonemap_exposure = 1.18
 ssao_enabled = true
 ssil_enabled = true
 fog_mode = 1
-fog_density = 0.055
-fog_aerial_perspective = 0.45
-fog_sky_affect = 0.2
-fog_sun_scatter = 0.18
-fog_depth_enabled = true
-fog_depth_begin = 34.0
-fog_depth_end = 112.0
-fog_depth_curve = 1.85
+fog_sun_scatter = 0.08
+fog_density = 0.058
+fog_aerial_perspective = 0.48
+fog_sky_affect = 0.35
+fog_depth_curve = 1.75
+fog_depth_begin = 18.0
+fog_depth_end = 96.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_moon"]
+transparency = 1
+no_depth_test = true
+shading_mode = 0
+albedo_color = Color(0.92, 0.95, 1, 1)
+billboard_mode = 1
 
 [node name="VoxelPrototype" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")
@@ -70,6 +77,26 @@ shadow_enabled = true
 transform = Transform3D(0.7346276, 0.060736947, -0.6757465, 0, 0.995985, 0.08952039, 0.67847055, -0.065764144, 0.73167807, 0, 18, 0)
 light_color = Color(0.5411765, 0.6431373, 0.7372549, 1)
 light_energy = 0.22
+
+[node name="MoonLight" type="DirectionalLight3D" parent="." unique_id=943388254]
+transform = Transform3D(-0.9223053, 0.18688592, -0.33826998, 0, 0.87529933, 0.48358154, 0.38646206, 0.4460098, -0.8072932, 0, 35, 0)
+light_color = Color(0.6627451, 0.7607843, 0.98039216, 1)
+light_energy = 0.0
+light_indirect_energy = 0.0
+
+[node name="MoonVisual" type="Sprite3D" parent="." unique_id=20158377]
+transform = Transform3D(1.6, 0, 0, 0, 1.6, 0, 0, 0, 1.6, 0, 48, -140)
+material_override = SubResource("StandardMaterial3D_moon")
+modulate = Color(0.86, 0.9, 1, 0)
+pixel_size = 0.08
+axis = 1
+billboard = 1
+texture_filter = 0
+
+[node name="TimeOfDayController" type="Node" parent="." unique_id=191334561]
+script = ExtResource("6_time")
+DayLengthSeconds = 210.0
+TimeOfDay = 0.3
 
 [node name="FpsOverlay" type="CanvasLayer" parent="." unique_id=1670152037]
 script = ExtResource("5_fps")

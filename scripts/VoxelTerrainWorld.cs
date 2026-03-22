@@ -22,9 +22,14 @@ public partial class VoxelTerrainWorld : Node3D
     [Export] public float CaveThreshold = 0.63f;
     [Export] public bool UseHorizonLoadPriority = true;
     [Export] public float OccludedPriorityScale = 0.3f;
-    [Export] public int ForwardLoadRadius = 4;
-    [Export] public int SideLoadRadius = 3;
-    [Export] public int BehindLoadRadius = 1;
+    [Export] public int SearchRadius = 8;
+    [Export] public int MaxActiveColumns = 72;
+    [Export] public float GuaranteedColumnRadius = 1.6f;
+    [Export] public float ChunkVisibilityInset = 0.18f;
+    [Export] public float LargeOccluderAngleMargin = 0.055f;
+    [Export] public float MinOcclusionDistanceChunks = 5.5f;
+    [Export] public float ForwardPriorityWeight = 26.0f;
+    [Export] public float BehindViewerPenalty = 36.0f;
     [Export] public float BrushRadius = 2.4f;
     [Export] public float CarveStrength = -3.4f;
     [Export] public float BuildStrength = 2.8f;
@@ -40,6 +45,7 @@ public partial class VoxelTerrainWorld : Node3D
     private readonly HashSet<VoxelTerrainChunk> _dirtyRenderChunks = new();
     private readonly HashSet<VoxelTerrainChunk> _dirtyCollisionChunks = new();
     private readonly Dictionary<Vector3I, ulong> _chunkTouchTicks = new();
+    private readonly Dictionary<Vector2I, float> _columnRetention = new();
     private readonly List<Vector3I> _generationRequestQueue = new();
     private readonly Dictionary<Vector3I, float> _generationPriority = new();
     private readonly HashSet<Vector3I> _queuedGenerationKeys = new();
@@ -115,32 +121,8 @@ public partial class VoxelTerrainWorld : Node3D
 
         _lastCenterChunk = centerChunk;
         _lastStreamForward = streamForward;
-        HashSet<Vector3I> desired = new();
-        Basis footprintBasis = GetStreamingFootprintBasis();
-        Vector2 forward2D = new(-footprintBasis.Z.X, -footprintBasis.Z.Z);
-        Vector2 right2D = new(footprintBasis.X.X, footprintBasis.X.Z);
-        int extent = Mathf.Max(SideLoadRadius, Mathf.Max(ForwardLoadRadius, BehindLoadRadius));
-
-        for (int z = -extent; z <= extent; z++)
-        {
-            for (int x = -extent; x <= extent; x++)
-            {
-                Vector2 offset = new(x, z);
-                float forwardDistance = offset.Dot(forward2D);
-                float sideDistance = Mathf.Abs(offset.Dot(right2D));
-                if (forwardDistance < -BehindLoadRadius || forwardDistance > ForwardLoadRadius || sideDistance > SideLoadRadius)
-                {
-                    continue;
-                }
-
-                for (int y = 0; y < VerticalChunkCount; y++)
-                {
-                    Vector3I key = new(centerChunk.X + x, y, centerChunk.Y + z);
-                    desired.Add(key);
-                    EnsureChunkRequested(key, centerChunk, streamForward);
-                }
-            }
-        }
+        UpdateColumnRetention(centerChunk);
+        HashSet<Vector3I> desired = BuildDesiredChunkSet(centerChunk, streamForward);
 
         _desiredChunks = desired;
         foreach (KeyValuePair<Vector3I, VoxelTerrainChunk> entry in _chunks)
@@ -153,19 +135,6 @@ public partial class VoxelTerrainWorld : Node3D
                 TouchChunk(entry.Key);
             }
         }
-    }
-
-    private Basis GetStreamingFootprintBasis()
-    {
-        Vector2 planarForward = GetStreamingForward2D();
-        if (planarForward == Vector2.Zero)
-        {
-            return Basis.Identity;
-        }
-
-        Vector3 forward = new(planarForward.X, 0.0f, planarForward.Y);
-        Vector3 right = Vector3.Up.Cross(forward).Normalized();
-        return new Basis(right, Vector3.Up, -forward);
     }
 
     private Vector2 GetStreamingForward2D()
@@ -204,6 +173,80 @@ public partial class VoxelTerrainWorld : Node3D
         _generationRequestQueue.Add(key);
         _generationPriority[key] = priority;
         _queuedGenerationKeys.Add(key);
+    }
+
+    private HashSet<Vector3I> BuildDesiredChunkSet(Vector2I centerChunk, Vector2 streamForward)
+    {
+        List<ColumnCandidate> candidates = new();
+        int radius = GetEffectiveSearchRadius();
+
+        for (int z = -radius; z <= radius; z++)
+        {
+            for (int x = -radius; x <= radius; x++)
+            {
+                Vector2I columnKey = new(centerChunk.X + x, centerChunk.Y + z);
+                Vector2 offset = new(x, z);
+                float distance = offset.Length();
+                if (distance > radius + 0.35f)
+                {
+                    continue;
+                }
+
+                bool mandatory = distance <= GuaranteedColumnRadius;
+                float priority = mandatory
+                    ? 10000.0f - (distance * 10.0f)
+                    : ComputeColumnPriority(columnKey, centerChunk, streamForward);
+                candidates.Add(new ColumnCandidate(columnKey, priority, mandatory));
+            }
+        }
+
+        candidates.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+
+        HashSet<Vector2I> selectedColumns = new();
+        foreach (ColumnCandidate candidate in candidates)
+        {
+            if (candidate.Mandatory)
+            {
+                selectedColumns.Add(candidate.Key);
+            }
+        }
+
+        int columnBudget = Mathf.Max(MaxActiveColumns, selectedColumns.Count);
+        foreach (ColumnCandidate candidate in candidates)
+        {
+            if (selectedColumns.Count >= columnBudget)
+            {
+                break;
+            }
+
+            selectedColumns.Add(candidate.Key);
+        }
+
+        HashSet<Vector3I> desired = new();
+        foreach (Vector2I column in selectedColumns)
+        {
+            for (int y = 0; y < VerticalChunkCount; y++)
+            {
+                Vector3I key = new(column.X, y, column.Y);
+                desired.Add(key);
+                EnsureChunkRequested(key, centerChunk, streamForward);
+            }
+        }
+
+        return desired;
+    }
+
+    private int GetEffectiveSearchRadius()
+    {
+        int radius = Mathf.Max(SearchRadius, 1);
+        Camera3D camera = GetViewport().GetCamera3D();
+        if (camera == null)
+        {
+            return radius;
+        }
+
+        int farRadius = Mathf.CeilToInt(camera.Far / _settings.ChunkSize);
+        return Mathf.Max(radius, farRadius);
     }
 
     public void ApplyBrush(Vector3 worldCenter, bool additive)
@@ -447,13 +490,53 @@ public partial class VoxelTerrainWorld : Node3D
 
         float horizonVisibility = EstimateHorizonVisibility(key);
         float priority = 100.0f - (distance * 9.0f);
-        priority += (forwardAlignment + 1.0f) * 14.0f;
+        priority += (forwardAlignment + 1.0f) * (ForwardPriorityWeight * 0.7f);
+        if (forwardAlignment < 0.0f)
+        {
+            priority += forwardAlignment * BehindViewerPenalty;
+        }
         priority += horizonVisibility * 22.0f;
         priority -= key.Y * 2.5f;
         return priority;
     }
 
+    private float ComputeColumnPriority(Vector2I columnKey, Vector2I centerChunk, Vector2 streamForward)
+    {
+        Vector2 offset = new(columnKey.X - centerChunk.X, columnKey.Y - centerChunk.Y);
+        float distance = offset.Length();
+
+        float forwardAlignment = 0.0f;
+        if (streamForward != Vector2.Zero && offset.LengthSquared() > 0.0001f)
+        {
+            forwardAlignment = offset.Normalized().Dot(streamForward);
+        }
+
+        float horizonVisibility = EstimateHorizonVisibility(columnKey);
+        bool resident = IsColumnResident(columnKey);
+        float retention = _columnRetention.GetValueOrDefault(columnKey, 0.0f);
+
+        float priority = 100.0f - (distance * 7.5f);
+        priority += (forwardAlignment + 1.0f) * ForwardPriorityWeight;
+        if (forwardAlignment < 0.0f)
+        {
+            priority += forwardAlignment * BehindViewerPenalty;
+        }
+        priority += horizonVisibility * 28.0f;
+        if (resident)
+        {
+            priority += 10.0f;
+        }
+        priority += retention * 18.0f;
+
+        return priority;
+    }
+
     private float EstimateHorizonVisibility(Vector3I key)
+    {
+        return EstimateHorizonVisibility(new Vector2I(key.X, key.Z));
+    }
+
+    private float EstimateHorizonVisibility(Vector2I columnKey)
     {
         if (!UseHorizonLoadPriority || _prioritySampler == null)
         {
@@ -467,19 +550,64 @@ public partial class VoxelTerrainWorld : Node3D
         }
 
         Vector3 cameraPosition = camera.GlobalPosition;
-        Vector3 chunkCenter = new(
-            (key.X + 0.5f) * _settings.ChunkSize,
-            0.0f,
-            (key.Z + 0.5f) * _settings.ChunkSize);
+        float inset = _settings.ChunkSize * ChunkVisibilityInset;
+        float minX = (columnKey.X * _settings.ChunkSize) + inset;
+        float maxX = ((columnKey.X + 1) * _settings.ChunkSize) - inset;
+        float minZ = (columnKey.Y * _settings.ChunkSize) + inset;
+        float maxZ = ((columnKey.Y + 1) * _settings.ChunkSize) - inset;
 
-        Vector2 planarDelta = new(chunkCenter.X - cameraPosition.X, chunkCenter.Z - cameraPosition.Z);
+        Vector2[] samplePoints =
+        {
+            new Vector2((columnKey.X + 0.5f) * _settings.ChunkSize, (columnKey.Y + 0.5f) * _settings.ChunkSize),
+            new Vector2(minX, minZ),
+            new Vector2(maxX, minZ),
+            new Vector2(minX, maxZ),
+            new Vector2(maxX, maxZ)
+        };
+
+        int visibleSamples = 0;
+        float strongestOcclusion = 0.0f;
+        foreach (Vector2 samplePoint in samplePoints)
+        {
+            float occlusionMargin = GetChunkSampleOcclusionMargin(cameraPosition, samplePoint);
+            if (occlusionMargin <= 0.0f)
+            {
+                visibleSamples++;
+                continue;
+            }
+
+            strongestOcclusion = Mathf.Max(strongestOcclusion, occlusionMargin);
+        }
+
+        float planarDistanceChunks = new Vector2(
+            ((columnKey.X + 0.5f) * _settings.ChunkSize) - cameraPosition.X,
+            ((columnKey.Y + 0.5f) * _settings.ChunkSize) - cameraPosition.Z).Length() / _settings.ChunkSize;
+
+        if (visibleSamples == 0 &&
+            strongestOcclusion >= LargeOccluderAngleMargin &&
+            planarDistanceChunks >= MinOcclusionDistanceChunks)
+        {
+            return OccludedPriorityScale;
+        }
+
+        if (visibleSamples <= 2)
+        {
+            return 0.94f;
+        }
+
+        return 1.0f;
+    }
+
+    private float GetChunkSampleOcclusionMargin(Vector3 cameraPosition, Vector2 samplePoint)
+    {
+        Vector2 planarDelta = new(samplePoint.X - cameraPosition.X, samplePoint.Y - cameraPosition.Z);
         float planarDistance = planarDelta.Length();
         if (planarDistance <= _settings.ChunkSize * 1.5f)
         {
-            return 1.0f;
+            return 0.0f;
         }
 
-        float targetHeight = _prioritySampler.SampleSurfaceHeight(chunkCenter.X, chunkCenter.Z);
+        float targetHeight = _prioritySampler.SampleSurfaceHeight(samplePoint.X, samplePoint.Y);
         float targetAngle = (targetHeight - cameraPosition.Y) / planarDistance;
         float maxHorizonAngle = float.NegativeInfinity;
         int samples = Mathf.Clamp(Mathf.RoundToInt(planarDistance / (_settings.ChunkSize * 0.8f)), 2, 10);
@@ -487,7 +615,7 @@ public partial class VoxelTerrainWorld : Node3D
         for (int step = 1; step < samples; step++)
         {
             float t = (float)step / samples;
-            Vector2 sampleXZ = new Vector2(cameraPosition.X, cameraPosition.Z).Lerp(new Vector2(chunkCenter.X, chunkCenter.Z), t);
+            Vector2 sampleXZ = new Vector2(cameraPosition.X, cameraPosition.Z).Lerp(samplePoint, t);
             float sampleDistance = planarDistance * t;
             if (sampleDistance <= 0.001f)
             {
@@ -502,7 +630,59 @@ public partial class VoxelTerrainWorld : Node3D
             }
         }
 
-        return targetAngle < maxHorizonAngle - 0.012f ? OccludedPriorityScale : 1.0f;
+        return (maxHorizonAngle - 0.012f) - targetAngle;
+    }
+
+    private bool IsColumnResident(Vector2I columnKey)
+    {
+        for (int y = 0; y < VerticalChunkCount; y++)
+        {
+            if (_chunks.ContainsKey(new Vector3I(columnKey.X, y, columnKey.Y)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void UpdateColumnRetention(Vector2I centerChunk)
+    {
+        List<Vector2I> keys = new(_columnRetention.Keys);
+        foreach (Vector2I key in keys)
+        {
+            float decayed = _columnRetention[key] * 0.86f;
+            if (decayed < 0.05f)
+            {
+                _columnRetention.Remove(key);
+                continue;
+            }
+
+            _columnRetention[key] = decayed;
+        }
+
+        foreach (Vector3I key in _desiredChunks)
+        {
+            Vector2I columnKey = new(key.X, key.Z);
+            _columnRetention[columnKey] = 1.0f;
+        }
+
+        float guaranteedRadius = Mathf.Max(GuaranteedColumnRadius, 1.0f);
+        int radius = Mathf.CeilToInt(guaranteedRadius);
+        for (int z = -radius; z <= radius; z++)
+        {
+            for (int x = -radius; x <= radius; x++)
+            {
+                Vector2 offset = new(x, z);
+                if (offset.Length() > guaranteedRadius + 0.35f)
+                {
+                    continue;
+                }
+
+                Vector2I key = new(centerChunk.X + x, centerChunk.Y + z);
+                _columnRetention[key] = 1.0f;
+            }
+        }
     }
 
     private void ProcessCompletedChunkGenerations()
@@ -602,4 +782,5 @@ public partial class VoxelTerrainWorld : Node3D
     }
 
     private sealed record GeneratedChunkResult(Vector3I Key, VoxelChunkData Data, double GenerationMs);
+    private sealed record ColumnCandidate(Vector2I Key, float Priority, bool Mandatory);
 }

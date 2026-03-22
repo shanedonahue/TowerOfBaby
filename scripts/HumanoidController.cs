@@ -13,6 +13,7 @@ public partial class HumanoidController : CharacterBody3D
     [Export] public float CameraPitchMin = -0.9f;
     [Export] public float CameraPitchMax = 0.35f;
     [Export] public float CameraDistance = 6.5f;
+    [Export] public float CameraFarDistance = 220.0f;
     [Export] public float FootProbeDistance = 4.0f;
     [Export] public float HipHeight = 0.72f;
     [Export] public float StrideLength = 0.56f;
@@ -147,7 +148,8 @@ public partial class HumanoidController : CharacterBody3D
         {
             Name = "Camera3D",
             Current = true,
-            Fov = 68.0f
+            Fov = 68.0f,
+            Far = CameraFarDistance
         };
         _springArm.AddChild(_camera);
 

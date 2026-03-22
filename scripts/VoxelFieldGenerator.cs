@@ -190,19 +190,29 @@ public sealed class VoxelFieldGenerator
         continent = Mathf.SmoothStep(0.22f, 0.9f, continent);
         float mountains = Mathf.Pow(continent, 1.55f);
         float plains = 1.0f - mountains;
+        float foothills = Mathf.SmoothStep(0.24f, 0.68f, continent);
+        float biomeBlend = (_biomeNoise.GetNoise2D(warped.X * 0.7f, warped.Y * 0.7f) + 1.0f) * 0.5f;
 
         float ridge = 1.0f - Mathf.Abs(_ridgeNoise.GetNoise2D(warped.X, warped.Y));
         ridge *= ridge;
         ridge *= ridge;
+        float ridgeWalls = Mathf.SmoothStep(0.68f, 0.95f, ridge);
+        ridgeWalls *= Mathf.Lerp(0.55f, 1.0f, biomeBlend);
 
         float hills = (_hillNoise.GetNoise2D(warped.X, warped.Y) + 1.0f) * 0.5f;
         float detail = _detailNoise.GetNoise2D(warped.X, warped.Y);
+        float valleyMask = 1.0f - Mathf.Abs((hills * 2.0f) - 1.0f);
+        valleyMask = Mathf.Pow(Mathf.Clamp(valleyMask, 0.0f, 1.0f), 1.65f);
+        float rollingMask = Mathf.SmoothStep(0.15f, 0.72f, hills);
 
         float terrain = (continent - 0.5f) * (_terrainHeight * 1.45f);
         terrain += ridge * mountains * (_terrainHeight * 1.55f);
-        terrain += (hills - 0.5f) * (_terrainHeight * (0.08f + (mountains * 0.18f)));
-        terrain += detail * _detailHeight * (0.08f + (mountains * 0.24f));
-        terrain -= plains * _terrainHeight * 0.18f;
+        terrain += ridgeWalls * foothills * (_terrainHeight * 0.38f);
+        terrain += (hills - 0.5f) * (_terrainHeight * (0.12f + (mountains * 0.16f) + (plains * 0.08f)));
+        terrain += rollingMask * plains * (_terrainHeight * 0.1f);
+        terrain += detail * _detailHeight * (0.1f + (mountains * 0.18f));
+        terrain -= valleyMask * plains * (_terrainHeight * 0.1f);
+        terrain -= plains * _terrainHeight * 0.14f;
         return terrain;
     }
 
