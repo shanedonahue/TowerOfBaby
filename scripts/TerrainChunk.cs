@@ -51,7 +51,7 @@ public partial class TerrainChunk : Node3D
 
 		var mat = new StandardMaterial3D
 		{
-			AlbedoColor = Colors.Burlywood,
+			AlbedoColor = Colors.WhiteSmoke,
 			Roughness = 5 
 		};
 		_mesh.SetSurfaceOverrideMaterial(0, mat);

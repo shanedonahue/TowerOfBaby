@@ -6,7 +6,6 @@
 
 [node name="TerrainChunk" type="Node3D" unique_id=1988075327]
 script = ExtResource("1_ee0uk")
-Size = 5.0
 
 [node name="Mesh" type="MeshInstance3D" parent="." unique_id=1437624128]
 

@@ -34,7 +34,7 @@ ChunkScene = ExtResource("2_rvslj")
 environment = SubResource("Environment_vcsgt")
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=1925700580]
-transform = Transform3D(1, 0, 0, 0, 0.70710677, 0.70710677, 0, -0.70710677, 0.70710677, 0, 40, 40)
+transform = Transform3D(1, 0, 0, 0, 0.6927351, 0.72119224, 0, -0.72119224, 0.6927351, 0, 40, 40)
 fov = 37.849285
 script = ExtResource("1_0bbpv")
 Speed = 200.0
@@ -44,4 +44,3 @@ transform = Transform3D(1, 0, 0, 0, 0.9348257, 0.355107, 0, -0.355107, 0.9348257
 light_energy = 0.167
 light_indirect_energy = 0.333
 shadow_enabled = true
-shadow_blur = 4.715
