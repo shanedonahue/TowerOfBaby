@@ -11,9 +11,13 @@ config_version=5
 [application]
 
 config/name="TowerOfBaby"
-run/main_scene="uid://cr6w384dkxwtq"
+run/main_scene="res://scenes/VoxelPrototype.tscn"
 config/features=PackedStringArray("4.6", "C#")
 config/icon="res://icon.svg"
+
+[display]
+
+window/vsync/vsync_mode=0
 
 [dotnet]
 

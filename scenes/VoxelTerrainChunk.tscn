@@ -1,0 +1,12 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/VoxelTerrainChunk.cs" id="1_chunk"]
+
+[node name="VoxelTerrainChunk" type="Node3D"]
+script = ExtResource("1_chunk")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+
+[node name="Body" type="StaticBody3D" parent="."]
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]

@@ -1,0 +1,73 @@
+[gd_scene format=3 uid="uid://cxre1tomh4rx4"]
+
+[ext_resource type="PackedScene" path="res://scenes/VoxelTerrainWorld.tscn" id="1_world"]
+[ext_resource type="PackedScene" path="res://scenes/VoxelTerrainChunk.tscn" id="2_chunk"]
+[ext_resource type="Script" uid="uid://cevwysi0uynd2" path="res://scripts/HumanoidController.cs" id="3_player"]
+[ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/VoxelPrototypeController.cs" id="4_root"]
+[ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/FpsOverlay.cs" id="5_fps"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
+radius = 0.38
+height = 1.1
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.22352941, 0.4392157, 0.6156863, 1)
+sky_horizon_color = Color(0.7607843, 0.81960785, 0.8627451, 1)
+ground_bottom_color = Color(0.09019608, 0.105882354, 0.08627451, 1)
+ground_horizon_color = Color(0.4117647, 0.39607844, 0.34117648, 1)
+sun_angle_max = 22.0
+
+[sub_resource type="Sky" id="Sky_sky"]
+sky_material = SubResource("ProceduralSkyMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_main"]
+background_mode = 2
+sky = SubResource("Sky_sky")
+ambient_light_source = 3
+ambient_light_sky_contribution = 0.6
+reflected_light_source = 2
+tonemap_mode = 2
+tonemap_exposure = 1.1
+ssao_enabled = true
+ssil_enabled = true
+fog_mode = 1
+fog_sun_scatter = 0.4
+fog_density = 0.018
+
+[node name="VoxelPrototype" type="Node3D" unique_id=239808047]
+script = ExtResource("4_root")
+TerrainWorldPath = NodePath("VoxelTerrainWorld")
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=222714919]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)
+script = ExtResource("3_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=939901646]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.95, 0)
+shape = SubResource("CapsuleShape3D_player")
+
+[node name="VoxelTerrainWorld" parent="." unique_id=710875367 instance=ExtResource("1_world")]
+ChunkScene = ExtResource("2_chunk")
+TrackedCharacterPath = NodePath("../Player")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1986201173]
+environment = SubResource("Environment_main")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=126458690]
+transform = Transform3D(0.9223053, -0.18688592, 0.33826998, 0, 0.87529933, 0.48358154, -0.38646206, -0.4460098, 0.8072932, 0, 35, 0)
+light_color = Color(1, 0.9529412, 0.87058824, 1)
+light_energy = 1.75
+light_indirect_energy = 0.35
+shadow_enabled = true
+
+[node name="FillLight" type="DirectionalLight3D" parent="." unique_id=734793170]
+transform = Transform3D(0.7346276, 0.060736947, -0.6757465, 0, 0.995985, 0.08952039, 0.67847055, -0.065764144, 0.73167807, 0, 18, 0)
+light_color = Color(0.5411765, 0.6431373, 0.7372549, 1)
+light_energy = 0.22
+
+[node name="FpsOverlay" type="CanvasLayer" parent="." unique_id=1670152037]
+script = ExtResource("5_fps")
+
+[node name="Label" type="Label" parent="FpsOverlay" unique_id=1573539413]
+offset_right = 120.0
+offset_bottom = 24.0
