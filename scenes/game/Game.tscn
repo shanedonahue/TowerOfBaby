@@ -1,11 +1,11 @@
 [gd_scene format=3 uid="uid://cxre1tomh4rx4"]
 
-[ext_resource type="PackedScene" path="res://scenes/VoxelTerrainWorld.tscn" id="1_world"]
-[ext_resource type="PackedScene" path="res://scenes/VoxelTerrainChunk.tscn" id="2_chunk"]
-[ext_resource type="Script" uid="uid://cevwysi0uynd2" path="res://scripts/HumanoidController.cs" id="3_player"]
-[ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/VoxelPrototypeController.cs" id="4_root"]
-[ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/FpsOverlay.cs" id="5_fps"]
-[ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/TimeOfDayController.cs" id="6_time"]
+[ext_resource type="PackedScene" path="res://scenes/terrain/TerrainWorld.tscn" id="1_world"]
+[ext_resource type="PackedScene" path="res://scenes/terrain/TerrainChunk.tscn" id="2_chunk"]
+[ext_resource type="Script" uid="uid://cevwysi0uynd2" path="res://scripts/characters/HumanoidController.cs" id="3_player"]
+[ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
+[ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
+[ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/world/TimeOfDayController.cs" id="6_time"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.38
@@ -47,9 +47,9 @@ shading_mode = 0
 albedo_color = Color(0.92, 0.95, 1, 1)
 billboard_mode = 1
 
-[node name="VoxelPrototype" type="Node3D" unique_id=239808047]
+[node name="Game" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")
-TerrainWorldPath = NodePath("VoxelTerrainWorld")
+TerrainWorldPath = NodePath("TerrainWorld")
 
 [node name="Player" type="CharacterBody3D" parent="." unique_id=222714919]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)
@@ -59,7 +59,7 @@ script = ExtResource("3_player")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.95, 0)
 shape = SubResource("CapsuleShape3D_player")
 
-[node name="VoxelTerrainWorld" parent="." unique_id=710875367 instance=ExtResource("1_world")]
+[node name="TerrainWorld" parent="." unique_id=710875367 instance=ExtResource("1_world")]
 ChunkScene = ExtResource("2_chunk")
 TrackedCharacterPath = NodePath("../Player")
 

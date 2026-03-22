@@ -6,7 +6,7 @@ public partial class FpsOverlay : CanvasLayer
     [Export] public NodePath TerrainWorldPath = new();
 
     private Label _label = null!;
-    private VoxelTerrainWorld _terrainWorld = null!;
+    private TerrainWorld _terrainWorld = null!;
 
     public override void _Ready()
     {
@@ -20,7 +20,7 @@ public partial class FpsOverlay : CanvasLayer
         _label.Position = Margin;
         _label.Modulate = Colors.White;
         _label.Text = "FPS: --";
-        _terrainWorld = GetNodeOrNull<VoxelTerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("voxel_world") as VoxelTerrainWorld;
+        _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("terrain_world") as TerrainWorld;
     }
 
     public override void _Process(double delta)

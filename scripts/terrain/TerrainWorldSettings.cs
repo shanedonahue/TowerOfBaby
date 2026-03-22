@@ -1,4 +1,4 @@
-public sealed class VoxelTerrainWorldSettings
+public sealed class TerrainWorldSettings
 {
     public int PointsPerAxis { get; init; }
     public float VoxelSize { get; init; }

@@ -5,13 +5,12 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public partial class VoxelTerrainWorld : Node3D
+public partial class TerrainWorld : Node3D
 {
     [Signal] public delegate void InitialLoadCompletedEventHandler();
 
     [Export] public PackedScene ChunkScene = null!;
     [Export] public NodePath TrackedCharacterPath = new();
-    [Export] public int Radius = 2;
     [Export] public int PointsPerAxis = 18;
     [Export] public float VoxelSize = 1.2f;
     [Export] public float BaseY = -12.0f;
@@ -41,9 +40,9 @@ public partial class VoxelTerrainWorld : Node3D
     [Export] public int MaxCollisionChunkRebuildsPerFrame = 1;
     [Export] public float CollisionRebuildDelaySeconds = 0.08f;
 
-    private readonly Dictionary<Vector3I, VoxelTerrainChunk> _chunks = new();
-    private readonly HashSet<VoxelTerrainChunk> _dirtyRenderChunks = new();
-    private readonly HashSet<VoxelTerrainChunk> _dirtyCollisionChunks = new();
+    private readonly Dictionary<Vector3I, TerrainChunk> _chunks = new();
+    private readonly HashSet<TerrainChunk> _dirtyRenderChunks = new();
+    private readonly HashSet<TerrainChunk> _dirtyCollisionChunks = new();
     private readonly Dictionary<Vector3I, ulong> _chunkTouchTicks = new();
     private readonly Dictionary<Vector2I, float> _columnRetention = new();
     private readonly List<Vector3I> _generationRequestQueue = new();
@@ -53,7 +52,7 @@ public partial class VoxelTerrainWorld : Node3D
     private readonly ConcurrentQueue<GeneratedChunkResult> _completedGenerationQueue = new();
 
     private VoxelFieldGenerator _prioritySampler = null!;
-    private VoxelTerrainWorldSettings _settings = null!;
+    private TerrainWorldSettings _settings = null!;
     private Node3D _trackedCharacter = null!;
     private Vector2I _lastCenterChunk = new(int.MinValue, int.MinValue);
     private Vector2 _lastStreamForward = Vector2.Zero;
@@ -63,7 +62,6 @@ public partial class VoxelTerrainWorld : Node3D
     private int _lastCollisionRebuildCount;
     private int _lastGenerationCompleteCount;
     private int _lastChunkActivationCount;
-    private int _lastEvictionCount;
     private double _lastVisualRebuildMs;
     private double _lastCollisionRebuildMs;
     private double _lastGenerationMs;
@@ -77,8 +75,8 @@ public partial class VoxelTerrainWorld : Node3D
 
     public override void _Ready()
     {
-        AddToGroup("voxel_world");
-        _settings = new VoxelTerrainWorldSettings
+        AddToGroup("terrain_world");
+        _settings = new TerrainWorldSettings
         {
             PointsPerAxis = PointsPerAxis,
             VoxelSize = VoxelSize,
@@ -125,7 +123,7 @@ public partial class VoxelTerrainWorld : Node3D
         HashSet<Vector3I> desired = BuildDesiredChunkSet(centerChunk, streamForward);
 
         _desiredChunks = desired;
-        foreach (KeyValuePair<Vector3I, VoxelTerrainChunk> entry in _chunks)
+        foreach (KeyValuePair<Vector3I, TerrainChunk> entry in _chunks)
         {
             bool active = desired.Contains(entry.Key);
             entry.Value.Visible = active;
@@ -253,7 +251,7 @@ public partial class VoxelTerrainWorld : Node3D
     {
         float strength = additive ? BuildStrength : CarveStrength;
 
-        foreach (VoxelTerrainChunk chunk in _chunks.Values)
+        foreach (TerrainChunk chunk in _chunks.Values)
         {
             if (!chunk.IntersectsSphere(worldCenter, BrushRadius))
             {
@@ -271,7 +269,7 @@ public partial class VoxelTerrainWorld : Node3D
     public string GetDebugStats()
     {
         int activeCount = 0;
-        foreach (VoxelTerrainChunk chunk in _chunks.Values)
+        foreach (TerrainChunk chunk in _chunks.Values)
         {
             if (chunk.Visible)
             {
@@ -299,7 +297,7 @@ public partial class VoxelTerrainWorld : Node3D
         int readyCount = 0;
         foreach (Vector3I key in _desiredChunks)
         {
-            if (_chunks.TryGetValue(key, out VoxelTerrainChunk chunk) &&
+            if (_chunks.TryGetValue(key, out TerrainChunk chunk) &&
                 chunk.IsInitialLoadReady)
             {
                 readyCount++;
@@ -309,7 +307,7 @@ public partial class VoxelTerrainWorld : Node3D
         return (float)readyCount / _desiredChunks.Count;
     }
 
-    private void QueueChunkForRebuild(VoxelTerrainChunk chunk)
+    private void QueueChunkForRebuild(TerrainChunk chunk)
     {
         if (chunk.RenderDirty)
         {
@@ -332,8 +330,8 @@ public partial class VoxelTerrainWorld : Node3D
         int visualBudget = MaxVisualChunkRebuildsPerFrame;
         if (visualBudget > 0)
         {
-            List<VoxelTerrainChunk> renderQueue = new(_dirtyRenderChunks);
-            foreach (VoxelTerrainChunk chunk in renderQueue)
+            List<TerrainChunk> renderQueue = new(_dirtyRenderChunks);
+            foreach (TerrainChunk chunk in renderQueue)
             {
                 if (visualBudget <= 0)
                 {
@@ -368,8 +366,8 @@ public partial class VoxelTerrainWorld : Node3D
         if (collisionBudget > 0)
         {
             double nowSeconds = Time.GetTicksMsec() / 1000.0;
-            List<VoxelTerrainChunk> collisionQueue = new(_dirtyCollisionChunks);
-            foreach (VoxelTerrainChunk chunk in collisionQueue)
+            List<TerrainChunk> collisionQueue = new(_dirtyCollisionChunks);
+            foreach (TerrainChunk chunk in collisionQueue)
             {
                 if (collisionBudget <= 0)
                 {
@@ -412,7 +410,6 @@ public partial class VoxelTerrainWorld : Node3D
     {
         _lastGenerationCompleteCount = 0;
         _lastChunkActivationCount = 0;
-        _lastEvictionCount = 0;
         _lastGenerationMs = 0.0;
         _lastChunkActivationMs = 0.0;
     }
@@ -701,7 +698,7 @@ public partial class VoxelTerrainWorld : Node3D
             }
 
             ulong start = Time.GetTicksUsec();
-            VoxelTerrainChunk chunk = ChunkScene.Instantiate<VoxelTerrainChunk>();
+            TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
             AddChild(chunk);
             chunk.Initialize(result.Key, _settings);
             chunk.SetData(result.Data, 0.0);
@@ -748,9 +745,9 @@ public partial class VoxelTerrainWorld : Node3D
             Vector3I? oldestKey = null;
             ulong oldestTick = ulong.MaxValue;
 
-            foreach (KeyValuePair<Vector3I, VoxelTerrainChunk> entry in _chunks)
+            foreach (KeyValuePair<Vector3I, TerrainChunk> entry in _chunks)
             {
-                VoxelTerrainChunk candidateChunk = entry.Value;
+                TerrainChunk candidateChunk = entry.Value;
                 if (candidateChunk.Visible || candidateChunk.RenderDirty || candidateChunk.CollisionDirty)
                 {
                     continue;
@@ -770,13 +767,12 @@ public partial class VoxelTerrainWorld : Node3D
             }
 
             Vector3I key = oldestKey.Value;
-            VoxelTerrainChunk chunk = _chunks[key];
+            TerrainChunk chunk = _chunks[key];
             _dirtyRenderChunks.Remove(chunk);
             _dirtyCollisionChunks.Remove(chunk);
             _chunkTouchTicks.Remove(key);
             _chunks.Remove(key);
             chunk.QueueFree();
-            _lastEvictionCount++;
             _evictedChunks++;
         }
     }

@@ -1,23 +1,22 @@
 using Godot;
 using Godot.Collections;
 
-public partial class VoxelPrototypeController : Node3D
+public partial class GameController : Node3D
 {
     [Export] public NodePath TerrainWorldPath = new();
     [Export] public NodePath PlayerPath = new("Player");
     [Export] public float BrushRange = 48.0f;
 
-    private VoxelTerrainWorld _terrainWorld = null!;
+    private TerrainWorld _terrainWorld = null!;
     private Node3D _player = null!;
     private MeshInstance3D _brushPreview = null!;
     private StandardMaterial3D _brushMaterial = null!;
     private CanvasLayer _loadingOverlay = null!;
     private Label _loadingLabel = null!;
-    private ColorRect _loadingShade = null!;
 
     public override void _Ready()
     {
-        _terrainWorld = GetNodeOrNull<VoxelTerrainWorld>(TerrainWorldPath) ?? GetNodeOrNull<VoxelTerrainWorld>("VoxelTerrainWorld");
+        _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetNodeOrNull<TerrainWorld>("TerrainWorld");
         _player = GetNodeOrNull<Node3D>(PlayerPath) ?? GetNodeOrNull<Node3D>("Player");
         _brushMaterial = new StandardMaterial3D
         {
@@ -160,14 +159,14 @@ public partial class VoxelPrototypeController : Node3D
         };
         _loadingOverlay.AddChild(root);
 
-        _loadingShade = new ColorRect
+        ColorRect loadingShade = new()
         {
             Name = "Shade",
             AnchorRight = 1.0f,
             AnchorBottom = 1.0f,
             Color = new Color(0.04f, 0.05f, 0.07f, 0.76f)
         };
-        root.AddChild(_loadingShade);
+        root.AddChild(loadingShade);
 
         _loadingLabel = new Label
         {

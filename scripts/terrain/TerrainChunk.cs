@@ -1,6 +1,6 @@
 using Godot;
 
-public partial class VoxelTerrainChunk : Node3D
+public partial class TerrainChunk : Node3D
 {
     private static readonly StandardMaterial3D SharedTerrainMaterial = new()
     {
@@ -26,7 +26,6 @@ public partial class VoxelTerrainChunk : Node3D
     public double LastCollisionBuildMs { get; private set; }
 
     private MeshInstance3D _meshInstance = null!;
-    private StaticBody3D _body = null!;
     private CollisionShape3D _collision = null!;
     private VoxelChunkData _data = null!;
     private ArrayMesh _mesh = null!;
@@ -34,11 +33,10 @@ public partial class VoxelTerrainChunk : Node3D
     public override void _Ready()
     {
         _meshInstance = GetNode<MeshInstance3D>("Mesh");
-        _body = GetNode<StaticBody3D>("Body");
         _collision = GetNode<CollisionShape3D>("Body/Collision");
     }
 
-    public void Initialize(Vector3I key, VoxelTerrainWorldSettings settings)
+    public void Initialize(Vector3I key, TerrainWorldSettings settings)
     {
         ChunkKey = key;
         PointsPerAxis = settings.PointsPerAxis;
