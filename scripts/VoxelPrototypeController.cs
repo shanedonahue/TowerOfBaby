@@ -4,15 +4,21 @@ using Godot.Collections;
 public partial class VoxelPrototypeController : Node3D
 {
     [Export] public NodePath TerrainWorldPath = new();
+    [Export] public NodePath PlayerPath = new("Player");
     [Export] public float BrushRange = 48.0f;
 
     private VoxelTerrainWorld _terrainWorld = null!;
+    private Node3D _player = null!;
     private MeshInstance3D _brushPreview = null!;
     private StandardMaterial3D _brushMaterial = null!;
+    private CanvasLayer _loadingOverlay = null!;
+    private Label _loadingLabel = null!;
+    private ColorRect _loadingShade = null!;
 
     public override void _Ready()
     {
         _terrainWorld = GetNodeOrNull<VoxelTerrainWorld>(TerrainWorldPath) ?? GetNodeOrNull<VoxelTerrainWorld>("VoxelTerrainWorld");
+        _player = GetNodeOrNull<Node3D>(PlayerPath) ?? GetNodeOrNull<Node3D>("Player");
         _brushMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color(0.9f, 0.25f, 0.2f, 0.22f),
@@ -34,15 +40,31 @@ public partial class VoxelPrototypeController : Node3D
             Visible = false
         };
         AddChild(_brushPreview);
+
+        BuildLoadingOverlay();
+        SetPlayerLoadingState(active: _terrainWorld != null && !_terrainWorld.InitialLoadComplete);
+        if (_terrainWorld != null)
+        {
+            _terrainWorld.InitialLoadCompleted += HandleInitialLoadCompleted;
+        }
     }
 
     public override void _Process(double delta)
     {
+        UpdateLoadingOverlay();
         UpdateBrushPreview();
     }
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (@event.IsActionPressed("ui_cancel"))
+        {
+            Input.MouseMode = Input.MouseMode == Input.MouseModeEnum.Captured
+                ? Input.MouseModeEnum.Visible
+                : Input.MouseModeEnum.Captured;
+            return;
+        }
+
         if (@event is not InputEventMouseButton mouseButton || !mouseButton.Pressed)
         {
             return;
@@ -80,8 +102,9 @@ public partial class VoxelPrototypeController : Node3D
 
     private void UpdateBrushPreview()
     {
-        if (_terrainWorld == null)
+        if (_terrainWorld == null || !_terrainWorld.InitialLoadComplete)
         {
+            _brushPreview.Visible = false;
             return;
         }
 
@@ -122,5 +145,83 @@ public partial class VoxelPrototypeController : Node3D
         _brushMaterial.AlbedoColor = Input.IsMouseButtonPressed(MouseButton.Right)
             ? new Color(0.2f, 0.7f, 1.0f, 0.22f)
             : new Color(0.9f, 0.25f, 0.2f, 0.22f);
+    }
+
+    private void BuildLoadingOverlay()
+    {
+        _loadingOverlay = new CanvasLayer { Name = "LoadingOverlay", Layer = 10 };
+        AddChild(_loadingOverlay);
+
+        Control root = new Control
+        {
+            Name = "LoadingRoot",
+            AnchorRight = 1.0f,
+            AnchorBottom = 1.0f
+        };
+        _loadingOverlay.AddChild(root);
+
+        _loadingShade = new ColorRect
+        {
+            Name = "Shade",
+            AnchorRight = 1.0f,
+            AnchorBottom = 1.0f,
+            Color = new Color(0.04f, 0.05f, 0.07f, 0.76f)
+        };
+        root.AddChild(_loadingShade);
+
+        _loadingLabel = new Label
+        {
+            Name = "Label",
+            AnchorLeft = 0.5f,
+            AnchorTop = 0.5f,
+            AnchorRight = 0.5f,
+            AnchorBottom = 0.5f,
+            OffsetLeft = -130.0f,
+            OffsetTop = -18.0f,
+            OffsetRight = 130.0f,
+            OffsetBottom = 18.0f,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Text = "Generating terrain..."
+        };
+        root.AddChild(_loadingLabel);
+    }
+
+    private void UpdateLoadingOverlay()
+    {
+        if (_terrainWorld == null || _loadingOverlay == null)
+        {
+            return;
+        }
+
+        if (_terrainWorld.InitialLoadComplete)
+        {
+            _loadingOverlay.Visible = false;
+            return;
+        }
+
+        _loadingOverlay.Visible = true;
+        float progress = _terrainWorld.GetInitialLoadProgress();
+        _loadingLabel.Text = $"Generating terrain... {(int)(progress * 100.0f)}%";
+    }
+
+    private void HandleInitialLoadCompleted()
+    {
+        SetPlayerLoadingState(active: false);
+        if (_loadingOverlay != null)
+        {
+            _loadingOverlay.Visible = false;
+        }
+    }
+
+    private void SetPlayerLoadingState(bool active)
+    {
+        if (_player == null)
+        {
+            return;
+        }
+
+        _player.ProcessMode = active ? ProcessModeEnum.Disabled : ProcessModeEnum.Inherit;
+        _player.Visible = !active;
     }
 }

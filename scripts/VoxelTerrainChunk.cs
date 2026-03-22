@@ -2,11 +2,23 @@ using Godot;
 
 public partial class VoxelTerrainChunk : Node3D
 {
+    private static readonly StandardMaterial3D SharedTerrainMaterial = new()
+    {
+        VertexColorUseAsAlbedo = true,
+        Roughness = 0.97f,
+        Metallic = 0.0f,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
+    };
+
     [Export] public int PointsPerAxis = 18;
     [Export] public float VoxelSize = 1.2f;
 
     public Vector3I ChunkKey { get; private set; }
     public float ChunkSize => _data?.ChunkSize ?? ((PointsPerAxis - 1) * VoxelSize);
+    public bool HasData => _data != null;
+    public bool HasCollision => _collision?.Shape != null;
+    public bool HasSurface => _mesh != null && _mesh.GetSurfaceCount() > 0;
+    public bool IsInitialLoadReady => HasData && !RenderDirty && !CollisionDirty && (!HasSurface || HasCollision);
     public bool RenderDirty { get; private set; }
     public bool CollisionDirty { get; private set; }
     public double CollisionReadyAtSeconds { get; private set; }
@@ -26,7 +38,7 @@ public partial class VoxelTerrainChunk : Node3D
         _collision = GetNode<CollisionShape3D>("Body/Collision");
     }
 
-    public void Generate(Vector3I key, VoxelTerrainWorldSettings settings, VoxelFieldGenerator generator)
+    public void Initialize(Vector3I key, VoxelTerrainWorldSettings settings)
     {
         ChunkKey = key;
         PointsPerAxis = settings.PointsPerAxis;
@@ -38,9 +50,12 @@ public partial class VoxelTerrainChunk : Node3D
             key.Z * settings.ChunkSize);
 
         Position = origin;
-        _data = new VoxelChunkData(PointsPerAxis, VoxelSize, origin);
-        generator.FillChunk(_data);
-        MarkDirty(includeCollision: true, 0.0);
+    }
+
+    public void SetData(VoxelChunkData data, double collisionDelaySeconds)
+    {
+        _data = data;
+        MarkDirty(includeCollision: true, collisionDelaySeconds);
     }
 
     public void MarkDirty(bool includeCollision, double collisionDelaySeconds)
@@ -55,22 +70,19 @@ public partial class VoxelTerrainChunk : Node3D
 
     public void RebuildRenderMesh()
     {
+        if (_data == null)
+        {
+            return;
+        }
+
         ulong start = Time.GetTicksUsec();
         _mesh = VoxelMesher.BuildMesh(_data);
         _meshInstance.Mesh = _mesh;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
 
-        StandardMaterial3D material = new()
-        {
-            VertexColorUseAsAlbedo = true,
-            Roughness = 0.97f,
-            Metallic = 0.0f,
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
-        };
-
         if (_mesh.GetSurfaceCount() > 0)
         {
-            _meshInstance.SetSurfaceOverrideMaterial(0, material);
+            _meshInstance.SetSurfaceOverrideMaterial(0, SharedTerrainMaterial);
         }
         LastRenderBuildMs = (Time.GetTicksUsec() - start) / 1000.0;
         RenderDirty = false;

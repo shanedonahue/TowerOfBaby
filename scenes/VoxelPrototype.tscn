@@ -31,8 +31,14 @@ tonemap_exposure = 1.1
 ssao_enabled = true
 ssil_enabled = true
 fog_mode = 1
-fog_sun_scatter = 0.4
-fog_density = 0.018
+fog_density = 0.055
+fog_aerial_perspective = 0.45
+fog_sky_affect = 0.2
+fog_sun_scatter = 0.18
+fog_depth_enabled = true
+fog_depth_begin = 34.0
+fog_depth_end = 112.0
+fog_depth_curve = 1.85
 
 [node name="VoxelPrototype" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")

@@ -52,15 +52,19 @@ public partial class HumanoidController : CharacterBody3D
         FloorSnapLength = FloorSnapDistance;
     }
 
-    public override void _UnhandledInput(InputEvent @event)
+    public override void _Input(InputEvent @event)
     {
         if (@event.IsActionPressed("ui_cancel"))
         {
             Input.MouseMode = Input.MouseMode == Input.MouseModeEnum.Captured
                 ? Input.MouseModeEnum.Visible
                 : Input.MouseModeEnum.Captured;
+            GetViewport().SetInputAsHandled();
         }
+    }
 
+    public override void _UnhandledInput(InputEvent @event)
+    {
         if (Input.MouseMode != Input.MouseModeEnum.Captured)
         {
             return;

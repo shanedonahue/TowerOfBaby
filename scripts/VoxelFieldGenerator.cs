@@ -26,49 +26,49 @@ public sealed class VoxelFieldGenerator
         {
             Seed = seed,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0065f
+            Frequency = 0.0032f
         };
 
         _ridgeNoise = new FastNoiseLite
         {
             Seed = seed + 37,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex,
-            Frequency = 0.014f
+            Frequency = 0.0068f
         };
 
         _hillNoise = new FastNoiseLite
         {
             Seed = seed + 59,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.024f
+            Frequency = 0.0105f
         };
 
         _detailNoise = new FastNoiseLite
         {
             Seed = seed + 101,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.09f
+            Frequency = 0.038f
         };
 
         _warpNoiseX = new FastNoiseLite
         {
             Seed = seed + 131,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.011f
+            Frequency = 0.0042f
         };
 
         _warpNoiseZ = new FastNoiseLite
         {
             Seed = seed + 157,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.011f
+            Frequency = 0.0042f
         };
 
         _biomeNoise = new FastNoiseLite
         {
             Seed = seed + 181,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.008f
+            Frequency = 0.0048f
         };
 
         _caveNoise = new FastNoiseLite
@@ -116,6 +116,11 @@ public sealed class VoxelFieldGenerator
         }
 
         return density;
+    }
+
+    public float SampleSurfaceHeight(float worldX, float worldZ)
+    {
+        return SampleTerrainHeight(worldX, worldZ);
     }
 
     public VoxelMaterialId SampleMaterial(Vector3 worldPosition, float density)
@@ -182,18 +187,22 @@ public sealed class VoxelFieldGenerator
     {
         Vector2 warped = WarpXZ(worldX, worldZ);
         float continent = (_continentNoise.GetNoise2D(warped.X, warped.Y) + 1.0f) * 0.5f;
-        continent = Mathf.SmoothStep(0.18f, 0.92f, continent);
+        continent = Mathf.SmoothStep(0.22f, 0.9f, continent);
+        float mountains = Mathf.Pow(continent, 1.55f);
+        float plains = 1.0f - mountains;
 
         float ridge = 1.0f - Mathf.Abs(_ridgeNoise.GetNoise2D(warped.X, warped.Y));
+        ridge *= ridge;
         ridge *= ridge;
 
         float hills = (_hillNoise.GetNoise2D(warped.X, warped.Y) + 1.0f) * 0.5f;
         float detail = _detailNoise.GetNoise2D(warped.X, warped.Y);
 
-        float terrain = (continent - 0.45f) * (_terrainHeight * 1.25f);
-        terrain += ridge * continent * (_terrainHeight * 0.95f);
-        terrain += (hills - 0.5f) * (_terrainHeight * 0.32f);
-        terrain += detail * _detailHeight * (0.35f + (continent * 0.65f));
+        float terrain = (continent - 0.5f) * (_terrainHeight * 1.45f);
+        terrain += ridge * mountains * (_terrainHeight * 1.55f);
+        terrain += (hills - 0.5f) * (_terrainHeight * (0.08f + (mountains * 0.18f)));
+        terrain += detail * _detailHeight * (0.08f + (mountains * 0.24f));
+        terrain -= plains * _terrainHeight * 0.18f;
         return terrain;
     }
 
@@ -213,7 +222,7 @@ public sealed class VoxelFieldGenerator
 
     private Vector2 WarpXZ(float worldX, float worldZ)
     {
-        float warpStrength = 34.0f;
+        float warpStrength = 18.0f;
         float warpX = _warpNoiseX.GetNoise2D(worldX, worldZ) * warpStrength;
         float warpZ = _warpNoiseZ.GetNoise2D(worldX, worldZ) * warpStrength;
         return new Vector2(worldX + warpX, worldZ + warpZ);
