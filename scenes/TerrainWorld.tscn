@@ -4,4 +4,12 @@
 
 [node name="TerrainWorld" type="Node3D" unique_id=1007583092]
 script = ExtResource("1_hunik")
-Radius = 10
+ChunkSize = 24.0
+ChunkResolution = 26
+HeightScale = 9.0
+DetailScale = 2.6
+ForwardChunkRange = 6
+BackwardChunkRange = 3
+SideChunkRange = 3
+MotionLookaheadDistance = 8.0
+MaxLookaheadDistance = 14.0

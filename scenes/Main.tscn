@@ -1,46 +1,86 @@
 [gd_scene format=3 uid="uid://cr6w384dkxwtq"]
 
-[ext_resource type="Script" uid="uid://dtsd1g3dbn7cp" path="res://scenes/DebugCamera.cs" id="1_0bbpv"]
-[ext_resource type="PackedScene" uid="uid://civ285j3qt0oc" path="res://scenes/TerrainWorld.tscn" id="1_elqb8"]
-[ext_resource type="PackedScene" uid="uid://moaig7vpjwi7" path="res://scenes/TerrainChunk.tscn" id="2_rvslj"]
+[ext_resource type="PackedScene" uid="uid://civ285j3qt0oc" path="res://scenes/TerrainWorld.tscn" id="1_terrain"]
+[ext_resource type="PackedScene" uid="uid://moaig7vpjwi7" path="res://scenes/TerrainChunk.tscn" id="2_chunk"]
+[ext_resource type="Script" path="res://scripts/HumanoidController.cs" id="3_player"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0bbpv"]
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
+radius = 0.38
+height = 1.1
 
-[sub_resource type="Sky" id="Sky_rarhs"]
-sky_material = SubResource("ProceduralSkyMaterial_0bbpv")
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.27450982, 0.5294118, 0.7294118, 1)
+sky_horizon_color = Color(0.75686276, 0.8235294, 0.8627451, 1)
+ground_bottom_color = Color(0.08627451, 0.10980392, 0.09411765, 1)
+ground_horizon_color = Color(0.5058824, 0.4627451, 0.36862746, 1)
+sun_angle_max = 22.0
+sun_curve = 0.12
 
-[sub_resource type="Environment" id="Environment_vcsgt"]
+[sub_resource type="Sky" id="Sky_sky"]
+sky_material = SubResource("ProceduralSkyMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_main"]
 background_mode = 2
-sky = SubResource("Sky_rarhs")
+sky = SubResource("Sky_sky")
 ambient_light_source = 3
-ambient_light_color = Color(0.61745477, 0.61745477, 0.6174547, 1)
+ambient_light_sky_contribution = 0.55
 reflected_light_source = 2
 tonemap_mode = 2
-glow_intensity = 0.5
+tonemap_exposure = 1.15
+ssao_enabled = true
+ssao_radius = 1.6
+ssao_intensity = 1.8
+ssil_enabled = true
+ssil_radius = 1.5
+glow_enabled = true
+glow_levels/2 = true
+glow_levels/3 = true
+glow_intensity = 0.08
+adjustment_enabled = true
+adjustment_saturation = 1.08
+adjustment_brightness = 1.03
 fog_mode = 1
-fog_light_energy = 0.0
-fog_sun_scatter = 0.66
-fog_density = 0.245
-fog_aerial_perspective = 0.21
-fog_sky_affect = 0.138
-fog_depth_curve = 3.1383367
+fog_density = 0.018
+fog_sky_affect = 0.22
+fog_sun_scatter = 0.45
 
-[node name="Node3D" type="Node3D" unique_id=291864519]
+[node name="Main" type="Node3D"]
 
-[node name="TerrainWorld" parent="." unique_id=1007583092 instance=ExtResource("1_elqb8")]
-ChunkScene = ExtResource("2_rvslj")
+[node name="Player" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 0)
+script = ExtResource("3_player")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=756392238]
-environment = SubResource("Environment_vcsgt")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+position = Vector3(0, 0.95, 0)
+shape = SubResource("CapsuleShape3D_player")
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=1925700580]
-transform = Transform3D(1, 0, 0, 0, 0.6927351, 0.72119224, 0, -0.72119224, 0.6927351, 0, 40, 40)
-fov = 37.849285
-script = ExtResource("1_0bbpv")
-Speed = 200.0
+[node name="TerrainWorld" parent="." instance=ExtResource("1_terrain")]
+ChunkScene = ExtResource("2_chunk")
+TrackedCharacterPath = NodePath("../Player")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=908968563]
-transform = Transform3D(1, 0, 0, 0, 0.9348257, 0.355107, 0, -0.355107, 0.9348257, -1.9073486e-06, 46.761982, 108.78279)
-light_energy = 0.167
-light_indirect_energy = 0.333
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_main")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.92230684, -0.18642136, 0.33812863, 0, 0.8752108, 0.48374388, -0.38646275, -0.44615144, 0.8068003, 0, 35, 0)
+scale = Vector3(1, 1, 1)
+light_color = Color(1, 0.9529412, 0.87058824, 1)
+light_energy = 1.75
+light_indirect_energy = 0.35
 shadow_enabled = true
+directional_shadow_mode = 2
+directional_shadow_split_1 = 0.08
+directional_shadow_split_2 = 0.2
+directional_shadow_split_3 = 0.5
+directional_shadow_blend_splits = true
+directional_shadow_fade_start = 0.78
+shadow_bias = 0.04
+shadow_normal_bias = 1.4
+
+[node name="FillLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.7343225, 0.060758118, -0.6760888, 0, 0.99598485, 0.08952129, 0.67818874, -0.06574457, 0.73137456, 0, 18, 0)
+scale = Vector3(1, 1, 1)
+light_color = Color(0.5411765, 0.6431373, 0.7372549, 1)
+light_energy = 0.22
+light_indirect_energy = 0.0
+shadow_enabled = false
