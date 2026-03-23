@@ -23,6 +23,8 @@ public partial class TerrainWorld : Node3D
     [Export] public float OccludedPriorityScale = 0.3f;
     [Export] public int SearchRadius = 8;
     [Export] public int MaxActiveColumns = 72;
+    [Export] public int WarmSearchRadiusPadding = 1;
+    [Export] public int MaxWarmColumns = 64;
     [Export] public float GuaranteedColumnRadius = 1.6f;
     [Export] public float ChunkVisibilityInset = 0.18f;
     [Export] public float LargeOccluderAngleMargin = 0.055f;
@@ -38,6 +40,12 @@ public partial class TerrainWorld : Node3D
     [Export] public int MaxChunkActivationsPerFrame = 2;
     [Export] public int MaxVisualChunkRebuildsPerFrame = 2;
     [Export] public int MaxCollisionChunkRebuildsPerFrame = 1;
+    [ExportGroup("Startup Boost")]
+    [Export] public int StartupChunkGenerationJobs = 8;
+    [Export] public int StartupChunkActivationsPerFrame = 8;
+    [Export] public int StartupVisualChunkRebuildsPerFrame = 8;
+    [Export] public int StartupCollisionChunkRebuildsPerFrame = 4;
+    [Export] public float StartupWarmPriorityBias = 220.0f;
     [Export] public float CollisionRebuildDelaySeconds = 0.08f;
 
     private readonly Dictionary<Vector3I, TerrainChunk> _chunks = new();
@@ -45,31 +53,47 @@ public partial class TerrainWorld : Node3D
     private readonly HashSet<TerrainChunk> _dirtyCollisionChunks = new();
     private readonly Dictionary<Vector3I, ulong> _chunkTouchTicks = new();
     private readonly Dictionary<Vector2I, float> _columnRetention = new();
-    private readonly List<Vector3I> _generationRequestQueue = new();
-    private readonly Dictionary<Vector3I, float> _generationPriority = new();
-    private readonly HashSet<Vector3I> _queuedGenerationKeys = new();
-    private readonly HashSet<Vector3I> _runningGenerationKeys = new();
-    private readonly ConcurrentQueue<GeneratedChunkResult> _completedGenerationQueue = new();
+    private readonly List<Vector3I> _pendingActivationQueue = new();
+    private readonly List<Vector3I> _pendingLoadQueue = new();
+    private readonly Dictionary<Vector3I, float> _pendingLoadPriority = new();
+    private readonly HashSet<Vector3I> _queuedActivationKeys = new();
+    private readonly object _loadStateLock = new();
+    private readonly HashSet<Vector3I> _queuedLoadKeys = new();
+    private readonly HashSet<Vector3I> _runningLoadKeys = new();
+    private readonly ConcurrentQueue<PreparedChunkResult> _completedLoadQueue = new();
 
     private VoxelFieldGenerator _prioritySampler = null!;
     private TerrainWorldSettings _settings = null!;
+    private TerrainChunkStore _chunkStore = null!;
     private Node3D _trackedCharacter = null!;
     private Vector2I _lastCenterChunk = new(int.MinValue, int.MinValue);
     private Vector2 _lastStreamForward = Vector2.Zero;
     private HashSet<Vector3I> _desiredChunks = new();
-    private int _activeGenerationJobs;
+    private HashSet<Vector3I> _warmChunks = new();
+    private HashSet<Vector3I> _startupLoadedChunks = new();
+    private Vector3 _lastTrackedCharacterPosition = new(float.MinValue, float.MinValue, float.MinValue);
+    private Vector3 _lastCameraForward = new(float.MinValue, float.MinValue, float.MinValue);
+    private int _activeLoadJobs;
     private int _lastVisualRebuildCount;
     private int _lastCollisionRebuildCount;
-    private int _lastGenerationCompleteCount;
+    private int _lastChunkLoadCount;
     private int _lastChunkActivationCount;
+    private int _lastStartupChunkLoadCount;
+    private int _lastPersistedChunkLoadCount;
+    private int _lastGeneratedChunkLoadCount;
     private double _lastVisualRebuildMs;
     private double _lastCollisionRebuildMs;
-    private double _lastGenerationMs;
+    private double _lastChunkLoadMs;
     private double _lastChunkActivationMs;
+    private double _lastStartupChunkLoadMs;
+    private double _lastPersistedChunkLoadMs;
+    private double _lastGeneratedChunkLoadMs;
     private long _cacheHits;
     private long _cacheMisses;
     private long _evictedChunks;
     private bool _initialLoadComplete;
+    private bool _searchDirty = true;
+    private bool _useStartupSnapshot;
 
     public bool InitialLoadComplete => _initialLoadComplete;
 
@@ -83,18 +107,34 @@ public partial class TerrainWorld : Node3D
             BaseY = BaseY
         };
         _prioritySampler = new VoxelFieldGenerator(Seed, TerrainHeight, DetailHeight, CaveScale, CaveThreshold);
+        _chunkStore = new TerrainChunkStore(Seed);
 
         _trackedCharacter = GetNodeOrNull<Node3D>(TrackedCharacterPath) ?? GetTree().GetFirstNodeInGroup("terrain_tracker") as Node3D;
+        LoadStartupState();
+        TreeExiting += HandleTreeExiting;
 
         RefreshChunks(force: true);
+    }
+
+    public override void _UnhandledInput(InputEvent @event)
+    {
+        if (@event is InputEventMouseMotion or InputEventKey or InputEventJoypadMotion or InputEventJoypadButton)
+        {
+            _searchDirty = true;
+        }
     }
 
     public override void _Process(double delta)
     {
         ResetFrameStats();
-        ProcessCompletedChunkGenerations();
-        RefreshChunks(force: false);
-        ProcessQueuedChunkGenerations();
+        if (ShouldRefreshChunkSearch())
+        {
+            RefreshChunks(force: false);
+        }
+
+        ProcessCompletedChunkLoads();
+        ProcessQueuedChunkLoads();
+        ProcessPendingChunkActivations();
         ProcessDirtyChunks();
         EvictInactiveChunks();
     }
@@ -114,15 +154,30 @@ public partial class TerrainWorld : Node3D
 
         if (!force && centerChunk == _lastCenterChunk && !forwardChanged)
         {
+            _searchDirty = false;
             return;
         }
 
+        HashSet<Vector3I> previousDesired = _desiredChunks;
+        HashSet<Vector3I> previousWarm = _warmChunks;
         _lastCenterChunk = centerChunk;
         _lastStreamForward = streamForward;
         UpdateColumnRetention(centerChunk);
-        HashSet<Vector3I> desired = BuildDesiredChunkSet(centerChunk, streamForward);
+        int activeRadius = GetEffectiveSearchRadius();
+        HashSet<Vector3I> desired = BuildChunkSet(centerChunk, streamForward, activeRadius, MaxActiveColumns);
+        HashSet<Vector3I> warm = BuildChunkSet(
+            centerChunk,
+            streamForward,
+            activeRadius + Mathf.Max(0, WarmSearchRadiusPadding),
+            Mathf.Max(MaxWarmColumns, MaxActiveColumns));
+
+        if (_useStartupSnapshot)
+        {
+            warm.UnionWith(_startupLoadedChunks);
+        }
 
         _desiredChunks = desired;
+        _warmChunks = warm;
         foreach (KeyValuePair<Vector3I, TerrainChunk> entry in _chunks)
         {
             bool active = desired.Contains(entry.Key);
@@ -133,6 +188,21 @@ public partial class TerrainWorld : Node3D
                 TouchChunk(entry.Key);
             }
         }
+
+        QueueChunkLoads(desired, previousDesired, centerChunk, streamForward, 0.0f, activateOnReady: true);
+
+        int loadJobBudget = GetCurrentLoadJobBudget();
+        bool canQueueWarmLoads =
+            _pendingLoadQueue.Count < loadJobBudget &&
+            _activeLoadJobs < loadJobBudget &&
+            _pendingActivationQueue.Count == 0;
+
+        if (canQueueWarmLoads)
+        {
+            float warmPriorityBias = _useStartupSnapshot ? StartupWarmPriorityBias : -240.0f;
+            QueueChunkLoads(warm, previousWarm, centerChunk, streamForward, warmPriorityBias, activateOnReady: false);
+        }
+        _searchDirty = false;
     }
 
     private Vector2 GetStreamingForward2D()
@@ -150,33 +220,9 @@ public partial class TerrainWorld : Node3D
             : planarForward.Normalized();
     }
 
-    private void EnsureChunkRequested(Vector3I key, Vector2I centerChunk, Vector2 streamForward)
-    {
-        if (_chunks.ContainsKey(key))
-        {
-            _cacheHits++;
-            TouchChunk(key);
-            return;
-        }
-
-        float priority = ComputeChunkPriority(key, centerChunk, streamForward);
-
-        if (_queuedGenerationKeys.Contains(key) || _runningGenerationKeys.Contains(key))
-        {
-            _generationPriority[key] = priority;
-            return;
-        }
-
-        _cacheMisses++;
-        _generationRequestQueue.Add(key);
-        _generationPriority[key] = priority;
-        _queuedGenerationKeys.Add(key);
-    }
-
-    private HashSet<Vector3I> BuildDesiredChunkSet(Vector2I centerChunk, Vector2 streamForward)
+    private HashSet<Vector3I> BuildChunkSet(Vector2I centerChunk, Vector2 streamForward, int radius, int maxColumns)
     {
         List<ColumnCandidate> candidates = new();
-        int radius = GetEffectiveSearchRadius();
 
         for (int z = -radius; z <= radius; z++)
         {
@@ -209,7 +255,7 @@ public partial class TerrainWorld : Node3D
             }
         }
 
-        int columnBudget = Mathf.Max(MaxActiveColumns, selectedColumns.Count);
+        int columnBudget = Mathf.Max(maxColumns, selectedColumns.Count);
         foreach (ColumnCandidate candidate in candidates)
         {
             if (selectedColumns.Count >= columnBudget)
@@ -227,7 +273,6 @@ public partial class TerrainWorld : Node3D
             {
                 Vector3I key = new(column.X, y, column.Y);
                 desired.Add(key);
-                EnsureChunkRequested(key, centerChunk, streamForward);
             }
         }
 
@@ -266,7 +311,31 @@ public partial class TerrainWorld : Node3D
         }
     }
 
+    public void ClearStartupCache()
+    {
+        _chunkStore?.ClearStartupState();
+    }
+
+    public void ClearAllPersistentCache()
+    {
+        _chunkStore?.ClearAllChunkData();
+    }
+
     public string GetDebugStats()
+    {
+        TerrainWorldProfileSnapshot snapshot = GetProfileSnapshot();
+
+        return
+            $"Chunks: {snapshot.ActiveChunkCount} active / {snapshot.LoadedChunkCount} loaded / {snapshot.DesiredChunkCount} desired\n" +
+            $"Loads: {snapshot.RunningLoadCount} running / {snapshot.PendingLoadCount} queued / {snapshot.PendingActivationCount} waiting activate\n" +
+            $"Last load: {snapshot.LastChunkLoadCount} ({snapshot.LastChunkLoadMs:0.00} ms) | startup {snapshot.LastStartupChunkLoadCount} ({snapshot.LastStartupChunkLoadMs:0.00} ms) | saved {snapshot.LastPersistedChunkLoadCount} ({snapshot.LastPersistedChunkLoadMs:0.00} ms) | generated {snapshot.LastGeneratedChunkLoadCount} ({snapshot.LastGeneratedChunkLoadMs:0.00} ms)\n" +
+            $"Attach: {snapshot.LastChunkActivationCount} ({snapshot.LastChunkActivationMs:0.00} ms)\n" +
+            $"Dirty: render {snapshot.DirtyRenderCount} | collision {snapshot.DirtyCollisionCount}\n" +
+            $"Rebuilds: render {snapshot.LastVisualRebuildCount} ({snapshot.LastVisualRebuildMs:0.00} ms) | collision {snapshot.LastCollisionRebuildCount} ({snapshot.LastCollisionRebuildMs:0.00} ms)\n" +
+            $"Cache: {_cacheHits} hits / {_cacheMisses} misses | evicted {snapshot.EvictedChunks}";
+    }
+
+    public TerrainWorldProfileSnapshot GetProfileSnapshot()
     {
         int activeCount = 0;
         foreach (TerrainChunk chunk in _chunks.Values)
@@ -277,14 +346,36 @@ public partial class TerrainWorld : Node3D
             }
         }
 
-        return
-            $"Chunks: {activeCount} active / {_chunks.Count} loaded\n" +
-            $"Gen jobs: {_activeGenerationJobs} running / {_queuedGenerationKeys.Count} queued | evicted: {_evictedChunks}\n" +
-            $"Last gen: {_lastGenerationCompleteCount} ({_lastGenerationMs:0.00} ms) | attach {_lastChunkActivationCount} ({_lastChunkActivationMs:0.00} ms)\n" +
-            $"Dirty render: {_dirtyRenderChunks.Count} | dirty collision: {_dirtyCollisionChunks.Count}\n" +
-            $"Last rebuilds: render {_lastVisualRebuildCount} ({_lastVisualRebuildMs:0.00} ms) | " +
-            $"collision {_lastCollisionRebuildCount} ({_lastCollisionRebuildMs:0.00} ms)\n" +
-            $"Cache: {_cacheHits} hits / {_cacheMisses} misses";
+        return new TerrainWorldProfileSnapshot
+        {
+            ActiveChunkCount = activeCount,
+            LoadedChunkCount = _chunks.Count,
+            DesiredChunkCount = _desiredChunks.Count,
+            PendingLoadCount = _pendingLoadQueue.Count,
+            RunningLoadCount = _activeLoadJobs,
+            PendingActivationCount = _pendingActivationQueue.Count,
+            DirtyRenderCount = _dirtyRenderChunks.Count,
+            DirtyCollisionCount = _dirtyCollisionChunks.Count,
+            LastChunkLoadCount = _lastChunkLoadCount,
+            LastChunkActivationCount = _lastChunkActivationCount,
+            LastVisualRebuildCount = _lastVisualRebuildCount,
+            LastCollisionRebuildCount = _lastCollisionRebuildCount,
+            LastChunkLoadMs = _lastChunkLoadMs,
+            LastChunkActivationMs = _lastChunkActivationMs,
+            LastVisualRebuildMs = _lastVisualRebuildMs,
+            LastCollisionRebuildMs = _lastCollisionRebuildMs,
+            LastStartupChunkLoadCount = _lastStartupChunkLoadCount,
+            LastPersistedChunkLoadCount = _lastPersistedChunkLoadCount,
+            LastGeneratedChunkLoadCount = _lastGeneratedChunkLoadCount,
+            LastStartupChunkLoadMs = _lastStartupChunkLoadMs,
+            LastPersistedChunkLoadMs = _lastPersistedChunkLoadMs,
+            LastGeneratedChunkLoadMs = _lastGeneratedChunkLoadMs,
+            CacheHits = _cacheHits,
+            CacheMisses = _cacheMisses,
+            EvictedChunks = _evictedChunks,
+            InitialLoadProgress = GetInitialLoadProgress(),
+            InitialLoadComplete = _initialLoadComplete
+        };
     }
 
     public float GetInitialLoadProgress()
@@ -327,7 +418,7 @@ public partial class TerrainWorld : Node3D
         _lastVisualRebuildMs = 0.0;
         _lastCollisionRebuildMs = 0.0;
 
-        int visualBudget = MaxVisualChunkRebuildsPerFrame;
+        int visualBudget = GetCurrentVisualRebuildBudget();
         if (visualBudget > 0)
         {
             List<TerrainChunk> renderQueue = new(_dirtyRenderChunks);
@@ -362,7 +453,7 @@ public partial class TerrainWorld : Node3D
             }
         }
 
-        int collisionBudget = MaxCollisionChunkRebuildsPerFrame;
+        int collisionBudget = GetCurrentCollisionRebuildBudget();
         if (collisionBudget > 0)
         {
             double nowSeconds = Time.GetTicksMsec() / 1000.0;
@@ -402,72 +493,60 @@ public partial class TerrainWorld : Node3D
         if (!_initialLoadComplete && _desiredChunks.Count > 0 && GetInitialLoadProgress() >= 0.999f)
         {
             _initialLoadComplete = true;
+            _useStartupSnapshot = false;
+            _startupLoadedChunks.Clear();
             EmitSignal(SignalName.InitialLoadCompleted);
         }
     }
 
     private void ResetFrameStats()
     {
-        _lastGenerationCompleteCount = 0;
+        _lastChunkLoadCount = 0;
         _lastChunkActivationCount = 0;
-        _lastGenerationMs = 0.0;
+        _lastStartupChunkLoadCount = 0;
+        _lastPersistedChunkLoadCount = 0;
+        _lastGeneratedChunkLoadCount = 0;
+        _lastChunkLoadMs = 0.0;
         _lastChunkActivationMs = 0.0;
+        _lastStartupChunkLoadMs = 0.0;
+        _lastPersistedChunkLoadMs = 0.0;
+        _lastGeneratedChunkLoadMs = 0.0;
     }
 
-    private void ProcessQueuedChunkGenerations()
+    private void ProcessPendingChunkActivations()
     {
-        while (_activeGenerationJobs < MaxChunkGenerationJobs && _generationRequestQueue.Count > 0)
+        int configuredBudget = GetCurrentActivationBudget();
+        int activationBudget = configuredBudget <= 0 ? int.MaxValue : configuredBudget;
+        while (activationBudget > 0 && _pendingActivationQueue.Count > 0)
         {
-            Vector3I key = DequeueHighestPriorityChunk();
-            _queuedGenerationKeys.Remove(key);
-            _generationPriority.Remove(key);
-
-            if (_chunks.ContainsKey(key) || _runningGenerationKeys.Contains(key))
-            {
-                continue;
-            }
+            Vector3I key = _pendingActivationQueue[0];
+            _pendingActivationQueue.RemoveAt(0);
+            _queuedActivationKeys.Remove(key);
 
             if (!_desiredChunks.Contains(key))
             {
                 continue;
             }
 
-            _runningGenerationKeys.Add(key);
-            Interlocked.Increment(ref _activeGenerationJobs);
-
-            _ = Task.Run(() =>
+            if (!_chunks.TryGetValue(key, out TerrainChunk chunk))
             {
-                try
-                {
-                    GeneratedChunkResult result = GenerateChunkData(key);
-                    _completedGenerationQueue.Enqueue(result);
-                }
-                finally
-                {
-                    Interlocked.Decrement(ref _activeGenerationJobs);
-                }
-            });
-        }
-    }
-
-    private Vector3I DequeueHighestPriorityChunk()
-    {
-        int bestIndex = 0;
-        float bestPriority = float.NegativeInfinity;
-        for (int i = 0; i < _generationRequestQueue.Count; i++)
-        {
-            Vector3I key = _generationRequestQueue[i];
-            float priority = _generationPriority.GetValueOrDefault(key, 0.0f);
-            if (priority > bestPriority)
-            {
-                bestPriority = priority;
-                bestIndex = i;
+                continue;
             }
-        }
 
-        Vector3I selected = _generationRequestQueue[bestIndex];
-        _generationRequestQueue.RemoveAt(bestIndex);
-        return selected;
+            if (chunk.Visible)
+            {
+                activationBudget--;
+                continue;
+            }
+
+            ulong activateStart = Time.GetTicksUsec();
+            chunk.Visible = true;
+            chunk.ProcessMode = ProcessModeEnum.Inherit;
+            TouchChunk(key);
+            _lastChunkActivationCount++;
+            _lastChunkActivationMs += (Time.GetTicksUsec() - activateStart) / 1000.0;
+            activationBudget--;
+        }
     }
 
     private float ComputeChunkPriority(Vector3I key, Vector2I centerChunk, Vector2 streamForward)
@@ -682,50 +761,206 @@ public partial class TerrainWorld : Node3D
         }
     }
 
-    private void ProcessCompletedChunkGenerations()
+    private void ProcessQueuedChunkLoads()
     {
-        int activationBudget = MaxChunkActivationsPerFrame <= 0 ? int.MaxValue : MaxChunkActivationsPerFrame;
-        while (activationBudget > 0 && _completedGenerationQueue.TryDequeue(out GeneratedChunkResult result))
+        int loadJobBudget = GetCurrentLoadJobBudget();
+        while (_activeLoadJobs < loadJobBudget && _pendingLoadQueue.Count > 0)
         {
-            _runningGenerationKeys.Remove(result.Key);
-            _lastGenerationCompleteCount++;
-            _lastGenerationMs += result.GenerationMs;
-
-            if (_chunks.ContainsKey(result.Key))
+            Vector3I key = DequeueHighestPriorityLoad();
+            lock (_loadStateLock)
             {
-                activationBudget--;
+                _queuedLoadKeys.Remove(key);
+            }
+            _pendingLoadPriority.Remove(key);
+
+            bool alreadyRunning;
+            lock (_loadStateLock)
+            {
+                alreadyRunning = _runningLoadKeys.Contains(key);
+            }
+
+            if (_chunks.ContainsKey(key) || alreadyRunning || (!_desiredChunks.Contains(key) && !_warmChunks.Contains(key)))
+            {
                 continue;
             }
 
-            ulong start = Time.GetTicksUsec();
+            lock (_loadStateLock)
+            {
+                _runningLoadKeys.Add(key);
+            }
+            Interlocked.Increment(ref _activeLoadJobs);
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    ulong start = Time.GetTicksUsec();
+                    LoadedChunkData loadedChunk = LoadChunkData(key);
+                    double loadMs = (Time.GetTicksUsec() - start) / 1000.0;
+                    _completedLoadQueue.Enqueue(new PreparedChunkResult(key, loadedChunk.Data, loadedChunk.Source, loadMs));
+                }
+                finally
+                {
+                    lock (_loadStateLock)
+                    {
+                        _runningLoadKeys.Remove(key);
+                    }
+                    Interlocked.Decrement(ref _activeLoadJobs);
+                }
+            });
+        }
+    }
+
+    private void ProcessCompletedChunkLoads()
+    {
+        while (_completedLoadQueue.TryDequeue(out PreparedChunkResult result))
+        {
+            if (_chunks.ContainsKey(result.Key))
+            {
+                continue;
+            }
+
+            EvictInactiveChunks(requiredFreeSlots: 1);
+
+            ulong attachStart = Time.GetTicksUsec();
             TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
             AddChild(chunk);
             chunk.Initialize(result.Key, _settings);
             chunk.SetData(result.Data, 0.0);
+            chunk.Visible = false;
+            chunk.ProcessMode = ProcessModeEnum.Disabled;
             _chunks[result.Key] = chunk;
-            chunk.Visible = _desiredChunks.Contains(result.Key);
-            chunk.ProcessMode = chunk.Visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
             TouchChunk(result.Key);
             QueueChunkForRebuild(chunk);
-            _lastChunkActivationCount++;
-            _lastChunkActivationMs += (Time.GetTicksUsec() - start) / 1000.0;
-            activationBudget--;
+
+            _lastChunkLoadCount++;
+            _lastChunkLoadMs += result.LoadMs;
+            switch (result.Source)
+            {
+                case TerrainChunkLoadSource.StartupSnapshot:
+                    _lastStartupChunkLoadCount++;
+                    _lastStartupChunkLoadMs += result.LoadMs;
+                    break;
+                case TerrainChunkLoadSource.PersistedChunk:
+                    _lastPersistedChunkLoadCount++;
+                    _lastPersistedChunkLoadMs += result.LoadMs;
+                    break;
+                default:
+                    _lastGeneratedChunkLoadCount++;
+                    _lastGeneratedChunkLoadMs += result.LoadMs;
+                    break;
+            }
+
+            if (_desiredChunks.Contains(result.Key) && !_queuedActivationKeys.Contains(result.Key))
+            {
+                _pendingActivationQueue.Add(result.Key);
+                _queuedActivationKeys.Add(result.Key);
+            }
+
+            _lastChunkActivationMs += (Time.GetTicksUsec() - attachStart) / 1000.0;
         }
     }
 
-    private GeneratedChunkResult GenerateChunkData(Vector3I key)
+    private void QueueChunkLoads(HashSet<Vector3I> targetSet, HashSet<Vector3I> previousSet, Vector2I centerChunk, Vector2 streamForward, float priorityBias, bool activateOnReady)
     {
-        ulong start = Time.GetTicksUsec();
+        List<Vector3I> enteringKeys = new();
+        foreach (Vector3I key in targetSet)
+        {
+            if (!previousSet.Contains(key))
+            {
+                enteringKeys.Add(key);
+            }
+        }
+
+        enteringKeys.Sort((a, b) =>
+            (ComputeChunkPriority(b, centerChunk, streamForward) + priorityBias)
+            .CompareTo(ComputeChunkPriority(a, centerChunk, streamForward) + priorityBias));
+        foreach (Vector3I key in enteringKeys)
+        {
+            if (_queuedActivationKeys.Contains(key))
+            {
+                continue;
+            }
+
+            if (_chunks.TryGetValue(key, out TerrainChunk residentChunk))
+            {
+                _cacheHits++;
+                if (activateOnReady && !residentChunk.Visible)
+                {
+                    _pendingActivationQueue.Insert(0, key);
+                    _queuedActivationKeys.Add(key);
+                }
+                continue;
+            }
+
+            _cacheMisses++;
+            float priority = ComputeChunkPriority(key, centerChunk, streamForward) + priorityBias;
+            if (_useStartupSnapshot && _startupLoadedChunks.Contains(key))
+            {
+                priority += 5000.0f;
+            }
+            bool loadAlreadyTracked;
+            lock (_loadStateLock)
+            {
+                loadAlreadyTracked = _queuedLoadKeys.Contains(key) || _runningLoadKeys.Contains(key);
+            }
+
+            if (loadAlreadyTracked)
+            {
+                _pendingLoadPriority[key] = priority;
+                continue;
+            }
+
+            _pendingLoadQueue.Add(key);
+            _pendingLoadPriority[key] = priority;
+            lock (_loadStateLock)
+            {
+                _queuedLoadKeys.Add(key);
+            }
+        }
+    }
+
+    private LoadedChunkData LoadChunkData(Vector3I key)
+    {
+        if (_chunkStore.TryLoadStartupChunk(key, out VoxelChunkData startupData))
+        {
+            return new LoadedChunkData(startupData, TerrainChunkLoadSource.StartupSnapshot);
+        }
+
+        if (_chunkStore.TryLoad(key, out VoxelChunkData persistedData))
+        {
+            return new LoadedChunkData(persistedData, TerrainChunkLoadSource.PersistedChunk);
+        }
+
         Vector3 origin = new(
             key.X * _settings.ChunkSize,
             _settings.BaseY + (key.Y * _settings.ChunkSize),
             key.Z * _settings.ChunkSize);
 
-        VoxelChunkData data = new(PointsPerAxis, VoxelSize, origin);
+        VoxelChunkData generated = new(PointsPerAxis, VoxelSize, origin);
         VoxelFieldGenerator generator = new(Seed, TerrainHeight, DetailHeight, CaveScale, CaveThreshold);
-        generator.FillChunk(data);
-        double generationMs = (Time.GetTicksUsec() - start) / 1000.0;
-        return new GeneratedChunkResult(key, data, generationMs);
+        generator.FillChunk(generated);
+        return new LoadedChunkData(generated, TerrainChunkLoadSource.ProceduralGeneration);
+    }
+
+    private Vector3I DequeueHighestPriorityLoad()
+    {
+        int bestIndex = 0;
+        float bestPriority = float.NegativeInfinity;
+        for (int i = 0; i < _pendingLoadQueue.Count; i++)
+        {
+            Vector3I key = _pendingLoadQueue[i];
+            float priority = _pendingLoadPriority.GetValueOrDefault(key, 0.0f);
+            if (priority > bestPriority)
+            {
+                bestPriority = priority;
+                bestIndex = i;
+            }
+        }
+
+        Vector3I selected = _pendingLoadQueue[bestIndex];
+        _pendingLoadQueue.RemoveAt(bestIndex);
+        return selected;
     }
 
     private void TouchChunk(Vector3I key)
@@ -735,12 +970,17 @@ public partial class TerrainWorld : Node3D
 
     private void EvictInactiveChunks()
     {
+        EvictInactiveChunks(requiredFreeSlots: 0);
+    }
+
+    private void EvictInactiveChunks(int requiredFreeSlots)
+    {
         if (MaxLoadedChunks <= 0)
         {
             return;
         }
 
-        while (_chunks.Count > MaxLoadedChunks)
+        while ((_chunks.Count + requiredFreeSlots) > MaxLoadedChunks)
         {
             Vector3I? oldestKey = null;
             ulong oldestTick = ulong.MaxValue;
@@ -768,6 +1008,11 @@ public partial class TerrainWorld : Node3D
 
             Vector3I key = oldestKey.Value;
             TerrainChunk chunk = _chunks[key];
+            if (chunk.PersistenceDirty)
+            {
+                _chunkStore.Save(key, chunk.Data);
+                chunk.MarkPersisted();
+            }
             _dirtyRenderChunks.Remove(chunk);
             _dirtyCollisionChunks.Remove(chunk);
             _chunkTouchTicks.Remove(key);
@@ -777,6 +1022,103 @@ public partial class TerrainWorld : Node3D
         }
     }
 
-    private sealed record GeneratedChunkResult(Vector3I Key, VoxelChunkData Data, double GenerationMs);
+    private void LoadStartupState()
+    {
+        if (_trackedCharacter == null || !_chunkStore.TryLoadStartupState(out TerrainStartupState startupState))
+        {
+            return;
+        }
+
+        Transform3D transform = _trackedCharacter.GlobalTransform;
+        transform.Origin = startupState.PlayerPosition;
+        _trackedCharacter.GlobalTransform = transform;
+        _lastTrackedCharacterPosition = startupState.PlayerPosition;
+
+        foreach (TerrainStartupChunkDescriptor chunk in startupState.Chunks)
+        {
+            _startupLoadedChunks.Add(chunk.Key);
+        }
+
+        _useStartupSnapshot = _startupLoadedChunks.Count > 0;
+    }
+
+    private bool IsStartupBoostActive()
+    {
+        return _useStartupSnapshot && !_initialLoadComplete;
+    }
+
+    private int GetCurrentLoadJobBudget()
+    {
+        return IsStartupBoostActive()
+            ? Mathf.Max(MaxChunkGenerationJobs, StartupChunkGenerationJobs)
+            : MaxChunkGenerationJobs;
+    }
+
+    private int GetCurrentActivationBudget()
+    {
+        return IsStartupBoostActive()
+            ? Mathf.Max(MaxChunkActivationsPerFrame, StartupChunkActivationsPerFrame)
+            : MaxChunkActivationsPerFrame;
+    }
+
+    private int GetCurrentVisualRebuildBudget()
+    {
+        return IsStartupBoostActive()
+            ? Mathf.Max(MaxVisualChunkRebuildsPerFrame, StartupVisualChunkRebuildsPerFrame)
+            : MaxVisualChunkRebuildsPerFrame;
+    }
+
+    private int GetCurrentCollisionRebuildBudget()
+    {
+        return IsStartupBoostActive()
+            ? Mathf.Max(MaxCollisionChunkRebuildsPerFrame, StartupCollisionChunkRebuildsPerFrame)
+            : MaxCollisionChunkRebuildsPerFrame;
+    }
+
+    private void HandleTreeExiting()
+    {
+        if (_trackedCharacter == null)
+        {
+            return;
+        }
+
+        List<TerrainStartupChunkSnapshot> startupChunks = new(_chunks.Count);
+        foreach (KeyValuePair<Vector3I, TerrainChunk> entry in _chunks)
+        {
+            TerrainChunk chunk = entry.Value;
+            if (!chunk.HasData)
+            {
+                continue;
+            }
+
+            startupChunks.Add(new TerrainStartupChunkSnapshot(entry.Key, chunk.Visible, chunk.Data));
+        }
+
+        _chunkStore.SaveStartupState(_trackedCharacter.GlobalPosition, startupChunks);
+    }
+
     private sealed record ColumnCandidate(Vector2I Key, float Priority, bool Mandatory);
+    private sealed record LoadedChunkData(VoxelChunkData Data, TerrainChunkLoadSource Source);
+    private sealed record PreparedChunkResult(Vector3I Key, VoxelChunkData Data, TerrainChunkLoadSource Source, double LoadMs);
+
+    private bool ShouldRefreshChunkSearch()
+    {
+        Camera3D camera = GetViewport().GetCamera3D();
+        Vector3 trackedPosition = _trackedCharacter?.GlobalPosition ?? Vector3.Zero;
+        Vector3 cameraForward = camera == null ? Vector3.Zero : (-camera.GlobalTransform.Basis.Z);
+
+        bool firstSample = _lastTrackedCharacterPosition.X == float.MinValue;
+        bool movedEnough = firstSample ||
+            trackedPosition.DistanceSquaredTo(_lastTrackedCharacterPosition) >= (_settings.ChunkSize * _settings.ChunkSize * 0.09f) ||
+            cameraForward.Dot(_lastCameraForward) < 0.992f;
+
+        if (!movedEnough && !_searchDirty)
+        {
+            return false;
+        }
+
+        _lastTrackedCharacterPosition = trackedPosition;
+        _lastCameraForward = cameraForward;
+        return true;
+    }
 }

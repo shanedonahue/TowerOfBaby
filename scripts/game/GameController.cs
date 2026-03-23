@@ -3,9 +3,20 @@ using Godot.Collections;
 
 public partial class GameController : Node3D
 {
+    public enum PlayerStartMode
+    {
+        ResumeSerializedLocation = 0,
+        RestartAtSceneSpawn = 1
+    }
+
     [Export] public NodePath TerrainWorldPath = new();
     [Export] public NodePath PlayerPath = new("Player");
     [Export] public float BrushRange = 48.0f;
+    [Export] public PlayerStartMode StartMode = PlayerStartMode.ResumeSerializedLocation;
+    [ExportGroup("Debug Cache Hygiene")]
+    [Export] public bool ClearProfilingLogsOnReady;
+    [Export] public bool ClearStartupCacheOnReady;
+    [Export] public bool ClearAllTerrainCacheOnReady;
 
     private TerrainWorld _terrainWorld = null!;
     private Node3D _player = null!;
@@ -13,11 +24,14 @@ public partial class GameController : Node3D
     private StandardMaterial3D _brushMaterial = null!;
     private CanvasLayer _loadingOverlay = null!;
     private Label _loadingLabel = null!;
+    private PerformanceRunLogger _performanceLogger = null!;
+    private Transform3D _playerSpawnTransform;
 
     public override void _Ready()
     {
         _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetNodeOrNull<TerrainWorld>("TerrainWorld");
         _player = GetNodeOrNull<Node3D>(PlayerPath) ?? GetNodeOrNull<Node3D>("Player");
+        _playerSpawnTransform = _player?.GlobalTransform ?? Transform3D.Identity;
         _brushMaterial = new StandardMaterial3D
         {
             AlbedoColor = new Color(0.9f, 0.25f, 0.2f, 0.22f),
@@ -40,11 +54,25 @@ public partial class GameController : Node3D
         };
         AddChild(_brushPreview);
 
+        _performanceLogger = new PerformanceRunLogger
+        {
+            Name = "PerformanceRunLogger",
+            TerrainWorldPath = TerrainWorldPath
+        };
+        AddChild(_performanceLogger);
+
+        ApplyDebugCacheClears();
+
         BuildLoadingOverlay();
         SetPlayerLoadingState(active: _terrainWorld != null && !_terrainWorld.InitialLoadComplete);
         if (_terrainWorld != null)
         {
             _terrainWorld.InitialLoadCompleted += HandleInitialLoadCompleted;
+        }
+
+        if (StartMode == PlayerStartMode.RestartAtSceneSpawn)
+        {
+            ApplySceneSpawnOverride();
         }
     }
 
@@ -222,5 +250,74 @@ public partial class GameController : Node3D
 
         _player.ProcessMode = active ? ProcessModeEnum.Disabled : ProcessModeEnum.Inherit;
         _player.Visible = !active;
+    }
+
+    private void ApplySceneSpawnOverride()
+    {
+        if (_player == null)
+        {
+            return;
+        }
+
+        _player.GlobalTransform = _playerSpawnTransform;
+    }
+
+    private void ApplyDebugCacheClears()
+    {
+        if (_terrainWorld == null)
+        {
+            return;
+        }
+
+        if (ClearAllTerrainCacheOnReady)
+        {
+            _terrainWorld.ClearAllPersistentCache();
+            ClearAllTerrainCacheOnReady = false;
+            ClearStartupCacheOnReady = false;
+        }
+        else if (ClearStartupCacheOnReady)
+        {
+            _terrainWorld.ClearStartupCache();
+            ClearStartupCacheOnReady = false;
+        }
+
+        if (ClearProfilingLogsOnReady)
+        {
+            ClearProfilingLogs();
+            ClearProfilingLogsOnReady = false;
+        }
+    }
+
+    private static void ClearProfilingLogs()
+    {
+        string profilingPath = ProjectSettings.GlobalizePath("user://profiling");
+        if (!DirAccess.DirExistsAbsolute(profilingPath))
+        {
+            return;
+        }
+
+        using DirAccess directory = DirAccess.Open(profilingPath);
+        if (directory == null)
+        {
+            return;
+        }
+
+        directory.ListDirBegin();
+        while (true)
+        {
+            string fileName = directory.GetNext();
+            if (string.IsNullOrEmpty(fileName))
+            {
+                break;
+            }
+
+            if (directory.CurrentIsDir() || !fileName.EndsWith(".log"))
+            {
+                continue;
+            }
+
+            directory.Remove(fileName);
+        }
+        directory.ListDirEnd();
     }
 }

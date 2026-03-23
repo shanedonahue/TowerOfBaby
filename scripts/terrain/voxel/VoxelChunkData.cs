@@ -12,6 +12,7 @@ public sealed class VoxelChunkData
 
     public int CellsPerAxis => PointsPerAxis - 1;
     public float ChunkSize => CellsPerAxis * VoxelSize;
+    public int PointCount => _densities.Length;
 
     public VoxelChunkData(int pointsPerAxis, float voxelSize, Vector3 origin, float isoLevel = 0.0f)
     {
@@ -90,6 +91,27 @@ public sealed class VoxelChunkData
         }
 
         return modified;
+    }
+
+    public float[] CopyDensities()
+    {
+        return (float[])_densities.Clone();
+    }
+
+    public byte[] CopyMaterials()
+    {
+        return (byte[])_materials.Clone();
+    }
+
+    public void LoadFromBuffers(float[] densities, byte[] materials)
+    {
+        if (densities.Length != _densities.Length || materials.Length != _materials.Length)
+        {
+            throw new System.ArgumentException("Chunk buffer sizes do not match VoxelChunkData dimensions.");
+        }
+
+        densities.CopyTo(_densities, 0);
+        materials.CopyTo(_materials, 0);
     }
 
     private int GetIndex(int x, int y, int z)

@@ -16,6 +16,7 @@ public partial class TerrainChunk : Node3D
     public Vector3I ChunkKey { get; private set; }
     public float ChunkSize => _data?.ChunkSize ?? ((PointsPerAxis - 1) * VoxelSize);
     public bool HasData => _data != null;
+    public VoxelChunkData Data => _data;
     public bool HasCollision => _collision?.Shape != null;
     public bool HasSurface => _mesh != null && _mesh.GetSurfaceCount() > 0;
     public bool IsInitialLoadReady => HasData && !RenderDirty && !CollisionDirty && (!HasSurface || HasCollision);
@@ -24,6 +25,7 @@ public partial class TerrainChunk : Node3D
     public double CollisionReadyAtSeconds { get; private set; }
     public double LastRenderBuildMs { get; private set; }
     public double LastCollisionBuildMs { get; private set; }
+    public bool PersistenceDirty { get; private set; }
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
@@ -53,6 +55,7 @@ public partial class TerrainChunk : Node3D
     public void SetData(VoxelChunkData data, double collisionDelaySeconds)
     {
         _data = data;
+        PersistenceDirty = false;
         MarkDirty(includeCollision: true, collisionDelaySeconds);
     }
 
@@ -120,6 +123,15 @@ public partial class TerrainChunk : Node3D
         }
 
         bool modified = _data.ApplySphereBrush(center, radius, deltaDensity);
+        if (modified)
+        {
+            PersistenceDirty = true;
+        }
         return modified;
+    }
+
+    public void MarkPersisted()
+    {
+        PersistenceDirty = false;
     }
 }
