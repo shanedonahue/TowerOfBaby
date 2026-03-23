@@ -31,9 +31,17 @@ public partial class TerrainWorld : Node3D
     [Export] public float MinOcclusionDistanceChunks = 5.5f;
     [Export] public float ForwardPriorityWeight = 26.0f;
     [Export] public float BehindViewerPenalty = 36.0f;
+    [ExportGroup("Brush")]
     [Export] public float BrushRadius = 2.4f;
+    [Export] public float BrushRadiusMin = 0.8f;
+    [Export] public float BrushRadiusMax = 8.0f;
+    [Export] public float BrushSurfaceInset = 0.55f;
+    [Export] public float BrushBuildSurfaceOffset = 0.3f;
     [Export] public float CarveStrength = -3.4f;
     [Export] public float BuildStrength = 2.8f;
+    [Export] public float BrushRetextureMargin = 1.6f;
+    [ExportGroup("Persistence")]
+    [Export] public bool EnableStartupStatePersistence = true;
     [Export] public int VerticalChunkCount = 3;
     [Export] public int MaxLoadedChunks = 120;
     [Export] public int MaxChunkGenerationJobs = 2;
@@ -110,7 +118,10 @@ public partial class TerrainWorld : Node3D
         _chunkStore = new TerrainChunkStore(Seed);
 
         _trackedCharacter = GetNodeOrNull<Node3D>(TrackedCharacterPath) ?? GetTree().GetFirstNodeInGroup("terrain_tracker") as Node3D;
-        LoadStartupState();
+        if (EnableStartupStatePersistence)
+        {
+            LoadStartupState();
+        }
         TreeExiting += HandleTreeExiting;
 
         RefreshChunks(force: true);
@@ -295,20 +306,40 @@ public partial class TerrainWorld : Node3D
     public void ApplyBrush(Vector3 worldCenter, bool additive)
     {
         float strength = additive ? BuildStrength : CarveStrength;
+        VoxelSphereEdit edit = new(
+            worldCenter,
+            BrushRadius,
+            strength,
+            BrushRetextureMargin);
 
-        foreach (TerrainChunk chunk in _chunks.Values)
+        foreach (Vector3I key in GetChunkKeysIntersectingSphere(worldCenter, BrushRadius))
         {
+            TerrainChunk chunk = GetOrCreateChunkForEdit(key);
             if (!chunk.IntersectsSphere(worldCenter, BrushRadius))
             {
                 continue;
             }
 
-            if (chunk.ApplySphereBrush(worldCenter, BrushRadius, strength))
+            if (chunk.ApplySphereBrush(edit, ResolveEditedMaterial))
             {
                 chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
                 QueueChunkForRebuild(chunk);
             }
         }
+    }
+
+    public void AdjustBrushRadius(float delta)
+    {
+        BrushRadius = Mathf.Clamp(BrushRadius + delta, BrushRadiusMin, BrushRadiusMax);
+    }
+
+    public Vector3 ResolveBrushCenter(Vector3 hitPoint, Vector3 hitNormal, bool additive)
+    {
+        Vector3 normal = hitNormal.LengthSquared() > 0.0001f
+            ? hitNormal.Normalized()
+            : Vector3.Up;
+        float offset = additive ? BrushBuildSurfaceOffset : -BrushSurfaceInset;
+        return hitPoint + (normal * offset);
     }
 
     public void ClearStartupCache()
@@ -319,6 +350,24 @@ public partial class TerrainWorld : Node3D
     public void ClearAllPersistentCache()
     {
         _chunkStore?.ClearAllChunkData();
+    }
+
+    public bool IsColumnActiveAtPosition(Vector3 worldPosition)
+    {
+        Vector2I columnKey = new(
+            Mathf.FloorToInt(worldPosition.X / _settings.ChunkSize),
+            Mathf.FloorToInt(worldPosition.Z / _settings.ChunkSize));
+
+        for (int y = 0; y < VerticalChunkCount; y++)
+        {
+            if (_chunks.TryGetValue(new Vector3I(columnKey.X, y, columnKey.Y), out TerrainChunk chunk) &&
+                chunk.Visible)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public string GetDebugStats()
@@ -409,6 +458,55 @@ public partial class TerrainWorld : Node3D
         {
             _dirtyCollisionChunks.Add(chunk);
         }
+    }
+
+    private TerrainChunk GetOrCreateChunkForEdit(Vector3I key)
+    {
+        if (_chunks.TryGetValue(key, out TerrainChunk existingChunk))
+        {
+            return existingChunk;
+        }
+
+        LoadedChunkData loadedChunk = LoadChunkData(key);
+        TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
+        AddChild(chunk);
+        chunk.Initialize(key, _settings);
+        chunk.SetData(loadedChunk.Data, 0.0);
+        chunk.Visible = _desiredChunks.Contains(key);
+        chunk.ProcessMode = chunk.Visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
+        _chunks[key] = chunk;
+        TouchChunk(key);
+        QueueChunkForRebuild(chunk);
+        return chunk;
+    }
+
+    private IEnumerable<Vector3I> GetChunkKeysIntersectingSphere(Vector3 worldCenter, float radius)
+    {
+        int minX = Mathf.FloorToInt((worldCenter.X - radius) / _settings.ChunkSize);
+        int maxX = Mathf.FloorToInt((worldCenter.X + radius) / _settings.ChunkSize);
+        int minY = Mathf.FloorToInt((worldCenter.Y - _settings.BaseY - radius) / _settings.ChunkSize);
+        int maxY = Mathf.FloorToInt((worldCenter.Y - _settings.BaseY + radius) / _settings.ChunkSize);
+        int minZ = Mathf.FloorToInt((worldCenter.Z - radius) / _settings.ChunkSize);
+        int maxZ = Mathf.FloorToInt((worldCenter.Z + radius) / _settings.ChunkSize);
+
+        minY = Mathf.Clamp(minY, 0, VerticalChunkCount - 1);
+        maxY = Mathf.Clamp(maxY, 0, VerticalChunkCount - 1);
+
+        for (int z = minZ; z <= maxZ; z++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    yield return new Vector3I(x, y, z);
+                }
+            }
+        }
+    }
+
+    private VoxelMaterialId ResolveEditedMaterial(Vector3 worldPosition, float density)
+    {
+        return _prioritySampler.SampleMaterial(worldPosition, density);
     }
 
     private void ProcessDirtyChunks()
@@ -922,7 +1020,8 @@ public partial class TerrainWorld : Node3D
 
     private LoadedChunkData LoadChunkData(Vector3I key)
     {
-        if (_chunkStore.TryLoadStartupChunk(key, out VoxelChunkData startupData))
+        if (EnableStartupStatePersistence &&
+            _chunkStore.TryLoadStartupChunk(key, out VoxelChunkData startupData))
         {
             return new LoadedChunkData(startupData, TerrainChunkLoadSource.StartupSnapshot);
         }
@@ -1077,7 +1176,7 @@ public partial class TerrainWorld : Node3D
 
     private void HandleTreeExiting()
     {
-        if (_trackedCharacter == null)
+        if (!EnableStartupStatePersistence || _trackedCharacter == null)
         {
             return;
         }

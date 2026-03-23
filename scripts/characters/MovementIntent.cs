@@ -8,4 +8,6 @@ public struct MovementIntent
     public bool Sprint;
     public bool PrimaryAction;
     public bool SecondaryAction;
+    public bool PrimaryActionPressed;
+    public bool SecondaryActionPressed;
 }

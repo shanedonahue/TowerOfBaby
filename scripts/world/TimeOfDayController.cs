@@ -90,16 +90,21 @@ public partial class TimeOfDayController : Node
 
         _environment.AmbientLightSkyContribution = Mathf.Lerp(0.18f, 0.72f, daylight);
         _environment.TonemapExposure = Mathf.Lerp(0.38f, 1.18f, daylight);
-        _environment.FogDensity = Mathf.Lerp(0.042f, 0.062f, 1.0f - daylight);
+        _environment.FogDensity = Mathf.Lerp(0.078f, 0.112f, 1.0f - daylight);
+        _environment.FogDepthBegin = Mathf.Lerp(8.0f, 14.0f, daylight);
+        _environment.FogDepthEnd = Mathf.Lerp(44.0f, 64.0f, daylight);
+        _environment.FogDepthCurve = Mathf.Lerp(2.8f, 2.2f, daylight);
+        _environment.FogAerialPerspective = Mathf.Lerp(0.84f, 0.72f, daylight);
+        _environment.FogSkyAffect = Mathf.Lerp(0.86f, 0.72f, daylight);
 
         _skyMaterial.SkyTopColor = new Color(0.03f, 0.05f, 0.12f).Lerp(new Color(0.34f, 0.68f, 0.98f), daylight);
-        _skyMaterial.SkyHorizonColor = new Color(0.08f, 0.09f, 0.15f).Lerp(new Color(0.72f, 0.88f, 1.0f), daylight);
-        _skyMaterial.SkyHorizonColor = _skyMaterial.SkyHorizonColor.Lerp(new Color(1.0f, 0.74f, 0.48f), horizonWarmth * 0.45f);
+        _skyMaterial.SkyHorizonColor = new Color(0.12f, 0.13f, 0.17f).Lerp(new Color(0.64f, 0.76f, 0.84f), daylight);
+        _skyMaterial.SkyHorizonColor = _skyMaterial.SkyHorizonColor.Lerp(new Color(0.94f, 0.72f, 0.5f), horizonWarmth * 0.38f);
 
         // Keep the "below the world" color close to the terrain palette so the horizon
         // doesn't read as a muddy brown seam.
-        _skyMaterial.GroundHorizonColor = new Color(0.1f, 0.14f, 0.2f).Lerp(new Color(0.52f, 0.76f, 0.94f), daylight * 0.82f);
-        _skyMaterial.GroundBottomColor = new Color(0.03f, 0.04f, 0.07f).Lerp(new Color(0.16f, 0.32f, 0.48f), daylight * 0.62f);
+        _skyMaterial.GroundHorizonColor = new Color(0.12f, 0.14f, 0.16f).Lerp(new Color(0.56f, 0.68f, 0.74f), daylight * 0.9f);
+        _skyMaterial.GroundBottomColor = new Color(0.05f, 0.06f, 0.08f).Lerp(new Color(0.22f, 0.28f, 0.34f), daylight * 0.72f);
 
         if (_moonVisual != null)
         {

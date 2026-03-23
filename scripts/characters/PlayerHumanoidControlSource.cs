@@ -4,6 +4,8 @@ public sealed class PlayerHumanoidControlSource : IHumanoidControlSource
 {
     private Vector2 _accumulatedLookDelta;
     private bool _toggleMouseCaptureRequested;
+    private bool _primaryActionPressed;
+    private bool _secondaryActionPressed;
 
     public void Initialize()
     {
@@ -15,6 +17,18 @@ public sealed class PlayerHumanoidControlSource : IHumanoidControlSource
         if (@event.IsActionPressed("ui_cancel"))
         {
             _toggleMouseCaptureRequested = true;
+        }
+
+        if (@event is InputEventMouseButton mouseButton && mouseButton.Pressed)
+        {
+            if (mouseButton.ButtonIndex == MouseButton.Left)
+            {
+                _primaryActionPressed = true;
+            }
+            else if (mouseButton.ButtonIndex == MouseButton.Right)
+            {
+                _secondaryActionPressed = true;
+            }
         }
     }
 
@@ -42,10 +56,14 @@ public sealed class PlayerHumanoidControlSource : IHumanoidControlSource
             Jump = Input.IsActionPressed("move_jump"),
             Sprint = Input.IsActionPressed("move_sprint"),
             PrimaryAction = Input.IsMouseButtonPressed(MouseButton.Left),
-            SecondaryAction = Input.IsMouseButtonPressed(MouseButton.Right)
+            SecondaryAction = Input.IsMouseButtonPressed(MouseButton.Right),
+            PrimaryActionPressed = _primaryActionPressed,
+            SecondaryActionPressed = _secondaryActionPressed
         };
 
         _accumulatedLookDelta = Vector2.Zero;
+        _primaryActionPressed = false;
+        _secondaryActionPressed = false;
         return intent;
     }
 

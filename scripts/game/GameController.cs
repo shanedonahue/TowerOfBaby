@@ -12,6 +12,9 @@ public partial class GameController : Node3D
     [Export] public NodePath TerrainWorldPath = new();
     [Export] public NodePath PlayerPath = new("Player");
     [Export] public float BrushRange = 48.0f;
+    [Export] public float BrushScrollStep = 0.2f;
+    [Export] public float BrushPreviewConeHeight = 1.35f;
+    [Export] public float BrushPreviewGroundLift = 0.06f;
     [Export] public PlayerStartMode StartMode = PlayerStartMode.ResumeSerializedLocation;
     [ExportGroup("Debug Cache Hygiene")]
     [Export] public bool ClearProfilingLogsOnReady;
@@ -44,10 +47,13 @@ public partial class GameController : Node3D
         _brushPreview = new MeshInstance3D
         {
             Name = "BrushPreview",
-            Mesh = new SphereMesh
+            Mesh = new CylinderMesh
             {
-                Radius = 1.0f,
-                Height = 2.0f
+                TopRadius = 0.08f,
+                BottomRadius = 1.0f,
+                Height = 1.0f,
+                RadialSegments = 24,
+                Rings = 1
             },
             MaterialOverride = _brushMaterial,
             Visible = false
@@ -97,8 +103,24 @@ public partial class GameController : Node3D
             return;
         }
 
-        bool carve = mouseButton.ButtonIndex == MouseButton.Left && Input.IsKeyPressed(Key.Ctrl);
-        bool build = mouseButton.ButtonIndex == MouseButton.Right && Input.IsKeyPressed(Key.Ctrl);
+        bool ctrlPressed = Input.IsKeyPressed(Key.Ctrl);
+        if (ctrlPressed && _terrainWorld != null)
+        {
+            if (mouseButton.ButtonIndex == MouseButton.WheelUp)
+            {
+                _terrainWorld.AdjustBrushRadius(BrushScrollStep);
+                return;
+            }
+
+            if (mouseButton.ButtonIndex == MouseButton.WheelDown)
+            {
+                _terrainWorld.AdjustBrushRadius(-BrushScrollStep);
+                return;
+            }
+        }
+
+        bool carve = mouseButton.ButtonIndex == MouseButton.Left && ctrlPressed;
+        bool build = mouseButton.ButtonIndex == MouseButton.Right && ctrlPressed;
         if (!carve && !build)
         {
             return;
@@ -124,7 +146,9 @@ public partial class GameController : Node3D
         }
 
         Vector3 hitPoint = (Vector3)result["position"];
-        _terrainWorld.ApplyBrush(hitPoint, additive: build);
+        Vector3 hitNormal = ((Vector3)result["normal"]).Normalized();
+        Vector3 brushCenter = _terrainWorld.ResolveBrushCenter(hitPoint, hitNormal, additive: build);
+        _terrainWorld.ApplyBrush(brushCenter, additive: build);
     }
 
     private void UpdateBrushPreview()
@@ -165,13 +189,32 @@ public partial class GameController : Node3D
 
         Vector3 hitPoint = (Vector3)result["position"];
         Vector3 hitNormal = ((Vector3)result["normal"]).Normalized();
+        Vector3 brushCenter = _terrainWorld.ResolveBrushCenter(hitPoint, hitNormal, additive: Input.IsMouseButtonPressed(MouseButton.Right));
         _brushPreview.Visible = true;
-        _brushPreview.GlobalPosition = hitPoint + hitNormal * 0.05f;
-        float diameter = _terrainWorld.BrushRadius * 2.0f;
-        _brushPreview.Scale = Vector3.One * diameter;
+        _brushPreview.GlobalTransform = BuildBrushPreviewTransform(hitPoint, hitNormal, brushCenter, _terrainWorld.BrushRadius);
         _brushMaterial.AlbedoColor = Input.IsMouseButtonPressed(MouseButton.Right)
             ? new Color(0.2f, 0.7f, 1.0f, 0.22f)
             : new Color(0.9f, 0.25f, 0.2f, 0.22f);
+    }
+
+    private Transform3D BuildBrushPreviewTransform(Vector3 hitPoint, Vector3 hitNormal, Vector3 brushCenter, float brushRadius)
+    {
+        Vector3 up = hitNormal.LengthSquared() > 0.0001f
+            ? hitNormal.Normalized()
+            : Vector3.Up;
+        Basis basis = CreateBasisFromUp(up).Scaled(new Vector3(brushRadius, BrushPreviewConeHeight, brushRadius));
+        Vector3 origin = brushCenter + (up * ((BrushPreviewConeHeight * 0.5f) + BrushPreviewGroundLift));
+        return new Transform3D(basis, origin);
+    }
+
+    private static Basis CreateBasisFromUp(Vector3 up)
+    {
+        Vector3 tangent = Mathf.Abs(up.Dot(Vector3.Forward)) > 0.98f
+            ? Vector3.Right
+            : Vector3.Forward;
+        Vector3 right = tangent.Cross(up).Normalized();
+        Vector3 forward = up.Cross(right).Normalized();
+        return new Basis(right, up, forward);
     }
 
     private void BuildLoadingOverlay()

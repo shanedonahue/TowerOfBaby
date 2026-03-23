@@ -115,14 +115,16 @@ public partial class TerrainChunk : Node3D
         return clamped.DistanceSquaredTo(center) <= radius * radius;
     }
 
-    public bool ApplySphereBrush(Vector3 center, float radius, float deltaDensity)
+    public bool ApplySphereBrush(
+        VoxelSphereEdit edit,
+        System.Func<Vector3, float, VoxelMaterialId> materialResolver)
     {
         if (_data == null)
         {
             return false;
         }
 
-        bool modified = _data.ApplySphereBrush(center, radius, deltaDensity);
+        bool modified = VoxelTerrainEditing.ApplySphere(_data, edit, materialResolver);
         if (modified)
         {
             PersistenceDirty = true;
