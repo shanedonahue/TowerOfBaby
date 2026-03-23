@@ -177,7 +177,11 @@ public static class HumanoidRigBuilder
         };
         lower.AddChild(lowerMesh);
 
-        Node3D foot = new() { Name = $"{name}Foot" };
+        Node3D foot = new()
+        {
+            Name = $"{name}Foot",
+            Position = new Vector3(0.0f, -spec.LowerLegLength, 0.0f)
+        };
         lower.AddChild(foot);
 
         MeshInstance3D footMesh = new()

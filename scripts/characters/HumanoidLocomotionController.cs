@@ -26,24 +26,35 @@ public sealed class HumanoidLocomotionController
     public void Update(float delta, MovementIntent intent, Vector3 desiredDirection, float cameraPitch)
     {
         Vector3 horizontalVelocity = new(_body.Velocity.X, 0.0f, _body.Velocity.Z);
-        float targetSpeed = _settings.MoveSpeed * Mathf.Clamp(intent.Move.Length(), 0.0f, 1.0f);
+        float moveAmount = Mathf.Clamp(intent.Move.Length(), 0.0f, 1.0f);
+        float sprintBlend = moveAmount > 0.05f && intent.Sprint ? 1.0f : 0.0f;
+        float maxSpeed = _settings.MoveSpeed * Mathf.Lerp(1.0f, _settings.SprintSpeedMultiplier, sprintBlend);
+        float targetSpeed = maxSpeed * moveAmount;
         Vector3 targetVelocity = desiredDirection * targetSpeed;
         float appliedAcceleration = _body.IsOnFloor() ? _settings.Acceleration : _settings.AirAcceleration;
         horizontalVelocity = horizontalVelocity.Lerp(targetVelocity, 1.0f - Mathf.Exp(-appliedAcceleration * delta));
 
         float gravity = (float)ProjectSettings.GetSetting("physics/3d/default_gravity") * _settings.GravityScale;
         float verticalVelocity = _body.Velocity.Y;
-        if (!_body.IsOnFloor())
+        bool wasOnFloor = _body.IsOnFloor();
+        if (!wasOnFloor)
         {
-            verticalVelocity -= gravity * delta;
+            float appliedGravity = verticalVelocity <= 0.0f
+                ? gravity * _settings.FallGravityMultiplier
+                : gravity;
+            verticalVelocity -= appliedGravity * delta;
         }
-        else if (verticalVelocity < 0.0f)
+        else
         {
-            verticalVelocity = -0.1f;
+            verticalVelocity = -_settings.GroundStickVelocity;
         }
 
         _body.Velocity = new Vector3(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z);
         _body.MoveAndSlide();
+        if (_body.IsOnFloor())
+        {
+            _body.Velocity = new Vector3(_body.Velocity.X, -_settings.GroundStickVelocity, _body.Velocity.Z);
+        }
 
         Vector3 facingVelocity = new(_body.Velocity.X, 0.0f, _body.Velocity.Z);
         if (facingVelocity.LengthSquared() > 0.04f)
@@ -56,14 +67,16 @@ public sealed class HumanoidLocomotionController
                 0.0f);
         }
 
-        UpdateVisualRig(delta, desiredDirection, cameraPitch);
+        UpdateVisualRig(delta, desiredDirection, cameraPitch, sprintBlend, maxSpeed);
     }
 
-    private void UpdateVisualRig(float delta, Vector3 desiredDirection, float cameraPitch)
+    private void UpdateVisualRig(float delta, Vector3 desiredDirection, float cameraPitch, float sprintBlend, float maxSpeed)
     {
         Vector3 velocityPlanar = new(_body.Velocity.X, 0.0f, _body.Velocity.Z);
         float speed = velocityPlanar.Length();
-        float speedRatio = Mathf.Clamp(speed / _settings.MoveSpeed, 0.0f, 1.0f);
+        float gaitSpeedRatio = Mathf.Clamp(speed / Mathf.Max(maxSpeed, 0.01f), 0.0f, 1.0f);
+        float absoluteSpeedRatio = Mathf.Clamp(speed / Mathf.Max(_settings.MoveSpeed * _settings.SprintSpeedMultiplier, 0.01f), 0.0f, 1.0f);
+        float runBlend = Mathf.Clamp(Mathf.Max(sprintBlend * 0.7f, Mathf.InverseLerp(0.72f, 1.0f, absoluteSpeedRatio)), 0.0f, 1.0f);
         Vector3 bodyForward = speed > 0.08f ? velocityPlanar.Normalized() : _lastFacingForward;
         Vector3 bodyRight = bodyForward.Cross(Vector3.Up).Normalized();
         if (bodyRight.LengthSquared() < 0.0001f)
@@ -78,43 +91,52 @@ public sealed class HumanoidLocomotionController
         }
 
         float legLength = _spec.LegLength;
-        float derivedStrideLength = GetDerivedStrideLength(legLength, speedRatio);
-        float derivedStepHeight = GetDerivedStepHeight(legLength, speedRatio);
+        float derivedStrideLength = GetDerivedStrideLength(legLength, gaitSpeedRatio, runBlend);
+        float derivedStepHeight = GetDerivedStepHeight(legLength, gaitSpeedRatio, runBlend);
         float cycleSpeed = GetDerivedCycleSpeed(speed, derivedStrideLength);
         _gaitTime = Mathf.PosMod(_gaitTime + (delta * cycleSpeed), Mathf.Tau);
 
-        UpdateLeg(_rig.LeftLeg, _rig.RightLeg, delta, speed, speedRatio, legLength, derivedStrideLength, derivedStepHeight, bodyForward, bodyRight);
-        UpdateLeg(_rig.RightLeg, _rig.LeftLeg, delta, speed, speedRatio, legLength, derivedStrideLength, derivedStepHeight, bodyForward, bodyRight);
+        UpdateLeg(_rig.LeftLeg, _rig.RightLeg, delta, speed, gaitSpeedRatio, runBlend, legLength, derivedStrideLength, derivedStepHeight, bodyForward, bodyRight);
+        UpdateLeg(_rig.RightLeg, _rig.LeftLeg, delta, speed, gaitSpeedRatio, runBlend, legLength, derivedStrideLength, derivedStepHeight, bodyForward, bodyRight);
 
-        float supportHeight = (_rig.LeftLeg.CurrentFootPosition.Y + _rig.RightLeg.CurrentFootPosition.Y) * 0.5f;
-        float desiredHipWorldY = supportHeight + GetDerivedHipHeight(legLength) + Mathf.Lerp(0.0f, legLength * 0.03f, speedRatio);
+        float leftSupportHeight = GetSupportFootHeight(_rig.LeftLeg);
+        float rightSupportHeight = GetSupportFootHeight(_rig.RightLeg);
+        float supportHeight = Mathf.Min(leftSupportHeight, rightSupportHeight) + (Mathf.Abs(leftSupportHeight - rightSupportHeight) * 0.35f);
+        float desiredHipWorldY =
+            supportHeight +
+            GetDerivedHipHeight(legLength) +
+            Mathf.Lerp(0.0f, legLength * 0.012f, gaitSpeedRatio) +
+            (runBlend * legLength * 0.006f);
         float localHipY = desiredHipWorldY - _body.GlobalPosition.Y;
         _rig.Hips.Position = new Vector3(
             0.0f,
             Mathf.Lerp(_rig.Hips.Position.Y, localHipY, 1.0f - Mathf.Exp(-10.0f * delta)),
-            0.0f);
+            Mathf.Lerp(_rig.Hips.Position.Z, -legLength * Mathf.Lerp(0.01f, 0.07f, runBlend), 1.0f - Mathf.Exp(-8.0f * delta)));
 
         float pelvisRoll = Mathf.Clamp((_rig.LeftLeg.CurrentFootPosition.Y - _rig.RightLeg.CurrentFootPosition.Y) * 0.5f, -0.18f, 0.18f);
-        _rig.Hips.Rotation = new Vector3(0.0f, 0.0f, pelvisRoll);
+        float pelvisPitch = Mathf.Sin(_gaitTime) * Mathf.Lerp(0.03f, 0.09f, runBlend);
+        _rig.Hips.Rotation = new Vector3(pelvisPitch, 0.0f, pelvisRoll);
 
-        float torsoBob = Mathf.Sin(_gaitTime * 2.0f) * (_spec.TorsoHeight * 0.033f) * speedRatio;
-        float forwardLean = desiredDirection.Dot(bodyForward) * 0.12f;
+        float torsoBob = Mathf.Sin(_gaitTime * 2.0f) * (_spec.TorsoHeight * Mathf.Lerp(0.014f, 0.022f, runBlend)) * gaitSpeedRatio;
+        float forwardLean = (desiredDirection.Dot(bodyForward) * Mathf.Lerp(0.12f, 0.26f, runBlend)) + (runBlend * 0.06f);
         _rig.UpperBody.Position = Vector3.Zero;
         _rig.UpperBody.Rotation = new Vector3(
-            speedRatio * 0.03f,
-            Mathf.Sin(_gaitTime) * -0.06f * speedRatio,
-            -pelvisRoll * 0.35f);
+            gaitSpeedRatio * Mathf.Lerp(0.03f, 0.08f, runBlend),
+            Mathf.Sin(_gaitTime) * -Mathf.Lerp(0.06f, 0.14f, runBlend) * gaitSpeedRatio,
+            -pelvisRoll * Mathf.Lerp(0.35f, 0.24f, runBlend));
 
         _rig.Torso.Position = new Vector3(0.0f, (_spec.TorsoHeight * 0.5f) + torsoBob, 0.0f);
         _rig.Torso.Rotation = new Vector3(-forwardLean, 0.0f, 0.0f);
 
         _rig.ChestBand.Position = new Vector3(0.0f, (_spec.TorsoHeight * 0.62f) + (torsoBob * 0.7f), 0.0f);
         _rig.Head.Position = new Vector3(0.0f, _spec.TorsoHeight + _spec.NeckLength + (_spec.HeadRadius * 0.9f) + (torsoBob * 0.5f), 0.0f);
-        _rig.Head.Rotation = new Vector3(-cameraPitch * 0.3f, Mathf.Sin(_gaitTime) * 0.04f * speedRatio, -pelvisRoll * 0.3f);
+        _rig.Head.Rotation = new Vector3(-cameraPitch * 0.3f + (runBlend * 0.06f), Mathf.Sin(_gaitTime) * 0.04f * gaitSpeedRatio, -pelvisRoll * 0.3f);
 
-        float armSwing = Mathf.Sin(_gaitTime) * Mathf.Lerp(0.1f, 0.9f, speedRatio);
-        _rig.LeftArm.Rotation = new Vector3(-armSwing * 0.75f, 0.0f, -0.18f);
-        _rig.RightArm.Rotation = new Vector3(armSwing * 0.75f, 0.0f, 0.18f);
+        float armSwing = Mathf.Sin(_gaitTime) * Mathf.Lerp(0.28f, 1.3f, absoluteSpeedRatio);
+        float armPump = Mathf.Lerp(0.75f, 1.15f, runBlend);
+        float shoulderYaw = Mathf.Lerp(0.02f, 0.08f, runBlend);
+        _rig.LeftArm.Rotation = new Vector3((-armSwing * armPump) - (runBlend * 0.08f), -shoulderYaw, -Mathf.Lerp(0.18f, 0.28f, runBlend));
+        _rig.RightArm.Rotation = new Vector3((armSwing * armPump) - (runBlend * 0.08f), shoulderYaw, Mathf.Lerp(0.18f, 0.28f, runBlend));
     }
 
     private void UpdateAirborneRig(float delta, Vector3 desiredDirection, Vector3 bodyForward, Vector3 bodyRight, float cameraPitch)
@@ -158,6 +180,7 @@ public sealed class HumanoidLocomotionController
         float delta,
         float speed,
         float speedRatio,
+        float runBlend,
         float legLength,
         float strideLength,
         float stepHeight,
@@ -166,21 +189,25 @@ public sealed class HumanoidLocomotionController
     {
         Vector3 hipWorld = _rig.Hips.GlobalPosition + (bodyRight * leg.SideOffset);
 
-        Vector3 stepCenter = _body.GlobalPosition + _rig.VisualRoot.Position + (bodyRight * leg.SideOffset);
+        Vector3 stepCenter =
+            _body.GlobalPosition +
+            _rig.VisualRoot.Position +
+            (bodyForward * Mathf.Lerp(legLength * 0.08f, legLength * 0.15f, runBlend)) +
+            (bodyRight * leg.SideOffset);
         stepCenter.Y = _body.GlobalPosition.Y + _spec.FootHeight;
-        float trailingBias = Mathf.Lerp(legLength * 0.0f, legLength * 0.04f, speedRatio);
-        float forwardBias = Mathf.Lerp(legLength * 0.08f, legLength * 0.22f, speedRatio);
-        float strideDistance = strideLength * Mathf.Lerp(0.22f, 1.0f, speedRatio);
+        float trailingBias = Mathf.Lerp(legLength * 0.04f, legLength * 0.12f, speedRatio) + (runBlend * legLength * 0.02f);
+        float forwardBias = Mathf.Lerp(legLength * 0.18f, legLength * 0.34f, speedRatio) + (runBlend * legLength * 0.08f);
+        float strideDistance = strideLength * Mathf.Lerp(0.36f, 1.08f, speedRatio);
         Vector3 landingProbe = stepCenter + (bodyForward * (forwardBias + strideDistance));
         Vector3 stanceProbe = stepCenter - (bodyForward * trailingBias);
 
         Vector3 landingPosition = SampleGroundPoint(landingProbe, out Vector3 landingNormal);
         Vector3 stancePosition = SampleGroundPoint(stanceProbe, out Vector3 stanceNormal);
-        landingPosition = ClampFootTargetToReach(hipWorld, landingPosition, legLength * 0.88f, legLength * 0.34f);
-        stancePosition = ClampFootTargetToReach(hipWorld, stancePosition, legLength * 0.82f, legLength * 0.18f);
+        landingPosition = ClampLegTargetToReach(hipWorld, landingPosition, bodyForward, bodyRight, legLength, runBlend, speedRatio, allowForwardBias: true);
+        stancePosition = ClampLegTargetToReach(hipWorld, stancePosition, bodyForward, bodyRight, legLength, runBlend, speedRatio, allowForwardBias: false);
 
-        float supportRadius = Mathf.Lerp(legLength * 0.16f, legLength * 0.38f, speedRatio);
-        float stepTriggerRadius = Mathf.Lerp(legLength * 0.22f, legLength * 0.34f, speedRatio);
+        float supportRadius = Mathf.Lerp(legLength * 0.18f, legLength * 0.42f, speedRatio) + (runBlend * legLength * 0.03f);
+        float stepTriggerRadius = Mathf.Lerp(legLength * 0.24f, legLength * 0.38f, speedRatio);
         float currentReach = HorizontalDistance(hipWorld, leg.CurrentFootPosition);
 
         if (!leg.Initialized)
@@ -235,7 +262,7 @@ public sealed class HumanoidLocomotionController
             Vector3 planted = leg.PlantedFootPosition.Lerp(stancePosition, 1.0f - Mathf.Exp(-14.0f * delta));
             if (HorizontalDistance(hipWorld, planted) > supportRadius)
             {
-                planted = ClampFootTargetToReach(hipWorld, planted, supportRadius, legLength * 0.16f);
+                planted = ClampLegTargetToReach(hipWorld, planted, bodyForward, bodyRight, supportRadius, runBlend, speedRatio, allowForwardBias: false);
             }
 
             leg.PlantedFootPosition = planted;
@@ -251,20 +278,31 @@ public sealed class HumanoidLocomotionController
         return legLength * 0.53f;
     }
 
-    private float GetDerivedStrideLength(float legLength, float speedRatio)
+    private float GetDerivedStrideLength(float legLength, float speedRatio, float runBlend)
     {
-        return Mathf.Lerp(legLength * 0.18f, legLength * 0.42f, speedRatio);
+        return Mathf.Lerp(legLength * 0.24f, legLength * 0.5f, speedRatio) + (runBlend * legLength * 0.08f);
     }
 
-    private float GetDerivedStepHeight(float legLength, float speedRatio)
+    private float GetDerivedStepHeight(float legLength, float speedRatio, float runBlend)
     {
-        return Mathf.Lerp(legLength * 0.08f, legLength * 0.18f, speedRatio);
+        return Mathf.Lerp(legLength * 0.09f, legLength * 0.16f, speedRatio) + (runBlend * legLength * 0.03f);
     }
 
     private float GetDerivedCycleSpeed(float speed, float strideLength)
     {
         float baseCycle = speed / Mathf.Max(strideLength, 0.01f);
         return Mathf.Lerp(0.0f, Mathf.Clamp(baseCycle, _settings.WalkCycleSpeed, _settings.RunCycleSpeed), Mathf.Clamp(speed / _settings.MoveSpeed, 0.0f, 1.0f));
+    }
+
+    private static float GetSupportFootHeight(HumanoidLegRig leg)
+    {
+        float plantedHeight = leg.PlantedFootPosition.Y;
+        if (!leg.IsStepping)
+        {
+            return plantedHeight;
+        }
+
+        return Mathf.Min(plantedHeight, leg.CurrentFootPosition.Y);
     }
 
     private static float HorizontalDistance(Vector3 a, Vector3 b)
@@ -274,22 +312,44 @@ public sealed class HumanoidLocomotionController
         return av.DistanceTo(bv);
     }
 
-    private static Vector3 ClampFootTargetToReach(Vector3 hipWorld, Vector3 target, float maxReach, float minReach)
+    private static Vector3 ClampLegTargetToReach(
+        Vector3 hipWorld,
+        Vector3 target,
+        Vector3 bodyForward,
+        Vector3 bodyRight,
+        float maxReach,
+        float runBlend,
+        float speedRatio,
+        bool allowForwardBias)
     {
-        Vector2 hip = new(hipWorld.X, hipWorld.Z);
-        Vector2 foot = new(target.X, target.Z);
-        Vector2 offset = foot - hip;
-        float length = offset.Length();
+        Vector3 toTarget = target - hipWorld;
+        Vector3 flattenedForward = bodyForward.Normalized();
+        Vector3 flattenedRight = bodyRight.Normalized();
+        float forward = toTarget.Dot(flattenedForward);
+        float lateral = toTarget.Dot(flattenedRight);
+        float vertical = toTarget.Y;
 
-        if (length < 0.0001f)
+        float forwardMin = allowForwardBias
+            ? Mathf.Lerp(-maxReach * 0.1f, maxReach * 0.12f, speedRatio)
+            : -Mathf.Lerp(maxReach * 0.28f, maxReach * 0.44f, speedRatio + runBlend * 0.2f);
+        float forwardMax = Mathf.Lerp(maxReach * 0.4f, maxReach * 0.68f, speedRatio) + (runBlend * maxReach * 0.1f);
+        float lateralMax = Mathf.Lerp(maxReach * 0.28f, maxReach * 0.4f, speedRatio);
+        float minVertical = -Mathf.Lerp(maxReach * 0.98f, maxReach * 1.02f, runBlend);
+        float maxVertical = Mathf.Lerp(maxReach * 0.18f, maxReach * 0.1f, speedRatio);
+
+        forward = Mathf.Clamp(forward, forwardMin, forwardMax);
+        lateral = Mathf.Clamp(lateral, -lateralMax, lateralMax);
+        vertical = Mathf.Clamp(vertical, minVertical, maxVertical);
+
+        Vector3 clamped = hipWorld + (flattenedForward * forward) + (flattenedRight * lateral) + (Vector3.Up * vertical);
+        Vector3 offset = clamped - hipWorld;
+        float distance = offset.Length();
+        if (distance > maxReach)
         {
-            offset = Vector2.Up * minReach;
-            length = minReach;
+            clamped = hipWorld + (offset / distance) * maxReach;
         }
 
-        float clampedLength = Mathf.Clamp(length, minReach, maxReach);
-        Vector2 clamped = hip + ((offset / length) * clampedLength);
-        return new Vector3(clamped.X, target.Y, clamped.Y);
+        return clamped;
     }
 
     private Vector3 SampleGroundPoint(Vector3 center, out Vector3 normal)
@@ -312,8 +372,9 @@ public sealed class HumanoidLocomotionController
         return center;
     }
 
-    private static void SolveLeg(HumanoidLegRig leg, Vector3 hip, Vector3 foot, Vector3 groundNormal, Vector3 preferredForward)
+    private static void SolveLeg(HumanoidLegRig leg, Vector3 hip, Vector3 footTarget, Vector3 groundNormal, Vector3 preferredForward)
     {
+        Vector3 foot = ClampFootToBoneReach(leg, hip, footTarget);
         Vector3 targetVector = foot - hip;
         float distance = targetVector.Length();
         Vector3 direction = distance > 0.001f ? targetVector / distance : Vector3.Down;
@@ -346,8 +407,20 @@ public sealed class HumanoidLocomotionController
         leg.Lower.GlobalPosition = knee;
         leg.Lower.GlobalBasis = CreateBoneBasis(foot - knee, bendDirection);
 
-        leg.Foot.GlobalPosition = foot;
         leg.Foot.GlobalBasis = CreateFootBasis(groundNormal, preferredForward);
+    }
+
+    private static Vector3 ClampFootToBoneReach(HumanoidLegRig leg, Vector3 hip, Vector3 foot)
+    {
+        float maxReach = Mathf.Max(0.05f, leg.UpperLength + leg.LowerLength - 0.02f);
+        Vector3 offset = foot - hip;
+        float distance = offset.Length();
+        if (distance <= maxReach || distance < 0.001f)
+        {
+            return foot;
+        }
+
+        return hip + (offset / distance) * maxReach;
     }
 
     private static Basis CreateBoneBasis(Vector3 boneDirection, Vector3 bendDirection)
@@ -361,10 +434,10 @@ public sealed class HumanoidLocomotionController
     private static Basis CreateFootBasis(Vector3 upNormal, Vector3 forwardHint)
     {
         Vector3 y = upNormal.Normalized();
-        Vector3 z = forwardHint.Slide(y).Normalized();
+        Vector3 z = (-forwardHint).Slide(y).Normalized();
         if (z.LengthSquared() < 0.0001f)
         {
-            z = -Vector3.Forward;
+            z = Vector3.Forward;
         }
 
         Vector3 x = y.Cross(z).Normalized();

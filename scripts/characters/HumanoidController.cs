@@ -16,10 +16,13 @@ public partial class HumanoidController : CharacterBody3D
     [Export] public bool ActsAsTerrainTracker = true;
     [Export] public bool EnableFollowCamera = true;
     [Export] public float MoveSpeed = 7.0f;
+    [Export] public float SprintSpeedMultiplier = 1.55f;
     [Export] public float Acceleration = 10.0f;
     [Export] public float AirAcceleration = 3.0f;
     [Export] public float RotationSpeed = 9.0f;
     [Export] public float GravityScale = 1.0f;
+    [Export] public float FallGravityMultiplier = 1.7f;
+    [Export] public float GroundStickVelocity = 1.6f;
     [Export] public float FloorSnapDistance = 0.9f;
     [Export] public float MouseSensitivity = 0.0025f;
     [Export] public float CameraPitchMin = -0.9f;
@@ -195,10 +198,13 @@ public partial class HumanoidController : CharacterBody3D
             new HumanoidLocomotionSettings
             {
                 MoveSpeed = MoveSpeed,
+                SprintSpeedMultiplier = SprintSpeedMultiplier,
                 Acceleration = Acceleration,
                 AirAcceleration = AirAcceleration,
                 RotationSpeed = RotationSpeed,
                 GravityScale = GravityScale,
+                FallGravityMultiplier = FallGravityMultiplier,
+                GroundStickVelocity = GroundStickVelocity,
                 FootProbeDistance = FootProbeDistance,
                 WalkCycleSpeed = WalkCycleSpeed,
                 RunCycleSpeed = RunCycleSpeed
