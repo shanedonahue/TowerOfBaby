@@ -153,14 +153,25 @@ public sealed partial class HumanoidLocomotionSystem
         {
             Vector3 targetForward = desiredDirection.Normalized();
             float headingSharpness = Mathf.Lerp(_settings.RotationSpeed * 1.5f, _settings.TurnResponsiveness, moveAmount);
-            _locomotionForward = _locomotionForward.Slerp(targetForward, DampFactor(headingSharpness, delta)).Normalized();
+            float blend = DampFactor(headingSharpness, delta);
+            Vector3 currentForward = _locomotionForward.LengthSquared() > 0.0001f
+                ? _locomotionForward.Normalized()
+                : (_lastFacingForward.LengthSquared() > 0.0001f ? _lastFacingForward.Normalized() : Vector3.Forward);
+            float alignment = currentForward.Dot(targetForward);
+            Vector3 blendedForward = Mathf.Abs(alignment) > 0.999f
+                ? currentForward.Lerp(targetForward, blend)
+                : currentForward.Slerp(targetForward, blend);
+
+            _locomotionForward = blendedForward.LengthSquared() > 0.0001f
+                ? blendedForward.Normalized()
+                : targetForward;
         }
         else
         {
             Vector3 velocityPlanar = new(_body.Velocity.X, 0.0f, _body.Velocity.Z);
             _locomotionForward = velocityPlanar.LengthSquared() > 0.01f
                 ? velocityPlanar.Normalized()
-                : _lastFacingForward;
+                : (_lastFacingForward.LengthSquared() > 0.0001f ? _lastFacingForward.Normalized() : Vector3.Forward);
         }
 
         return _locomotionForward;
