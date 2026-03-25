@@ -2,12 +2,9 @@
 
 [ext_resource type="PackedScene" path="res://scenes/terrain/TerrainWorld.tscn" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/terrain/TerrainChunk.tscn" id="2_chunk"]
-[ext_resource type="Script" uid="uid://cevwysi0uynd2" path="res://scripts/characters/humanoid/runtime/HumanoidActorController.cs" id="3_player"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
 [ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/world/TimeOfDayController.cs" id="6_time"]
-[ext_resource type="PackedScene" path="res://scenes/characters/Humanoid.tscn" id="7_humanoid"]
-[ext_resource type="Script" uid="uid://ceq12raxgk7hq" path="res://scripts/characters/humanoid/runtime/HumanoidSpawner.cs" id="8_spawner"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.38
@@ -99,10 +96,6 @@ texture_filter = 0
 script = ExtResource("6_time")
 DayLengthSeconds = 210.0
 TimeOfDay = 0.3
-
-[node name="NpcSpawner" type="Node3D" parent="." unique_id=1406452304]
-script = ExtResource("8_spawner")
-HumanoidScene = ExtResource("7_humanoid")
 
 [node name="FpsOverlay" type="CanvasLayer" parent="." unique_id=1670152037]
 script = ExtResource("5_fps")
