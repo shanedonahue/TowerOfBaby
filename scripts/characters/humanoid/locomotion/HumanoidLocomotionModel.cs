@@ -36,6 +36,11 @@ internal static class HumanoidLocomotionModel
     public const float CapturePointBiasClampRatio = 0.24f;
     public const float ComReleaseDistanceRatio = 0.16f;
     public const float RearReleaseSaturationThreshold = 0.88f;
+    public const float RearReleaseHysteresis = 0.14f;
+    public const float SupportSeekLookaheadWalkSeconds = 0.08f;
+    public const float SupportSeekLookaheadRunSeconds = 0.16f;
+    public const float SupportSeekBalanceBlend = 0.42f;
+    public const float SwingCatchupScale = 0.42f;
     public const float FootContactInsetRatio = 0.08f;
     public const float HeelStrikeExitWeight = 0.12f;
     public const float ToeOffEnterWeight = 0.22f;
@@ -118,6 +123,8 @@ internal sealed class HumanoidLegMotionRuntime
     public float HeelStrikeWeight;
     public float ToeOffWeight;
     public float RearReachSaturation;
+    public float RearReachDistance;
+    public bool RearReleaseArmed;
     public float ComTrailDistance;
     public float PlannedTouchdownBias;
     public float BalanceTouchdownBias;
@@ -133,6 +140,7 @@ internal sealed class HumanoidLegMotionRuntime
     public Vector3 LastStancePivotWorld = Vector3.Zero;
     public float EarlyReleaseDebugTimer;
     public Vector3 EarlyReleaseEventWorld = Vector3.Zero;
+    public Vector3 DebugSupportTargetWorld = Vector3.Zero;
 
     public HumanoidLegMotionRuntime(
         HumanoidLegRig rig,

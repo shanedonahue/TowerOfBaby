@@ -49,6 +49,8 @@ public sealed partial class HumanoidLocomotionSystem
         _earlyReleaseEventsThisFrame = 0;
         _profiler.SetMetric("com_error", 0.0f);
         _profiler.SetMetric("rear_reach_saturation", 0.0f);
+        _profiler.SetMetric("rear_reach_left", 0.0f);
+        _profiler.SetMetric("rear_reach_right", 0.0f);
         _profiler.SetMetric("rear_reach_saturation_left", 0.0f);
         _profiler.SetMetric("rear_reach_saturation_right", 0.0f);
         _profiler.SetMetric("com_to_support_center_error", 0.0f);

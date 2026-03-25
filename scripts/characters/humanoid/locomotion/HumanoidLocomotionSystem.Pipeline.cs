@@ -54,8 +54,11 @@ public sealed partial class HumanoidLocomotionSystem
         Vector3 rightSupport = _rightLeg.Initialized
             ? _rightLeg.CurrentSupportWorld
             : visualOrigin + (visualBasis * _rightLeg.RestSupportPointLocal);
-        Vector3 supportCenter = (leftSupport + rightSupport) * 0.5f;
-        float supportHeight = (leftSupport.Y + rightSupport.Y) * 0.5f;
+        float leftSupportWeight = ResolveGroundSupportWeight(_leftLeg);
+        float rightSupportWeight = ResolveGroundSupportWeight(_rightLeg);
+        float totalSupportWeight = Mathf.Max(leftSupportWeight + rightSupportWeight, 0.001f);
+        Vector3 supportCenter = ((leftSupport * leftSupportWeight) + (rightSupport * rightSupportWeight)) / totalSupportWeight;
+        float supportHeight = ((leftSupport.Y * leftSupportWeight) + (rightSupport.Y * rightSupportWeight)) / totalSupportWeight;
         Vector3 pelvisWorld = _rig.Hips.GlobalPosition;
         Vector3 planarCom = new(
             Mathf.Lerp(visualOrigin.X, pelvisWorld.X, HumanoidLocomotionModel.ComEstimatePelvisBlend),
@@ -136,26 +139,47 @@ public sealed partial class HumanoidLocomotionSystem
             TryBeginStep(frame);
         }
 
-        if (_leftLeg.IsInStance)
+        if (_leftLeg.IsInStance && !_rightLeg.IsInStance)
         {
             UpdateStanceLeg(_leftLeg, frame, delta);
+            UpdateSwingLeg(_rightLeg, frame, delta);
         }
-        else
-        {
-            UpdateSwingLeg(_leftLeg, frame, delta);
-        }
-
-        if (_rightLeg.IsInStance)
+        else if (_rightLeg.IsInStance && !_leftLeg.IsInStance)
         {
             UpdateStanceLeg(_rightLeg, frame, delta);
+            UpdateSwingLeg(_leftLeg, frame, delta);
         }
         else
         {
-            UpdateSwingLeg(_rightLeg, frame, delta);
+            if (_leftLeg.IsInStance)
+            {
+                UpdateStanceLeg(_leftLeg, frame, delta);
+            }
+            else
+            {
+                UpdateSwingLeg(_leftLeg, frame, delta);
+            }
+
+            if (_rightLeg.IsInStance)
+            {
+                UpdateStanceLeg(_rightLeg, frame, delta);
+            }
+            else
+            {
+                UpdateSwingLeg(_rightLeg, frame, delta);
+            }
         }
 
         _profiler.SetMetric("step_left_active", _leftLeg.IsInStance ? 0.0f : 1.0f);
         _profiler.SetMetric("step_right_active", _rightLeg.IsInStance ? 0.0f : 1.0f);
+
+        if (allowNewSteps && (leftStepping || rightStepping) && _leftLeg.IsInStance && _rightLeg.IsInStance)
+        {
+            TryBeginStep(frame);
+            _profiler.SetMetric("step_left_active", _leftLeg.IsInStance ? 0.0f : 1.0f);
+            _profiler.SetMetric("step_right_active", _rightLeg.IsInStance ? 0.0f : 1.0f);
+        }
+
         PublishGroundMetrics();
     }
 
@@ -175,12 +199,15 @@ public sealed partial class HumanoidLocomotionSystem
         leg.HeelStrikeWeight = 0.0f;
         leg.ToeOffWeight = 0.0f;
         leg.RearReachSaturation = 0.0f;
+        leg.RearReachDistance = 0.0f;
+        leg.RearReleaseArmed = false;
         leg.ComTrailDistance = 0.0f;
         leg.PlannedTouchdownBias = 0.0f;
         leg.BalanceTouchdownBias = 0.0f;
         leg.StanceFootPhase = HumanoidStanceFootPhase.FootFlat;
         leg.FootSkateDistance = 0.0f;
         leg.LastStancePivotWorld = Vector3.Zero;
+        leg.DebugSupportTargetWorld = leg.CurrentSupportWorld;
         UpdateFootContactModel(leg, frame);
         PublishLegMetrics(leg);
     }
@@ -227,6 +254,7 @@ public sealed partial class HumanoidLocomotionSystem
         leg.ActiveSupportOffsetLocal = leg.Contact.SupportOffsetLocal;
         leg.FootSkateDistance = 0.0f;
         leg.LastStancePivotWorld = Vector3.Zero;
+        leg.RearReleaseArmed = false;
         leg.SwingStartWorld = leg.CurrentSupportWorld;
         leg.SwingTargetWorld = PlanStepTargetWorld(leg, frame, out Vector3 groundNormal);
         leg.TargetGroundNormalWorld = groundNormal;
@@ -253,13 +281,18 @@ public sealed partial class HumanoidLocomotionSystem
             out _,
             out float triggerDistance,
             out _,
+            out float rearReachDistance,
             out float rearReachSaturation,
             out float comTrailDistance);
 
         float stanceProgress = Mathf.Clamp(trailingDistance / Mathf.Max(triggerDistance, 0.001f), 0.0f, 1.0f);
+        leg.RearReachDistance = rearReachDistance;
+        leg.RearReachSaturation = rearReachSaturation;
+        leg.ComTrailDistance = comTrailDistance;
         float toeOffWeight = ComputeToeOffWeight(frame, stanceProgress, rearReachSaturation, comTrailDistance);
-        Vector3 releaseTarget = leg.PlantedSupportWorld.Lerp(nominalSupport, toeOffWeight * HumanoidLocomotionModel.ToeOffNominalBlend);
-        releaseTarget += frame.Forward * (_spec.FootLength * HumanoidLocomotionModel.ToeOffSupportForwardRatio * toeOffWeight);
+        float adhesionRelease = leg.RearReleaseArmed ? Mathf.Max(toeOffWeight, 0.62f) : toeOffWeight;
+        Vector3 releaseTarget = leg.PlantedSupportWorld.Lerp(nominalSupport, adhesionRelease * (HumanoidLocomotionModel.ToeOffNominalBlend + 0.18f));
+        releaseTarget += frame.Forward * (_spec.FootLength * HumanoidLocomotionModel.ToeOffSupportForwardRatio * adhesionRelease);
 
         Vector3 plantedProbe = new(releaseTarget.X, frame.VisualOrigin.Y, releaseTarget.Z);
         Vector3 plantedSupport = SampleSupportPoint(plantedProbe, leg.Contact.GroundClearance, out Vector3 groundNormal);
@@ -267,7 +300,7 @@ public sealed partial class HumanoidLocomotionSystem
         float stanceSharpness = Mathf.Lerp(
             HumanoidLocomotionModel.StanceFootSharpness,
             HumanoidLocomotionModel.StanceFootSharpness * HumanoidLocomotionModel.ToeOffStickinessFactor,
-            toeOffWeight);
+            adhesionRelease);
         leg.CurrentSupportWorld = leg.CurrentSupportWorld.Lerp(leg.PlantedSupportWorld, DampFactor(stanceSharpness, delta));
         leg.GroundNormalWorld = leg.GroundNormalWorld.Slerp(groundNormal, DampFactor(HumanoidLocomotionModel.SupportNormalSharpness, delta));
         leg.TargetGroundNormalWorld = leg.GroundNormalWorld;
@@ -281,33 +314,38 @@ public sealed partial class HumanoidLocomotionSystem
             out _,
             out triggerDistance,
             out _,
+            out rearReachDistance,
             out rearReachSaturation,
             out comTrailDistance);
 
         leg.StanceProgress = Mathf.Clamp(trailingDistance / Mathf.Max(triggerDistance, 0.001f), 0.0f, 1.0f);
         leg.HeelStrikeWeight = ComputeHeelStrikeWeight(leg.StanceTimeSeconds, frame.StepDurationSeconds);
         leg.ToeOffWeight = ComputeToeOffWeight(frame, leg.StanceProgress, rearReachSaturation, comTrailDistance);
+        leg.RearReachDistance = rearReachDistance;
         leg.RearReachSaturation = rearReachSaturation;
         leg.ComTrailDistance = comTrailDistance;
         leg.SwingProgress = 1.0f;
         leg.IsInStance = true;
         leg.WasInStance = true;
-        leg.PlannedTouchdownBias = 0.0f;
-        leg.BalanceTouchdownBias = 0.0f;
         UpdateFootContactModel(leg, frame);
         PublishLegMetrics(leg);
     }
 
     private void UpdateSwingLeg(HumanoidLegMotionRuntime leg, HumanoidGroundMotionFrame frame, float delta)
     {
-        leg.SwingProgress = Mathf.Clamp(leg.SwingProgress + (delta / Mathf.Max(frame.StepDurationSeconds, 0.01f)), 0.0f, 1.0f);
+        float swingUrgency = ComputeOppositeSupportUrgency(leg, frame);
+        float swingDurationSeconds = Mathf.Max(
+            frame.StepDurationSeconds * Mathf.Lerp(1.0f, 1.0f - HumanoidLocomotionModel.SwingCatchupScale, swingUrgency),
+            frame.StepDurationSeconds * 0.45f);
+        leg.SwingProgress = Mathf.Clamp(leg.SwingProgress + (delta / swingDurationSeconds), 0.0f, 1.0f);
         leg.HeelStrikeWeight = 0.0f;
         leg.ToeOffWeight = 0.0f;
+        leg.RearReachDistance = 0.0f;
         leg.RearReachSaturation = 0.0f;
         leg.ComTrailDistance = 0.0f;
-        leg.BalanceTouchdownBias = 0.0f;
         leg.StanceFootPhase = HumanoidStanceFootPhase.FootFlat;
         leg.ActiveSupportOffsetLocal = leg.Contact.SupportOffsetLocal;
+        leg.RearReleaseArmed = false;
 
         if (leg.SwingProgress < HumanoidLocomotionModel.SwingRetargetWindow)
         {
@@ -319,7 +357,8 @@ public sealed partial class HumanoidLocomotionSystem
 
         float swingT = Mathf.SmoothStep(0.0f, 1.0f, leg.SwingProgress);
         Vector3 support = leg.SwingStartWorld.Lerp(leg.SwingTargetWorld, swingT);
-        support.Y += Mathf.Sin(swingT * Mathf.Pi) * frame.StepHeight;
+        float swingArcScale = Mathf.Lerp(1.0f, 0.55f, swingUrgency);
+        support.Y += Mathf.Sin(swingT * Mathf.Pi) * frame.StepHeight * swingArcScale;
         leg.CurrentSupportWorld = support;
         leg.GroundNormalWorld = leg.GroundNormalWorld.Slerp(leg.TargetGroundNormalWorld, DampFactor(HumanoidLocomotionModel.SupportNormalSharpness, delta));
 
@@ -343,9 +382,10 @@ public sealed partial class HumanoidLocomotionSystem
         leg.StanceTimeSeconds = 0.0f;
         leg.HeelStrikeWeight = 1.0f;
         leg.ToeOffWeight = 0.0f;
+        leg.RearReachDistance = 0.0f;
         leg.RearReachSaturation = 0.0f;
         leg.ComTrailDistance = 0.0f;
-        leg.BalanceTouchdownBias = 0.0f;
+        leg.RearReleaseArmed = false;
         leg.StanceFootPhase = HumanoidStanceFootPhase.HeelStrike;
         leg.FootSkateDistance = 0.0f;
         leg.LastStancePivotWorld = Vector3.Zero;
@@ -369,6 +409,7 @@ public sealed partial class HumanoidLocomotionSystem
         leg.StanceTimeSeconds = HumanoidLocomotionModel.WalkStepDurationSeconds;
         leg.HeelStrikeWeight = 0.0f;
         leg.ToeOffWeight = 0.0f;
+        leg.RearReachDistance = 0.0f;
         leg.RearReachSaturation = 0.0f;
         leg.ComTrailDistance = 0.0f;
         leg.PlannedTouchdownBias = 0.0f;
@@ -376,12 +417,14 @@ public sealed partial class HumanoidLocomotionSystem
         leg.StanceFootPhase = HumanoidStanceFootPhase.FootFlat;
         leg.FootSkateDistance = 0.0f;
         leg.LastStancePivotWorld = Vector3.Zero;
+        leg.RearReleaseArmed = false;
+        leg.DebugSupportTargetWorld = groundedSupport;
         UpdateFootContactModel(leg, frame);
     }
 
     private Vector3 PlanStepTargetWorld(HumanoidLegMotionRuntime leg, HumanoidGroundMotionFrame frame, out Vector3 groundNormal)
     {
-        Vector3 nominalSupport = ResolveRootRelativeSupportWorld(leg.RestSupportPointLocal, frame);
+        Vector3 nominalSupport = ResolveSupportSeekingNominalSupportWorld(leg, frame);
         float baseForwardPlacement = Mathf.Clamp(
             frame.StepLength * 0.55f,
             _spec.LegLength * 0.12f,
@@ -402,9 +445,11 @@ public sealed partial class HumanoidLocomotionSystem
 
         Vector3 targetProbe = nominalSupport + (frame.Forward * forwardPlacement) + (frame.Right * lateralPlacement);
         Vector3 touchdown = SampleSupportPoint(targetProbe, leg.Contact.GroundClearance, out groundNormal);
+        Vector3 clampedTouchdown = ClampSupportTargetToPlanarEnvelope(leg, frame, touchdown);
         leg.PlannedTouchdownBias = captureBias + rearBias;
         leg.BalanceTouchdownBias = captureBias;
-        return ClampSupportTargetToPlanarEnvelope(leg, frame, touchdown);
+        leg.DebugSupportTargetWorld = clampedTouchdown;
+        return clampedTouchdown;
     }
 
     private static Vector3 ResolveRootRelativeSupportWorld(Vector3 supportPointLocal, HumanoidGroundMotionFrame frame)
@@ -578,6 +623,7 @@ public sealed partial class HumanoidLocomotionSystem
             out float lateralError,
             out float triggerDistance,
             out float triggerLateral,
+            out float rearReachDistance,
             out float rearReachSaturation,
             out float comTrailDistance);
 
@@ -588,11 +634,24 @@ public sealed partial class HumanoidLocomotionSystem
             HumanoidLocomotionModel.ComReleaseDistanceRatio * 1.2f,
             frame.RunBlend);
         float comScore = comTrailDistance / Mathf.Max(comReleaseDistance, 0.001f);
-        float rearScore = rearReachSaturation / Mathf.Max(HumanoidLocomotionModel.RearReleaseSaturationThreshold, 0.001f);
+        float rearReleaseThreshold = ComputeRearReleaseThreshold(frame);
+        float rearReleaseExitThreshold = Mathf.Max(0.05f, rearReleaseThreshold - HumanoidLocomotionModel.RearReleaseHysteresis);
+        bool rearReleaseArmed = rearReachSaturation >= rearReleaseThreshold ||
+            (leg.RearReleaseArmed && rearReachSaturation >= rearReleaseExitThreshold);
+        if (leg.StanceFootPhase == HumanoidStanceFootPhase.HeelStrike)
+        {
+            rearReleaseArmed = false;
+        }
+
+        float rearScore = rearReleaseArmed
+            ? rearReachSaturation / Mathf.Max(rearReleaseThreshold, 0.001f)
+            : rearReachSaturation / Mathf.Max(rearReleaseThreshold + HumanoidLocomotionModel.RearReleaseHysteresis, 0.001f);
         float urgency = Mathf.Max(Mathf.Max(nominalScore, lateralScore), Mathf.Max(comScore, rearScore));
         float earlyScore = Mathf.Max(comScore, rearScore);
 
+        leg.RearReachDistance = rearReachDistance;
         leg.RearReachSaturation = rearReachSaturation;
+        leg.RearReleaseArmed = rearReleaseArmed;
         leg.ComTrailDistance = comTrailDistance;
 
         return new HumanoidStepReleaseDecision
@@ -612,6 +671,7 @@ public sealed partial class HumanoidLocomotionSystem
         out float lateralError,
         out float triggerDistance,
         out float triggerLateral,
+        out float rearReachDistance,
         out float rearReachSaturation,
         out float comTrailDistance)
     {
@@ -626,7 +686,7 @@ public sealed partial class HumanoidLocomotionSystem
         triggerLateral = _spec.LegLength * HumanoidLocomotionModel.StepTriggerLateralRatio;
 
         Vector3 hipWorld = _rig.Hips.GlobalPosition + (frame.VisualBasis * leg.HipOffsetFromPelvisLocal);
-        float rearReachDistance = Mathf.Max(0.0f, -(supportWorld - hipWorld).Dot(frame.Forward));
+        rearReachDistance = Mathf.Max(0.0f, -(supportWorld - hipWorld).Dot(frame.Forward));
         float rearReachLimit = _spec.LegLength * HumanoidLocomotionModel.RearReachRatio;
         rearReachSaturation = Mathf.Clamp(rearReachDistance / Mathf.Max(rearReachLimit, 0.001f), 0.0f, 1.0f);
         comTrailDistance = Mathf.Max(0.0f, (frame.PlanarCom - supportWorld).Dot(frame.Forward));
@@ -662,6 +722,8 @@ public sealed partial class HumanoidLocomotionSystem
 
     private void PublishGroundMetrics()
     {
+        _profiler.SetMetric("rear_reach_left", _leftLeg.RearReachDistance);
+        _profiler.SetMetric("rear_reach_right", _rightLeg.RearReachDistance);
         _profiler.SetMetric("rear_reach_saturation", Mathf.Max(_leftLeg.RearReachSaturation, _rightLeg.RearReachSaturation));
         _profiler.SetMetric("rear_reach_saturation_left", _leftLeg.RearReachSaturation);
         _profiler.SetMetric("rear_reach_saturation_right", _rightLeg.RearReachSaturation);
@@ -671,5 +733,52 @@ public sealed partial class HumanoidLocomotionSystem
         _profiler.SetMetric("foot_skate_distance", Mathf.Max(_leftLeg.FootSkateDistance, _rightLeg.FootSkateDistance));
         _profiler.SetMetric("foot_skate_distance_left", _leftLeg.FootSkateDistance);
         _profiler.SetMetric("foot_skate_distance_right", _rightLeg.FootSkateDistance);
+    }
+
+    private float ComputeRearReleaseThreshold(HumanoidGroundMotionFrame frame)
+    {
+        return Mathf.Lerp(
+            HumanoidLocomotionModel.RearReleaseSaturationThreshold,
+            HumanoidLocomotionModel.RearReleaseSaturationThreshold * 0.82f,
+            frame.RunBlend);
+    }
+
+    private float ComputeOppositeSupportUrgency(HumanoidLegMotionRuntime steppingLeg, HumanoidGroundMotionFrame frame)
+    {
+        HumanoidLegMotionRuntime supportLeg = steppingLeg == _leftLeg ? _rightLeg : _leftLeg;
+        if (!supportLeg.IsInStance)
+        {
+            return 0.0f;
+        }
+
+        float comReleaseDistance = _spec.LegLength * Mathf.Lerp(
+            HumanoidLocomotionModel.ComReleaseDistanceRatio,
+            HumanoidLocomotionModel.ComReleaseDistanceRatio * 1.2f,
+            frame.RunBlend);
+        float comUrgency = supportLeg.ComTrailDistance / Mathf.Max(comReleaseDistance, 0.001f);
+        return Mathf.Clamp(Mathf.Max(supportLeg.RearReachSaturation, comUrgency), 0.0f, 1.0f);
+    }
+
+    private float ResolveGroundSupportWeight(HumanoidLegMotionRuntime leg)
+    {
+        if (!leg.IsInStance)
+        {
+            return 0.08f;
+        }
+
+        return Mathf.Lerp(1.0f, 0.42f, leg.ToeOffWeight);
+    }
+
+    private Vector3 ResolveSupportSeekingNominalSupportWorld(HumanoidLegMotionRuntime leg, HumanoidGroundMotionFrame frame)
+    {
+        float lookaheadSeconds = Mathf.Lerp(
+            HumanoidLocomotionModel.SupportSeekLookaheadWalkSeconds,
+            HumanoidLocomotionModel.SupportSeekLookaheadRunSeconds,
+            frame.RunBlend);
+        Vector3 predictedOrigin = new(frame.VisualOrigin.X, frame.VisualOrigin.Y, frame.VisualOrigin.Z);
+        predictedOrigin += frame.VelocityPlanar * lookaheadSeconds;
+        predictedOrigin.X = Mathf.Lerp(predictedOrigin.X, frame.BalanceTarget.X, HumanoidLocomotionModel.SupportSeekBalanceBlend);
+        predictedOrigin.Z = Mathf.Lerp(predictedOrigin.Z, frame.BalanceTarget.Z, HumanoidLocomotionModel.SupportSeekBalanceBlend);
+        return predictedOrigin + (frame.VisualBasis * leg.RestSupportPointLocal);
     }
 }

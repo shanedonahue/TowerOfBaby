@@ -76,7 +76,10 @@ public sealed partial class HumanoidLocomotionSystem
         float leftSwing = !_leftLeg.IsInStance ? Mathf.Sin(_leftLeg.SwingProgress * Mathf.Pi) : 0.0f;
         float rightSwing = !_rightLeg.IsInStance ? Mathf.Sin(_rightLeg.SwingProgress * Mathf.Pi) : 0.0f;
         float gaitSwing = leftSwing - rightSwing;
-        float torsoBob = Mathf.Abs(gaitSwing) * _spec.TorsoHeight * 0.018f * frame.SpeedRatio;
+        float pushOffWeight = Mathf.Max(_leftLeg.ToeOffWeight, _rightLeg.ToeOffWeight);
+        float torsoBob = (
+            (Mathf.Abs(gaitSwing) * _spec.TorsoHeight * 0.007f) +
+            (pushOffWeight * _spec.TorsoHeight * 0.01f)) * frame.SpeedRatio;
         float forwardLean = frame.DesiredForwardInfluence * Mathf.Lerp(
             HumanoidLocomotionModel.TorsoLeanWalk,
             HumanoidLocomotionModel.TorsoLeanRun,
@@ -169,7 +172,9 @@ public sealed partial class HumanoidLocomotionSystem
         leg.StanceTimeSeconds = 0.0f;
         leg.HeelStrikeWeight = 0.0f;
         leg.ToeOffWeight = 0.0f;
+        leg.RearReachDistance = 0.0f;
         leg.RearReachSaturation = 0.0f;
+        leg.RearReleaseArmed = false;
         leg.ComTrailDistance = 0.0f;
         leg.PlannedTouchdownBias = 0.0f;
         leg.BalanceTouchdownBias = 0.0f;
@@ -181,6 +186,7 @@ public sealed partial class HumanoidLocomotionSystem
         leg.FootPivotWorld = leg.CurrentSupportWorld;
         leg.HeelContactWorld = leg.CurrentSupportWorld + (leg.FootBasisWorld * (leg.HeelContactLocal - leg.Contact.SupportOffsetLocal));
         leg.ToeContactWorld = leg.CurrentSupportWorld + (leg.FootBasisWorld * (leg.ToeContactLocal - leg.Contact.SupportOffsetLocal));
+        leg.DebugSupportTargetWorld = leg.CurrentSupportWorld;
 
         ApplyLegPose(leg, bodyForward);
         PublishLegMetrics(leg);
@@ -195,6 +201,7 @@ public sealed partial class HumanoidLocomotionSystem
         _profiler.SetMetric($"{prefix}_forward_offset", (leg.CurrentSupportWorld - _rig.Hips.GlobalPosition).Dot(_lastFacingForward));
         _profiler.SetMetric($"{prefix}_heel_strike", leg.HeelStrikeWeight);
         _profiler.SetMetric($"{prefix}_toe_off", leg.ToeOffWeight);
+        _profiler.SetMetric($"{prefix}_rear_reach_distance", leg.RearReachDistance);
         _profiler.SetMetric($"{prefix}_rear_reach", leg.RearReachSaturation);
         _profiler.SetMetric($"{prefix}_com_trail", leg.ComTrailDistance);
         _profiler.SetMetric($"{prefix}_touchdown_bias", leg.PlannedTouchdownBias);
@@ -212,9 +219,9 @@ public sealed partial class HumanoidLocomotionSystem
     {
         if (!leg.IsInStance)
         {
-            return 0.24f;
+            return 0.16f;
         }
 
-        return Mathf.Lerp(1.08f, 0.62f, leg.ToeOffWeight);
+        return Mathf.Lerp(1.12f, 0.58f, leg.ToeOffWeight);
     }
 }

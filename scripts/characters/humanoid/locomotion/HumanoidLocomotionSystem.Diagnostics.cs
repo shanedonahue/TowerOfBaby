@@ -123,9 +123,24 @@ public sealed partial class HumanoidLocomotionSystem
             AddLine(leg.HeelContactWorld, leg.ToeContactWorld, new Color(0.95f, 0.95f, 0.95f, 0.65f));
         }
 
+        if (leg.DebugSupportTargetWorld.LengthSquared() > 0.0001f)
+        {
+            Color targetColor = new(0.9f, 0.35f, 1.0f, 0.85f);
+            AddLine(phaseAnchor, leg.DebugSupportTargetWorld, targetColor);
+            AddPointCross(leg.DebugSupportTargetWorld, 0.045f, targetColor);
+        }
+
         if (hasGroundFrame)
         {
             DrawRearReachLimit(leg, frame, isLeft);
+        }
+
+        if (leg.IsInStance && leg.RearReleaseArmed)
+        {
+            Vector3 armedMarker = phaseAnchor + (Vector3.Up * 0.18f);
+            Color armedColor = new(1.0f, 0.55f, 0.08f, 0.95f);
+            AddPointCross(armedMarker, 0.045f, armedColor);
+            AddLine(phaseAnchor, armedMarker, armedColor);
         }
 
         if (leg.EarlyReleaseDebugTimer > 0.0f)
