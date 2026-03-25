@@ -32,4 +32,6 @@ public sealed class HumanoidLegRig
     public Vector3 CurrentFootPosition { get; set; } = Vector3.Zero;
     public Vector3 GroundNormal { get; set; } = Vector3.Up;
     public Vector3 TargetNormal { get; set; } = Vector3.Up;
+    public bool StepCycleConsumed { get; set; }
+    public float StepDuration { get; set; }
 }

@@ -18,7 +18,9 @@ public partial class HumanoidController : CharacterBody3D
     [Export] public float MoveSpeed = 7.0f;
     [Export] public float SprintSpeedMultiplier = 1.55f;
     [Export] public float Acceleration = 10.0f;
+    [Export] public float Deceleration = 18.0f;
     [Export] public float AirAcceleration = 3.0f;
+    [Export] public float TurnResponsiveness = 16.0f;
     [Export] public float RotationSpeed = 9.0f;
     [Export] public float GravityScale = 1.0f;
     [Export] public float FallGravityMultiplier = 1.7f;
@@ -200,7 +202,9 @@ public partial class HumanoidController : CharacterBody3D
                 MoveSpeed = MoveSpeed,
                 SprintSpeedMultiplier = SprintSpeedMultiplier,
                 Acceleration = Acceleration,
+                Deceleration = Deceleration,
                 AirAcceleration = AirAcceleration,
+                TurnResponsiveness = TurnResponsiveness,
                 RotationSpeed = RotationSpeed,
                 GravityScale = GravityScale,
                 FallGravityMultiplier = FallGravityMultiplier,
