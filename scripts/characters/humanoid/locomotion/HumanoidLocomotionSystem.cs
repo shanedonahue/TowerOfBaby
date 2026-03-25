@@ -18,11 +18,10 @@ public sealed partial class HumanoidLocomotionSystem
     private readonly HumanoidLegMotionRuntime _leftLeg;
     private readonly HumanoidLegMotionRuntime _rightLeg;
 
-    private float _gaitPhase;
     private float _locomotionBlend;
     private Vector3 _locomotionForward = Vector3.Forward;
     private Vector3 _lastFacingForward = Vector3.Forward;
-    private Vector3 _lastPlanarVelocity = Vector3.Zero;
+    private bool _stepLeftNext = true;
 
     public MotionProfilerSnapshot LastProfilerSnapshot { get; private set; } = CreateEmptySnapshot();
 
@@ -69,12 +68,11 @@ public sealed partial class HumanoidLocomotionSystem
         if (_body.IsOnFloor())
         {
             _profiler.BeginStage("gait_model");
-            HumanoidGroundMotionFrame frame = BuildGroundMotionFrame(delta, locomotionDirection, targetVelocity, sprintBlend, maxSpeed);
+            HumanoidGroundMotionFrame frame = BuildGroundMotionFrame(delta, locomotionDirection, sprintBlend, maxSpeed);
             _profiler.EndStage();
 
             _profiler.BeginStage("contacts");
-            UpdateLegContactState(_leftLeg, frame, delta);
-            UpdateLegContactState(_rightLeg, frame, delta);
+            UpdateGroundedLegs(frame, delta);
             _profiler.EndStage();
 
             _profiler.BeginStage("pelvis");
