@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.Characters.Humanoid.Control;
+
 public sealed class BenchmarkHumanoidControlSource : IHumanoidControlSource
 {
     private readonly double _forwardDurationSeconds;
@@ -34,12 +36,12 @@ public sealed class BenchmarkHumanoidControlSource : IHumanoidControlSource
         return false;
     }
 
-    public MovementIntent BuildIntent()
+    public HumanoidMovementIntent BuildIntent()
     {
         const float fixedStep = 1.0f / 60.0f;
         _elapsedSeconds += fixedStep;
 
-        MovementIntent intent = new()
+        HumanoidMovementIntent intent = new()
         {
             Move = new Vector2(0.0f, -1.0f),
             Sprint = true

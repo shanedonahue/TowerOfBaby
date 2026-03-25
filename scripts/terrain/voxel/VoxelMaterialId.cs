@@ -1,3 +1,5 @@
+namespace TowerOfBaby.Terrain.Voxel;
+
 public enum VoxelMaterialId : byte
 {
     Soil = 0,

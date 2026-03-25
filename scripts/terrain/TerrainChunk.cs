@@ -1,4 +1,7 @@
 using Godot;
+using TowerOfBaby.Terrain.Voxel;
+
+namespace TowerOfBaby.Terrain;
 
 public partial class TerrainChunk : Node3D
 {

@@ -1,3 +1,5 @@
+namespace TowerOfBaby.Terrain;
+
 public sealed class TerrainWorldProfileSnapshot
 {
     public int ActiveChunkCount { get; init; }

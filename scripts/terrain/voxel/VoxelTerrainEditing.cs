@@ -1,6 +1,8 @@
 using Godot;
 using System;
 
+namespace TowerOfBaby.Terrain.Voxel;
+
 public readonly record struct VoxelSphereEdit(
     Vector3 Center,
     float Radius,

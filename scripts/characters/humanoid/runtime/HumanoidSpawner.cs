@@ -1,7 +1,10 @@
 using Godot;
 using System.Collections.Generic;
+using TowerOfBaby.Terrain;
 
-public partial class HumanoidNpcSpawner : Node3D
+namespace TowerOfBaby.Characters.Humanoid.Runtime;
+
+public partial class HumanoidSpawner : Node3D
 {
     [Export] public PackedScene HumanoidScene = null!;
     [Export] public NodePath TerrainWorldPath = new("../TerrainWorld");
@@ -15,7 +18,7 @@ public partial class HumanoidNpcSpawner : Node3D
     [Export] public int SpawnAttemptsPerCycle = 8;
 
     private readonly RandomNumberGenerator _rng = new();
-    private readonly List<HumanoidController> _npcs = new();
+    private readonly List<HumanoidActorController> _npcs = new();
     private TerrainWorld _terrainWorld = null!;
     private Node3D _player = null!;
     private double _respawnAccumulator;
@@ -68,7 +71,7 @@ public partial class HumanoidNpcSpawner : Node3D
 
         for (int i = _npcs.Count - 1; i >= 0; i--)
         {
-            HumanoidController npc = _npcs[i];
+            HumanoidActorController npc = _npcs[i];
             if (!IsInstanceValid(npc))
             {
                 _npcs.RemoveAt(i);
@@ -115,8 +118,8 @@ public partial class HumanoidNpcSpawner : Node3D
             }
 
             Vector3 spawnPosition = (Vector3)result["position"] + new Vector3(0.0f, 0.2f, 0.0f);
-            HumanoidController npc = HumanoidScene.Instantiate<HumanoidController>();
-            npc.ControlMode = HumanoidController.HumanoidControlMode.RandomWalk;
+            HumanoidActorController npc = HumanoidScene.Instantiate<HumanoidActorController>();
+            npc.ControlMode = HumanoidActorController.HumanoidControlMode.RandomWalk;
             npc.EnableFollowCamera = false;
             npc.ActsAsTerrainTracker = false;
             npc.RandomizeBodySeedOnReady = true;

@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.Characters.Humanoid.Control;
+
 public sealed class RandomWalkHumanoidControlSource : IHumanoidControlSource
 {
     private readonly RandomNumberGenerator _rng = new();
@@ -40,7 +42,7 @@ public sealed class RandomWalkHumanoidControlSource : IHumanoidControlSource
         return false;
     }
 
-    public MovementIntent BuildIntent()
+    public HumanoidMovementIntent BuildIntent()
     {
         const float fixedStep = 1.0f / 60.0f;
         _segmentTimeRemaining -= fixedStep;
@@ -49,7 +51,7 @@ public sealed class RandomWalkHumanoidControlSource : IHumanoidControlSource
             PickNextSegment();
         }
 
-        return new MovementIntent
+        return new HumanoidMovementIntent
         {
             Move = _currentMove,
             LookDelta = new Vector2(-_currentYawRate / 0.0025f * fixedStep, 0.0f),

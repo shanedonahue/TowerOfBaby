@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.Characters.Humanoid.Control;
+
 public sealed class PlayerHumanoidControlSource : IHumanoidControlSource
 {
     private Vector2 _accumulatedLookDelta;
@@ -47,9 +49,9 @@ public sealed class PlayerHumanoidControlSource : IHumanoidControlSource
         return requested;
     }
 
-    public MovementIntent BuildIntent()
+    public HumanoidMovementIntent BuildIntent()
     {
-        MovementIntent intent = new()
+        HumanoidMovementIntent intent = new()
         {
             Move = Input.GetVector("move_left", "move_right", "move_forward", "move_back"),
             LookDelta = _accumulatedLookDelta,

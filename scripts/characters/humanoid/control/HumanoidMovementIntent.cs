@@ -1,6 +1,8 @@
 using Godot;
 
-public struct MovementIntent
+namespace TowerOfBaby.Characters.Humanoid.Control;
+
+public struct HumanoidMovementIntent
 {
     public Vector2 Move;
     public Vector2 LookDelta;

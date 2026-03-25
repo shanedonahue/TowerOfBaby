@@ -1,3 +1,5 @@
+namespace TowerOfBaby.Terrain;
+
 public sealed class TerrainWorldSettings
 {
     public int PointsPerAxis { get; init; }

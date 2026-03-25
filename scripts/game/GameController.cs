@@ -1,5 +1,9 @@
 using Godot;
 using Godot.Collections;
+using TowerOfBaby.Debugging;
+using TowerOfBaby.Terrain;
+
+namespace TowerOfBaby.Scene;
 
 public partial class GameController : Node3D
 {
@@ -15,6 +19,7 @@ public partial class GameController : Node3D
     [Export] public float BrushScrollStep = 0.2f;
     [Export] public float BrushPreviewConeHeight = 1.35f;
     [Export] public float BrushPreviewGroundLift = 0.06f;
+    [Export] public bool EnableDebugTerrainBrush;
     [Export] public PlayerStartMode StartMode = PlayerStartMode.ResumeSerializedLocation;
     [ExportGroup("Debug Cache Hygiene")]
     [Export] public bool ClearProfilingLogsOnReady;
@@ -98,13 +103,17 @@ public partial class GameController : Node3D
             return;
         }
 
+        if (!EnableDebugTerrainBrush)
+        {
+            return;
+        }
+
         if (@event is not InputEventMouseButton mouseButton || !mouseButton.Pressed)
         {
             return;
         }
 
-        bool ctrlPressed = Input.IsKeyPressed(Key.Ctrl);
-        if (ctrlPressed && _terrainWorld != null)
+        if (_terrainWorld != null)
         {
             if (mouseButton.ButtonIndex == MouseButton.WheelUp)
             {
@@ -119,8 +128,8 @@ public partial class GameController : Node3D
             }
         }
 
-        bool carve = mouseButton.ButtonIndex == MouseButton.Left && ctrlPressed;
-        bool build = mouseButton.ButtonIndex == MouseButton.Right && ctrlPressed;
+        bool carve = mouseButton.ButtonIndex == MouseButton.Left;
+        bool build = mouseButton.ButtonIndex == MouseButton.Right;
         if (!carve && !build)
         {
             return;
@@ -153,14 +162,7 @@ public partial class GameController : Node3D
 
     private void UpdateBrushPreview()
     {
-        if (_terrainWorld == null || !_terrainWorld.InitialLoadComplete)
-        {
-            _brushPreview.Visible = false;
-            return;
-        }
-
-        bool showPreview = Input.IsKeyPressed(Key.Ctrl);
-        if (!showPreview)
+        if (!EnableDebugTerrainBrush || _terrainWorld == null || !_terrainWorld.InitialLoadComplete)
         {
             _brushPreview.Visible = false;
             return;

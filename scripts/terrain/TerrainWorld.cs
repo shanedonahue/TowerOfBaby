@@ -4,6 +4,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using TowerOfBaby.Terrain.Voxel;
+
+namespace TowerOfBaby.Terrain;
 
 public partial class TerrainWorld : Node3D
 {

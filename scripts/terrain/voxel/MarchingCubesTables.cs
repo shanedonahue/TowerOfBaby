@@ -1,3 +1,5 @@
+namespace TowerOfBaby.Terrain.Voxel;
+
 public static class MarchingCubesTables
 {
     public static readonly int[,] EdgeVertexIndices = new int[,]

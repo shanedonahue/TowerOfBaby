@@ -2,6 +2,9 @@ using Godot;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using TowerOfBaby.Terrain.Voxel;
+
+namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainChunkStore
 {

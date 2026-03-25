@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.World;
+
 public partial class TimeOfDayController : Node
 {
     [Export] public NodePath WorldEnvironmentPath = new("../WorldEnvironment");

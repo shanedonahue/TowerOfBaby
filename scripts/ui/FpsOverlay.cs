@@ -1,6 +1,9 @@
 using Godot;
 using System;
 using System.Diagnostics;
+using TowerOfBaby.Terrain;
+
+namespace TowerOfBaby.UI;
 
 public partial class FpsOverlay : CanvasLayer
 {
@@ -10,7 +13,7 @@ public partial class FpsOverlay : CanvasLayer
 
     private Label _label = null!;
     private TerrainWorld _terrainWorld = null!;
-    private readonly float[] _frameTimesMs = Array.Empty<float>();
+    private float[] _frameTimesMs = Array.Empty<float>();
     private int _sampleIndex;
     private int _sampleCount;
     private double _uptimeSeconds;
@@ -22,13 +25,9 @@ public partial class FpsOverlay : CanvasLayer
     private long _churnMissesDelta;
     private long _churnEvictionsDelta;
 
-    public FpsOverlay()
-    {
-        _frameTimesMs = new float[120];
-    }
-
     public override void _Ready()
     {
+        _frameTimesMs = new float[Mathf.Max(16, SampleWindowSize)];
         _label = GetNodeOrNull<Label>("Label");
         if (_label == null)
         {

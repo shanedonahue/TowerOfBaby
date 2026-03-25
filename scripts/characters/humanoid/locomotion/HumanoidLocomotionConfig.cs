@@ -1,4 +1,6 @@
-public sealed class HumanoidLocomotionSettings
+namespace TowerOfBaby.Characters.Humanoid.Locomotion;
+
+public sealed class HumanoidLocomotionConfig
 {
     public float MoveSpeed { get; init; }
     public float SprintSpeedMultiplier { get; init; }
@@ -11,6 +13,6 @@ public sealed class HumanoidLocomotionSettings
     public float FallGravityMultiplier { get; init; }
     public float GroundStickVelocity { get; init; }
     public float FootProbeDistance { get; init; }
-    public float WalkCycleSpeed { get; init; }
-    public float RunCycleSpeed { get; init; }
+    public bool EnableMotionDiagnostics { get; init; }
+    public float MotionDiagnosticLogIntervalSeconds { get; init; }
 }

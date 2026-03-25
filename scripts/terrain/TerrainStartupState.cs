@@ -1,5 +1,8 @@
 using Godot;
 using System.Collections.Generic;
+using TowerOfBaby.Terrain.Voxel;
+
+namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainStartupState
 {

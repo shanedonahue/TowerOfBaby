@@ -1,6 +1,8 @@
 using Godot;
 
-public static class HumanoidBodyGenerator
+namespace TowerOfBaby.Characters.Humanoid.Definition;
+
+public static class HumanoidBodyFactory
 {
     public static HumanoidBodySpec Generate(int seed)
     {
@@ -23,14 +25,16 @@ public static class HumanoidBodyGenerator
         float footWidth = footLength * rng.RandfRange(0.42f, 0.55f);
         float footHeight = height * rng.RandfRange(0.025f, 0.032f);
         float legLength = upperLeg + lowerLeg;
-        float eyeHeight = (legLength * 0.53f) + torsoHeight + neckLength + headRadius * 0.8f;
+        float hipHeight = legLength + footHeight;
+        float totalHeight = hipHeight + torsoHeight + neckLength + (headRadius * 2.0f);
+        float eyeHeight = hipHeight + torsoHeight + neckLength + (headRadius * 0.8f);
         float collisionRadius = Mathf.Max(shoulderWidth * 0.34f, hipWidth * 0.42f);
-        float collisionHeight = Mathf.Max(height - (headRadius * 1.2f), height * 0.58f);
+        float collisionHeight = Mathf.Max(totalHeight - (headRadius * 1.2f), totalHeight * 0.58f);
 
         return new HumanoidBodySpec
         {
             Seed = seed,
-            Height = height,
+            Height = totalHeight,
             ShoulderWidth = shoulderWidth,
             HipWidth = hipWidth,
             TorsoHeight = torsoHeight,
@@ -46,7 +50,6 @@ public static class HumanoidBodyGenerator
             FootLength = footLength,
             FootWidth = footWidth,
             FootHeight = footHeight,
-            VisualRootHeight = footHeight + (height * 0.08f),
             CollisionRadius = collisionRadius,
             CollisionHeight = collisionHeight,
             EyeHeight = eyeHeight

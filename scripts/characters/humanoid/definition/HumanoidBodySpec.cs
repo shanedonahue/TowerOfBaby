@@ -1,6 +1,7 @@
+namespace TowerOfBaby.Characters.Humanoid.Definition;
+
 public sealed class HumanoidBodySpec
 {
-    public string SpeciesId { get; init; } = "humanoid";
     public int Seed { get; init; }
     public float Height { get; init; }
     public float ShoulderWidth { get; init; }
@@ -18,12 +19,11 @@ public sealed class HumanoidBodySpec
     public float FootLength { get; init; }
     public float FootWidth { get; init; }
     public float FootHeight { get; init; }
-    public float VisualRootHeight { get; init; }
     public float CollisionRadius { get; init; }
     public float CollisionHeight { get; init; }
     public float EyeHeight { get; init; }
 
     public float LegLength => UpperLegLength + LowerLegLength;
-    public float HipHeight => LegLength * 0.53f;
+    public float HipHeight => LegLength + FootHeight;
     public float ShoulderHeight => HipHeight + TorsoHeight;
 }

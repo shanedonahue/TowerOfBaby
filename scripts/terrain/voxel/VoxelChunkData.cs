@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.Terrain.Voxel;
+
 public sealed class VoxelChunkData
 {
     public int PointsPerAxis { get; }

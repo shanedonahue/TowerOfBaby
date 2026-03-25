@@ -1,7 +1,15 @@
 using Godot;
 using Godot.Collections;
+using TowerOfBaby.Characters.Humanoid.Control;
+using TowerOfBaby.Characters.Humanoid.Definition;
+using TowerOfBaby.Characters.Humanoid.Locomotion;
+using TowerOfBaby.Characters.Humanoid.Rig;
+using TowerOfBaby.Motion;
+using TowerOfBaby.Terrain;
 
-public partial class HumanoidController : CharacterBody3D
+namespace TowerOfBaby.Characters.Humanoid.Runtime;
+
+public partial class HumanoidActorController : CharacterBody3D
 {
     public enum HumanoidControlMode
     {
@@ -26,6 +34,10 @@ public partial class HumanoidController : CharacterBody3D
     [Export] public float FallGravityMultiplier = 1.7f;
     [Export] public float GroundStickVelocity = 1.6f;
     [Export] public float FloorSnapDistance = 0.9f;
+    [ExportGroup("Motion Diagnostics")]
+    [Export] public bool EnableMotionDiagnostics;
+    [Export] public float MotionDiagnosticLogIntervalSeconds = 0.4f;
+    [ExportGroup("Camera")]
     [Export] public float MouseSensitivity = 0.0025f;
     [Export] public float CameraPitchMin = -0.9f;
     [Export] public float CameraPitchMax = 0.35f;
@@ -40,8 +52,6 @@ public partial class HumanoidController : CharacterBody3D
     [Export] public float DigRange = 4.5f;
     [Export] public float DigOriginHeightOffset = 1.1f;
     [Export] public float FootProbeDistance = 4.0f;
-    [Export] public float WalkCycleSpeed = 2.35f;
-    [Export] public float RunCycleSpeed = 4.1f;
     [Export] public bool UseBenchmarkControl;
     [Export] public double BenchmarkForwardDurationSeconds = 10.0;
     [Export] public double BenchmarkCircleDurationSeconds = 24.0;
@@ -50,15 +60,13 @@ public partial class HumanoidController : CharacterBody3D
     private Node3D _yawPivot = null!;
     private Node3D _cameraPitchPivot = null!;
     private SpringArm3D _springArm = null!;
-    private Camera3D _camera = null!;
     private CollisionShape3D _collision = null!;
     private TerrainWorld _terrainWorld = null!;
 
     private IHumanoidControlSource _controlSource = null!;
     private HumanoidBodySpec _bodySpec = null!;
-    private HumanoidSkeleton _skeleton = null!;
     private HumanoidRig _rig = null!;
-    private HumanoidLocomotionController _locomotion = null!;
+    private HumanoidLocomotionSystem _locomotion = null!;
 
     private float _cameraYaw;
     private float _cameraPitch = -0.35f;
@@ -107,8 +115,7 @@ public partial class HumanoidController : CharacterBody3D
 
         if (@event is InputEventMouseButton mouseButton &&
             mouseButton.Pressed &&
-            EnableFollowCamera &&
-            !Input.IsKeyPressed(Key.Ctrl))
+            EnableFollowCamera)
         {
             if (mouseButton.ButtonIndex == MouseButton.WheelUp)
             {
@@ -130,7 +137,7 @@ public partial class HumanoidController : CharacterBody3D
 
     public override void _PhysicsProcess(double delta)
     {
-        MovementIntent intent = _controlSource.BuildIntent();
+        HumanoidMovementIntent intent = _controlSource.BuildIntent();
         ApplyLookIntent(intent.LookDelta);
         TryHandleTerrainDig(intent);
         UpdateCameraDistance((float)delta);
@@ -161,14 +168,14 @@ public partial class HumanoidController : CharacterBody3D
             };
             _cameraPitchPivot.AddChild(_springArm);
 
-            _camera = new Camera3D
+            Camera3D camera = new()
             {
                 Name = "Camera3D",
                 Current = true,
                 Fov = 68.0f,
                 Far = CameraFarDistance
             };
-            _springArm.AddChild(_camera);
+            _springArm.AddChild(camera);
         }
 
         _collision = GetNodeOrNull<CollisionShape3D>("CollisionShape3D");
@@ -185,19 +192,21 @@ public partial class HumanoidController : CharacterBody3D
             ? (int)GD.Randi()
             : BodySeed;
 
-        _bodySpec = HumanoidBodyGenerator.Generate(seed);
-        _skeleton = HumanoidSkeletonBuilder.Build(_bodySpec);
-        _rig = HumanoidRigBuilder.Build(this, _collision, _bodySpec, _skeleton);
+        _bodySpec = HumanoidBodyFactory.Generate(seed);
+        HumanoidSkeleton skeleton = HumanoidSkeletonFactory.Build(_bodySpec);
+        _rig = HumanoidRigFactory.Build(this, _collision, _bodySpec, skeleton);
+        MotionSkeletonDefinition motionDefinition = HumanoidMotionDefinitionFactory.Build(_bodySpec, skeleton);
 
         _cameraPitchPivot.Position = new Vector3(0.0f, _bodySpec.EyeHeight, 0.0f);
         _yawPivot.Rotation = new Vector3(0.0f, _cameraYaw, 0.0f);
         _cameraPitchPivot.Rotation = new Vector3(_cameraPitch, 0.0f, 0.0f);
 
-        _locomotion = new HumanoidLocomotionController(
+        _locomotion = new HumanoidLocomotionSystem(
             this,
             _rig,
             _bodySpec,
-            new HumanoidLocomotionSettings
+            motionDefinition,
+            new HumanoidLocomotionConfig
             {
                 MoveSpeed = MoveSpeed,
                 SprintSpeedMultiplier = SprintSpeedMultiplier,
@@ -210,8 +219,8 @@ public partial class HumanoidController : CharacterBody3D
                 FallGravityMultiplier = FallGravityMultiplier,
                 GroundStickVelocity = GroundStickVelocity,
                 FootProbeDistance = FootProbeDistance,
-                WalkCycleSpeed = WalkCycleSpeed,
-                RunCycleSpeed = RunCycleSpeed
+                EnableMotionDiagnostics = EnableMotionDiagnostics,
+                MotionDiagnosticLogIntervalSeconds = MotionDiagnosticLogIntervalSeconds
             });
     }
 
@@ -260,7 +269,7 @@ public partial class HumanoidController : CharacterBody3D
         _springArm.SpringLength = Mathf.Lerp(_springArm.SpringLength, _targetCameraDistance, 1.0f - Mathf.Exp(-CameraZoomLerpSpeed * delta));
     }
 
-    private void TryHandleTerrainDig(MovementIntent intent)
+    private void TryHandleTerrainDig(HumanoidMovementIntent intent)
     {
         if (!EnableTerrainDig ||
             !intent.PrimaryActionPressed ||

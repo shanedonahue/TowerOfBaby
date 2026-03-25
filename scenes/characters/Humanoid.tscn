@@ -1,6 +1,6 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://scripts/characters/HumanoidController.cs" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/characters/humanoid/runtime/HumanoidActorController.cs" id="1_controller"]
 
 [sub_resource type="CapsuleShape3D" id="1_capsule"]
 radius = 0.38

@@ -4,6 +4,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using TowerOfBaby.Terrain;
+
+namespace TowerOfBaby.Debugging;
 
 public partial class PerformanceRunLogger : Node
 {

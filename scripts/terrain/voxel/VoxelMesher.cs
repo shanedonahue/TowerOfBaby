@@ -1,5 +1,7 @@
 using Godot;
 
+namespace TowerOfBaby.Terrain.Voxel;
+
 public static class VoxelMesher
 {
     private static readonly Vector3I[] CornerOffsets =

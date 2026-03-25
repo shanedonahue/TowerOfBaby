@@ -1,6 +1,9 @@
 using Godot;
+using TowerOfBaby.Characters.Humanoid.Definition;
 
-public static class HumanoidRigBuilder
+namespace TowerOfBaby.Characters.Humanoid.Rig;
+
+public static class HumanoidRigFactory
 {
     public static HumanoidRig Build(Node3D owner, CollisionShape3D collision, HumanoidBodySpec spec, HumanoidSkeleton skeleton)
     {
@@ -10,7 +13,7 @@ public static class HumanoidRigBuilder
         Node3D visualRoot = new()
         {
             Name = "VisualRoot",
-            Position = new Vector3(0.0f, spec.VisualRootHeight, 0.0f)
+            Position = Vector3.Zero
         };
         owner.AddChild(visualRoot);
 
@@ -72,8 +75,8 @@ public static class HumanoidRigBuilder
             accentMaterial);
         upperBody.AddChild(rightArm);
 
-        HumanoidLegRig leftLeg = CreateLegRig("LeftLeg", skeleton, spec, -spec.HipWidth * 0.5f, accentMaterial, hips);
-        HumanoidLegRig rightLeg = CreateLegRig("RightLeg", skeleton, spec, spec.HipWidth * 0.5f, accentMaterial, hips);
+        HumanoidLegRig leftLeg = CreateLegRig("LeftLeg", spec, -spec.HipWidth * 0.5f, accentMaterial, hips);
+        HumanoidLegRig rightLeg = CreateLegRig("RightLeg", spec, spec.HipWidth * 0.5f, accentMaterial, hips);
 
         return new HumanoidRig
         {
@@ -86,8 +89,7 @@ public static class HumanoidRigBuilder
             LeftArm = leftArm,
             RightArm = rightArm,
             LeftLeg = leftLeg,
-            RightLeg = rightLeg,
-            Skeleton = skeleton
+            RightLeg = rightLeg
         };
     }
 
@@ -104,7 +106,7 @@ public static class HumanoidRigBuilder
             Radius = spec.CollisionRadius,
             Height = spec.CollisionHeight
         };
-        collision.Position = new Vector3(0.0f, (spec.CollisionHeight * 0.5f) + spec.VisualRootHeight, 0.0f);
+        collision.Position = new Vector3(0.0f, spec.CollisionRadius + (spec.CollisionHeight * 0.5f), 0.0f);
     }
 
     private static Node3D CreateArm(string name, Vector3 shoulderPosition, HumanoidBodySpec spec, Material material)
@@ -138,11 +140,10 @@ public static class HumanoidRigBuilder
         return shoulder;
     }
 
-    private static HumanoidLegRig CreateLegRig(string name, HumanoidSkeleton skeleton, HumanoidBodySpec spec, float sideOffset, Material material, Node3D hips)
+    private static HumanoidLegRig CreateLegRig(string name, HumanoidBodySpec spec, float sideOffset, Material material, Node3D hips)
     {
         HumanoidLegRig leg = new()
         {
-            SideOffset = sideOffset,
             UpperLength = spec.UpperLegLength,
             LowerLength = spec.LowerLegLength
         };
@@ -197,7 +198,6 @@ public static class HumanoidRigBuilder
             Upper = upper,
             Lower = lower,
             Foot = foot,
-            SideOffset = sideOffset,
             UpperLength = spec.UpperLegLength,
             LowerLength = spec.LowerLegLength
         };
