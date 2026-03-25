@@ -22,6 +22,7 @@ public sealed partial class HumanoidLocomotionSystem
     private Vector3 _locomotionForward = Vector3.Forward;
     private Vector3 _lastFacingForward = Vector3.Forward;
     private bool _stepLeftNext = true;
+    private int _earlyReleaseEventsThisFrame;
 
     public MotionProfilerSnapshot LastProfilerSnapshot { get; private set; } = CreateEmptySnapshot();
 
@@ -45,6 +46,20 @@ public sealed partial class HumanoidLocomotionSystem
     public void Update(float delta, HumanoidMovementIntent intent, Vector3 desiredDirection, float cameraPitch)
     {
         _profiler.BeginFrame();
+        _earlyReleaseEventsThisFrame = 0;
+        _profiler.SetMetric("com_error", 0.0f);
+        _profiler.SetMetric("rear_reach_saturation", 0.0f);
+        _profiler.SetMetric("rear_reach_saturation_left", 0.0f);
+        _profiler.SetMetric("rear_reach_saturation_right", 0.0f);
+        _profiler.SetMetric("com_to_support_center_error", 0.0f);
+        _profiler.SetMetric("early_release_events", 0.0f);
+        _profiler.SetMetric("toe_off_weight", 0.0f);
+        _profiler.SetMetric("toe_off_blend", 0.0f);
+        _profiler.SetMetric("touchdown_bias_balance_left", 0.0f);
+        _profiler.SetMetric("touchdown_bias_balance_right", 0.0f);
+        _profiler.SetMetric("foot_skate_distance", 0.0f);
+        _profiler.SetMetric("foot_skate_distance_left", 0.0f);
+        _profiler.SetMetric("foot_skate_distance_right", 0.0f);
 
         float moveAmount = Mathf.Clamp(intent.Move.Length(), 0.0f, 1.0f);
         float sprintBlend = moveAmount > 0.05f && intent.Sprint ? 1.0f : 0.0f;
@@ -52,6 +67,8 @@ public sealed partial class HumanoidLocomotionSystem
         Vector3 locomotionDirection = ResolveLocomotionDirection(desiredDirection, moveAmount, delta);
         float targetSpeed = maxSpeed * moveAmount;
         Vector3 targetVelocity = locomotionDirection * targetSpeed;
+        bool hasGroundFrame = false;
+        HumanoidGroundMotionFrame frame = default;
 
         _profiler.BeginStage("movement");
         UpdateBodyMotion(delta, moveAmount, locomotionDirection, targetVelocity, cameraPitch);
@@ -68,7 +85,8 @@ public sealed partial class HumanoidLocomotionSystem
         if (_body.IsOnFloor())
         {
             _profiler.BeginStage("gait_model");
-            HumanoidGroundMotionFrame frame = BuildGroundMotionFrame(delta, locomotionDirection, sprintBlend, maxSpeed);
+            frame = BuildGroundMotionFrame(delta, locomotionDirection, sprintBlend, maxSpeed);
+            hasGroundFrame = true;
             _profiler.EndStage();
 
             _profiler.BeginStage("contacts");
@@ -95,6 +113,7 @@ public sealed partial class HumanoidLocomotionSystem
             _profiler.EndStage();
         }
 
+        UpdateMotionDiagnostics(delta, hasGroundFrame, frame);
         LastProfilerSnapshot = _profiler.CaptureSnapshot();
         _telemetry.Update(delta, "humanoid", LastProfilerSnapshot);
     }

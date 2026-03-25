@@ -116,6 +116,10 @@ public sealed partial class HumanoidLocomotionSystem
         Vector3 pelvisRest = _motionDefinition.GetJointRestPosition("pelvis");
         Vector3 hipOffsetLocal = _motionDefinition.Joints[chain.RootJointIndex].LocalRestPosition - pelvisRest;
         Vector3 restSupportLocal = _motionDefinition.Joints[contact.JointIndex].LocalRestPosition + contact.SupportOffsetLocal;
+        float contactInset = _spec.FootLength * HumanoidLocomotionModel.FootContactInsetRatio;
+        float heelToeOffset = (_spec.FootLength * 0.5f) - contactInset;
+        Vector3 heelContactLocal = contact.SupportOffsetLocal + new Vector3(0.0f, 0.0f, heelToeOffset);
+        Vector3 toeContactLocal = contact.SupportOffsetLocal + new Vector3(0.0f, 0.0f, -heelToeOffset);
 
         return new HumanoidLegMotionRuntime(
             rig,
@@ -123,6 +127,8 @@ public sealed partial class HumanoidLocomotionSystem
             contact,
             hipOffsetLocal,
             restSupportLocal,
+            heelContactLocal,
+            toeContactLocal,
             phaseOffset);
     }
 

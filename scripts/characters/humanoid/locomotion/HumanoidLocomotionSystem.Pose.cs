@@ -6,19 +6,21 @@ public sealed partial class HumanoidLocomotionSystem
 {
     private void UpdatePelvisPose(HumanoidGroundMotionFrame frame, float delta)
     {
-        float leftWeight = _leftLeg.IsInStance ? 1.0f : 0.35f;
-        float rightWeight = _rightLeg.IsInStance ? 1.0f : 0.35f;
+        float leftWeight = ResolveSupportWeight(_leftLeg);
+        float rightWeight = ResolveSupportWeight(_rightLeg);
         float totalWeight = leftWeight + rightWeight;
 
         float supportHeight = ((_leftLeg.CurrentSupportWorld.Y * leftWeight) + (_rightLeg.CurrentSupportWorld.Y * rightWeight)) / totalWeight;
         float supportDelta = rightWeight - leftWeight;
         float footHeightDelta = _leftLeg.CurrentSupportWorld.Y - _rightLeg.CurrentSupportWorld.Y;
         Vector3 nominalPelvisWorld = frame.VisualOrigin + (frame.VisualBasis * _motionDefinition.GetJointRestPosition("pelvis"));
+        float pushOffWeight = Mathf.Max(_leftLeg.ToeOffWeight, _rightLeg.ToeOffWeight);
 
         Vector3 desiredPelvisWorld = nominalPelvisWorld;
         desiredPelvisWorld.Y = supportHeight + _spec.HipHeight - (_spec.LegLength * HumanoidLocomotionModel.PelvisSpeedCompressionRatio * frame.SpeedRatio);
         desiredPelvisWorld += frame.Right * (supportDelta * _spec.HipWidth * HumanoidLocomotionModel.PelvisSupportShiftRatio);
         desiredPelvisWorld += frame.Forward * (_spec.LegLength * HumanoidLocomotionModel.PelvisForwardBiasRatio * frame.SpeedRatio * frame.DesiredForwardInfluence);
+        desiredPelvisWorld += frame.Forward * (_spec.LegLength * HumanoidLocomotionModel.PelvisPushOffRatio * pushOffWeight);
 
         _rig.Hips.Position = _rig.Hips.Position.Lerp(
             _rig.VisualRoot.ToLocal(desiredPelvisWorld),
@@ -41,8 +43,16 @@ public sealed partial class HumanoidLocomotionSystem
 
     private void ApplyLegPose(HumanoidLegMotionRuntime leg, Vector3 preferredForward)
     {
-        Basis footBasis = CreateFootBasis(leg.GroundNormalWorld, preferredForward);
-        Vector3 footJointTarget = leg.CurrentSupportWorld - (footBasis * leg.Contact.SupportOffsetLocal);
+        Basis footBasis = leg.IsInStance
+            ? leg.FootBasisWorld
+            : CreateFootBasis(leg.GroundNormalWorld, preferredForward);
+        Vector3 supportOffsetLocal = leg.IsInStance
+            ? leg.ActiveSupportOffsetLocal
+            : leg.Contact.SupportOffsetLocal;
+        Vector3 supportPivotWorld = leg.IsInStance
+            ? leg.FootPivotWorld
+            : leg.CurrentSupportWorld;
+        Vector3 footJointTarget = supportPivotWorld - (footBasis * supportOffsetLocal);
         Vector3 hipWorld = _rig.Hips.ToGlobal(leg.HipOffsetFromPelvisLocal);
         Vector3 bendPlaneNormalWorld = (_rig.VisualRoot.GlobalBasis * leg.Chain.PreferredBendNormalLocal).Normalized();
 
@@ -51,8 +61,12 @@ public sealed partial class HumanoidLocomotionSystem
         leg.Rig.IsStepping = !leg.IsInStance;
         leg.Rig.StepProgress = leg.SwingProgress;
         leg.Rig.CurrentFootPosition = footJointTarget;
-        leg.Rig.PlantedFootPosition = leg.PlantedSupportWorld - (footBasis * leg.Contact.SupportOffsetLocal);
-        leg.Rig.TargetFootPosition = leg.SwingTargetWorld - (footBasis * leg.Contact.SupportOffsetLocal);
+        leg.Rig.PlantedFootPosition = leg.IsInStance
+            ? footJointTarget
+            : leg.PlantedSupportWorld - (footBasis * leg.Contact.SupportOffsetLocal);
+        leg.Rig.TargetFootPosition = leg.IsInStance
+            ? footJointTarget
+            : leg.SwingTargetWorld - (footBasis * leg.Contact.SupportOffsetLocal);
         leg.Rig.GroundNormal = leg.GroundNormalWorld;
         leg.Rig.TargetNormal = leg.TargetGroundNormalWorld;
     }
@@ -152,6 +166,21 @@ public sealed partial class HumanoidLocomotionSystem
         leg.WasInStance = false;
         leg.StanceProgress = 1.0f;
         leg.SwingProgress = 1.0f;
+        leg.StanceTimeSeconds = 0.0f;
+        leg.HeelStrikeWeight = 0.0f;
+        leg.ToeOffWeight = 0.0f;
+        leg.RearReachSaturation = 0.0f;
+        leg.ComTrailDistance = 0.0f;
+        leg.PlannedTouchdownBias = 0.0f;
+        leg.BalanceTouchdownBias = 0.0f;
+        leg.StanceFootPhase = HumanoidStanceFootPhase.FootFlat;
+        leg.ActiveSupportOffsetLocal = leg.Contact.SupportOffsetLocal;
+        leg.FootSkateDistance = 0.0f;
+        leg.LastStancePivotWorld = Vector3.Zero;
+        leg.FootBasisWorld = CreateFootBasis(leg.GroundNormalWorld, bodyForward);
+        leg.FootPivotWorld = leg.CurrentSupportWorld;
+        leg.HeelContactWorld = leg.CurrentSupportWorld + (leg.FootBasisWorld * (leg.HeelContactLocal - leg.Contact.SupportOffsetLocal));
+        leg.ToeContactWorld = leg.CurrentSupportWorld + (leg.FootBasisWorld * (leg.ToeContactLocal - leg.Contact.SupportOffsetLocal));
 
         ApplyLegPose(leg, bodyForward);
         PublishLegMetrics(leg);
@@ -164,5 +193,28 @@ public sealed partial class HumanoidLocomotionSystem
         _profiler.SetMetric($"{prefix}_stance", leg.IsInStance ? 1.0f : 0.0f);
         _profiler.SetMetric($"{prefix}_swing_t", leg.SwingProgress);
         _profiler.SetMetric($"{prefix}_forward_offset", (leg.CurrentSupportWorld - _rig.Hips.GlobalPosition).Dot(_lastFacingForward));
+        _profiler.SetMetric($"{prefix}_heel_strike", leg.HeelStrikeWeight);
+        _profiler.SetMetric($"{prefix}_toe_off", leg.ToeOffWeight);
+        _profiler.SetMetric($"{prefix}_rear_reach", leg.RearReachSaturation);
+        _profiler.SetMetric($"{prefix}_com_trail", leg.ComTrailDistance);
+        _profiler.SetMetric($"{prefix}_touchdown_bias", leg.PlannedTouchdownBias);
+        _profiler.SetMetric($"{prefix}_touchdown_bias_balance", leg.BalanceTouchdownBias);
+        _profiler.SetMetric($"{prefix}_toe_off_blend", leg.ToeOffWeight);
+        _profiler.SetMetric($"{prefix}_foot_skate_distance", leg.FootSkateDistance);
+        _profiler.SetMetric($"{prefix}_foot_phase", (float)leg.StanceFootPhase);
+        _profiler.SetMetric($"{prefix}_heel_y", leg.HeelContactWorld.Y);
+        _profiler.SetMetric($"{prefix}_toe_y", leg.ToeContactWorld.Y);
+        _profiler.SetMetric($"rear_reach_saturation_{prefix}", leg.RearReachSaturation);
+        _profiler.SetMetric($"touchdown_bias_balance_{prefix}", leg.BalanceTouchdownBias);
+    }
+
+    private static float ResolveSupportWeight(HumanoidLegMotionRuntime leg)
+    {
+        if (!leg.IsInStance)
+        {
+            return 0.24f;
+        }
+
+        return Mathf.Lerp(1.08f, 0.62f, leg.ToeOffWeight);
     }
 }
