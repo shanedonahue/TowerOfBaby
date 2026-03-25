@@ -303,7 +303,22 @@ public partial class TerrainWorld : Node3D
         }
 
         int farRadius = Mathf.CeilToInt(camera.Far / _settings.ChunkSize);
-        return Mathf.Max(radius, farRadius);
+        int budgetRadius = GetBudgetedColumnRadius(Mathf.Max(MaxActiveColumns, MaxWarmColumns));
+        return Mathf.Clamp(farRadius, radius, Mathf.Max(radius, budgetRadius));
+    }
+
+    private static int GetBudgetedColumnRadius(int maxColumns)
+    {
+        if (maxColumns <= 0)
+        {
+            return 1;
+        }
+
+        // Keep the candidate search area proportional to the number of columns we can
+        // actually keep active, otherwise a large camera far plane turns every refresh
+        // into a horizon-priority brute force pass over thousands of columns.
+        float area = maxColumns / Mathf.Pi;
+        return Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(area)) + 2);
     }
 
     public void ApplyBrush(Vector3 worldCenter, bool additive)

@@ -1,6 +1,7 @@
 using Godot;
 using System;
 using System.Diagnostics;
+using TowerOfBaby.Entities.Motion;
 using TowerOfBaby.Terrain;
 
 namespace TowerOfBaby.UI;
@@ -24,6 +25,7 @@ public partial class FpsOverlay : CanvasLayer
     private long _churnHitsDelta;
     private long _churnMissesDelta;
     private long _churnEvictionsDelta;
+    private ILocomotionTelemetrySource _locomotionTelemetrySource = null!;
 
     public override void _Ready()
     {
@@ -40,6 +42,7 @@ public partial class FpsOverlay : CanvasLayer
         _label.Text = "FPS: --";
         _label.AutowrapMode = TextServer.AutowrapMode.Off;
         _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("terrain_world") as TerrainWorld;
+        _locomotionTelemetrySource = ResolveLocomotionTelemetrySource();
     }
 
     public override void _Process(double delta)
@@ -69,6 +72,8 @@ public partial class FpsOverlay : CanvasLayer
         float workingSetMiB = GetWorkingSetMiB();
         TerrainWorldProfileSnapshot snapshot = _terrainWorld?.GetProfileSnapshot();
         string terrainStats = _terrainWorld?.GetDebugStats() ?? "Voxel stats unavailable";
+        _locomotionTelemetrySource ??= ResolveLocomotionTelemetrySource();
+        LocomotionTelemetrySnapshot locomotionSnapshot = _locomotionTelemetrySource?.GetLocomotionTelemetrySnapshot();
 
         _churnAccumulatorSeconds += delta;
         if (snapshot != null && _churnAccumulatorSeconds >= 1.0)
@@ -89,7 +94,8 @@ public partial class FpsOverlay : CanvasLayer
         _label.Text =
             $"FPS: {fps} | avg {avgFrameMs:0.00} ms | worst {worstFrameMs:0.00} ms | uptime {_uptimeSeconds:0.0}s | RSS {workingSetMiB:0} MiB | GC {gcMiB:0} MiB\n" +
             $"{summary}\n" +
-            $"{terrainStats}";
+            $"{terrainStats}\n" +
+            $"{LocomotionMetrics.BuildOverlayText(locomotionSnapshot)}";
     }
 
     private static float GetWorkingSetMiB()
@@ -113,5 +119,10 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         return (float)hits / total * 100.0f;
+    }
+
+    private ILocomotionTelemetrySource ResolveLocomotionTelemetrySource()
+    {
+        return GetTree().GetFirstNodeInGroup("locomotion_telemetry_source") as ILocomotionTelemetrySource;
     }
 }

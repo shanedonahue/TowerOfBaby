@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using TowerOfBaby.Entities.Motion;
 using TowerOfBaby.Terrain;
 
 namespace TowerOfBaby.Debugging;
@@ -40,10 +41,12 @@ public partial class PerformanceRunLogger : Node
     private long _previousCacheHits;
     private long _previousCacheMisses;
     private long _previousEvictions;
+    private ILocomotionTelemetrySource _locomotionTelemetrySource = null!;
 
     public override void _Ready()
     {
         _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("terrain_world") as TerrainWorld;
+        _locomotionTelemetrySource = ResolveLocomotionTelemetrySource();
         TreeExiting += HandleTreeExiting;
     }
 
@@ -62,6 +65,8 @@ public partial class PerformanceRunLogger : Node
         _maxFps = Mathf.Max(_maxFps, fps);
 
         TerrainWorldProfileSnapshot snapshot = _terrainWorld?.GetProfileSnapshot();
+        _locomotionTelemetrySource ??= ResolveLocomotionTelemetrySource();
+        LocomotionTelemetrySnapshot locomotionSnapshot = _locomotionTelemetrySource?.GetLocomotionTelemetrySnapshot();
         if (snapshot != null)
         {
             _sampleTotalLoadCount += snapshot.LastChunkLoadCount;
@@ -114,7 +119,8 @@ public partial class PerformanceRunLogger : Node
             _sampleCollisionMs,
             snapshot == null ? 0 : snapshot.CacheHits - _previousCacheHits,
             snapshot == null ? 0 : snapshot.CacheMisses - _previousCacheMisses,
-            snapshot == null ? 0 : snapshot.EvictedChunks - _previousEvictions);
+            snapshot == null ? 0 : snapshot.EvictedChunks - _previousEvictions,
+            locomotionSnapshot);
         _sampleAccumulator = 0.0;
         _sampleFrameMsAccum = 0.0;
         _sampleFrameCount = 0;
@@ -191,10 +197,26 @@ public partial class PerformanceRunLogger : Node
             float averageFrameMs = ComputeAverageFrameMs();
             float p95FrameMs = ComputePercentileFrameMs(0.95f);
             float maxFrameMs = ComputePercentileFrameMs(1.0f);
+            float peakFootSkate = 0.0f;
+            int leftStepCount = 0;
+            int rightStepCount = 0;
+            float lastLeftStepDuration = 0.0f;
+            float lastRightStepDuration = 0.0f;
 
             foreach (SamplePoint sample in _samples)
             {
                 averageFps += sample.Fps;
+                if (sample.LocomotionSnapshot != null)
+                {
+                    peakFootSkate = Mathf.Max(
+                        peakFootSkate,
+                        Mathf.Max(sample.LocomotionSnapshot.LeftFoot.FootSkateDistance, sample.LocomotionSnapshot.RightFoot.FootSkateDistance));
+                    leftStepCount = Mathf.Max(leftStepCount, sample.LocomotionSnapshot.LeftFoot.StepCount);
+                    rightStepCount = Mathf.Max(rightStepCount, sample.LocomotionSnapshot.RightFoot.StepCount);
+                    lastLeftStepDuration = Mathf.Max(lastLeftStepDuration, sample.LocomotionSnapshot.LeftFoot.LastStepDuration);
+                    lastRightStepDuration = Mathf.Max(lastRightStepDuration, sample.LocomotionSnapshot.RightFoot.LastStepDuration);
+                }
+
                 if (sample.Snapshot == null)
                 {
                     continue;
@@ -237,18 +259,25 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"AccumulatedChunkLoadMs: {totalChunkLoadMs:0.00}");
             builder.AppendLine($"AccumulatedRenderRebuildMs: {totalRenderMs:0.00}");
             builder.AppendLine($"AccumulatedCollisionRebuildMs: {totalCollisionMs:0.00}");
+            builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");
+            builder.AppendLine($"LocomotionRightStepCount: {rightStepCount}");
+            builder.AppendLine($"LocomotionPeakFootSkate: {peakFootSkate:0.000}");
+            builder.AppendLine($"LocomotionLeftLastStepDuration: {lastLeftStepDuration:0.000}");
+            builder.AppendLine($"LocomotionRightLastStepDuration: {lastRightStepDuration:0.000}");
         }
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,active_chunks,loaded_chunks,desired_chunks,pending_loads,running_loads,pending_activation,dirty_render,dirty_collision,load_count,load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,render_count,render_ms,collision_count,collision_ms,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,initial_load_progress,initial_load_complete");
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,active_chunks,loaded_chunks,desired_chunks,pending_loads,running_loads,pending_activation,dirty_render,dirty_collision,load_count,load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,render_count,render_ms,collision_count,collision_ms,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
             TerrainWorldProfileSnapshot snapshot = sample.Snapshot;
             if (snapshot == null)
             {
-                builder.AppendLine($"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},,,,,,,,,,,,,,,,,,,,,,,,,");
+                builder.AppendLine(
+                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},,,,,,,,,,,,,,,,,,,,,,,,," +
+                    $",{LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)}");
                 continue;
             }
 
@@ -289,7 +318,8 @@ public partial class PerformanceRunLogger : Node
                 sample.CacheMissesDelta.ToString(CultureInfo.InvariantCulture),
                 sample.EvictionsDelta.ToString(CultureInfo.InvariantCulture),
                 snapshot.InitialLoadProgress.ToString("0.000", CultureInfo.InvariantCulture),
-                snapshot.InitialLoadComplete ? "1" : "0"));
+                snapshot.InitialLoadComplete ? "1" : "0",
+                LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)));
         }
 
         file.StoreString(builder.ToString());
@@ -340,6 +370,11 @@ public partial class PerformanceRunLogger : Node
         return bytes / (1024.0f * 1024.0f);
     }
 
+    private ILocomotionTelemetrySource ResolveLocomotionTelemetrySource()
+    {
+        return GetTree().GetFirstNodeInGroup("locomotion_telemetry_source") as ILocomotionTelemetrySource;
+    }
+
     private sealed record SamplePoint(
         double TimeSeconds,
         int Fps,
@@ -365,7 +400,8 @@ public partial class PerformanceRunLogger : Node
         double CollisionMs,
         long CacheHitsDelta,
         long CacheMissesDelta,
-        long EvictionsDelta);
+        long EvictionsDelta,
+        LocomotionTelemetrySnapshot LocomotionSnapshot);
 
     private sealed record MemoryUsageSnapshot(
         float WorkingSetMiB,
