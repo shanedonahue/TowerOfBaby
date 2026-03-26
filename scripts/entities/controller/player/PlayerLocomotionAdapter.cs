@@ -26,12 +26,14 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public NodePath RightLowerArmPath = new("VisualRoot/RightLowerArm");
     [Export] public NodePath RightHandPath = new("VisualRoot/RightHand");
     [Export] public NodePath WeaponGripPath = new("VisualRoot/RightHand/WeaponGrip");
+    [Export] public NodePath WeaponMountPath = new("VisualRoot/RightHand/WeaponGrip/SwordPivot");
     [Export] public NodePath CameraYawPath = new("CameraYaw");
     [Export] public NodePath CameraPitchPath = new("CameraYaw/CameraPitch");
     [Export] public NodePath CameraBoomPath = new("CameraYaw/CameraPitch/SpringArm3D");
     [Export] public NodePath DebugPath = new("LocomotionDebug");
     [Export] public NodePath AttackDebugPath = new("AttackDebug");
     [Export] public NodePath TerrainWorldPath = new("../TerrainWorld");
+    [Export(PropertyHint.File, "*.glb,*.tscn")] public string WeaponAssetPath = "res://assets/character/equipment/weapon/Sword.glb";
 
     [ExportGroup("Movement")]
     [Export] public float MaxGroundSpeed = 4.4f;
@@ -124,6 +126,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     private MeshInstance3D _rightLowerArm = null!;
     private MeshInstance3D _rightHand = null!;
     private Node3D _weaponGrip = null!;
+    private WeaponVisualMount _weaponMount = null!;
     private Node3D _cameraYaw = null!;
     private Node3D _cameraPitch = null!;
     private SpringArm3D _cameraBoom = null!;
@@ -158,6 +161,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
         _rightLowerArm = GetNode<MeshInstance3D>(RightLowerArmPath);
         _rightHand = GetNode<MeshInstance3D>(RightHandPath);
         _weaponGrip = GetNode<Node3D>(WeaponGripPath);
+        _weaponMount = GetNodeOrNull<WeaponVisualMount>(WeaponMountPath);
         _cameraYaw = GetNode<Node3D>(CameraYawPath);
         _cameraPitch = GetNode<Node3D>(CameraPitchPath);
         _cameraBoom = GetNode<SpringArm3D>(CameraBoomPath);
@@ -231,6 +235,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
 
         _attackDefinition = BuildAttackDefinition();
         _attackMotor = new PlayerAttackMotor(_attackDefinition);
+        EnsureWeaponAttachment();
 
         float initialYaw = Mathf.Atan2((-GlobalTransform.Basis.Z).X, (-GlobalTransform.Basis.Z).Z);
         _inputDriver = new PlayerInputDriver(
@@ -312,6 +317,67 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
         {
             GD.Print(
                 $"Attack blocked | active {_attackMotor.IsActive} | cooldown {_attackMotor.CooldownRemaining:0.00}s");
+        }
+    }
+
+    private void EnsureWeaponAttachment()
+    {
+        if (_weaponGrip == null)
+        {
+            GD.PushError($"Weapon setup failed | WeaponGrip not found at '{WeaponGripPath}' on {GetPath()}.");
+            return;
+        }
+
+        GD.Print($"Weapon setup | weapon grip found at {_weaponGrip.GetPath()}");
+
+        PackedScene swordAsset = ResourceLoader.Load<PackedScene>(WeaponAssetPath);
+        if (swordAsset == null)
+        {
+            GD.PushError($"Weapon setup failed | sword asset could not be loaded from '{WeaponAssetPath}'.");
+            return;
+        }
+
+        GD.Print($"Weapon setup | sword asset loaded from {WeaponAssetPath}");
+
+        if (_weaponMount == null)
+        {
+            GD.PushError($"Weapon setup failed | WeaponVisualMount not found at '{WeaponMountPath}'.");
+            return;
+        }
+
+        Node existingSword = _weaponMount.GetNodeOrNull<Node>("Sword");
+        if (existingSword != null)
+        {
+            _weaponMount.RemoveChild(existingSword);
+            existingSword.QueueFree();
+        }
+
+        Node loadedSwordScene = swordAsset.Instantiate();
+        if (loadedSwordScene == null)
+        {
+            GD.PushError($"Weapon setup failed | instancing '{WeaponAssetPath}' returned null.");
+            return;
+        }
+
+        Node3D swordRoot = new()
+        {
+            Name = "Sword"
+        };
+        _weaponMount.AddChild(swordRoot);
+        swordRoot.AddChild(loadedSwordScene);
+
+        if (loadedSwordScene is Node3D loadedSwordRoot3D)
+        {
+            loadedSwordRoot3D.Position = Vector3.Zero;
+            loadedSwordRoot3D.Rotation = Vector3.Zero;
+            loadedSwordRoot3D.Scale = Vector3.One;
+        }
+
+        GD.Print($"Weapon setup | sword instance created at {swordRoot.GetPath()}");
+
+        if (!_weaponMount.RefreshMount())
+        {
+            GD.PushError($"Weapon setup failed | WeaponVisualMount could not fit sword child under {_weaponMount.GetPath()}.");
         }
     }
 

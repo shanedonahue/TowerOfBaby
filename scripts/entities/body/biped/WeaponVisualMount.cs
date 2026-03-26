@@ -7,6 +7,7 @@ public partial class WeaponVisualMount : Node3D
 {
     [Export] public NodePath WeaponRootPath = new("Sword");
     [Export] public float TargetLength = 1.45f;
+    [Export(PropertyHint.Range, "0.5,4.0,0.05")] public float ThicknessScale = 1.0f;
     [Export(PropertyHint.Range, "0.0,0.5,0.01")] public float GripFromBack = 0.2f;
     [Export] public bool BackAxisUsesPositiveDirection = true;
     [Export] public Vector3 WeaponRotationDegrees = new(90.0f, 0.0f, 0.0f);
@@ -18,32 +19,55 @@ public partial class WeaponVisualMount : Node3D
 
     public override void _Ready()
     {
-        _weaponRoot = GetNodeOrNull<Node3D>(WeaponRootPath);
-        if (_weaponRoot == null)
-        {
-            return;
-        }
-
-        FitWeaponToGrip();
+        RefreshMount();
     }
 
-    private void FitWeaponToGrip()
+    public bool RefreshMount()
+    {
+        Node weaponNode = GetNodeOrNull<Node>(WeaponRootPath);
+        if (weaponNode == null)
+        {
+            GD.PushError($"Weapon mount failed | {GetPath()} could not find child '{WeaponRootPath}'.");
+            return false;
+        }
+
+        GD.Print($"Weapon mount | sword child found by WeaponVisualMount at {weaponNode.GetPath()}");
+
+        _weaponRoot = weaponNode as Node3D;
+        if (_weaponRoot == null)
+        {
+            GD.PushError($"Weapon mount failed | child '{weaponNode.Name}' at {weaponNode.GetPath()} is not a Node3D.");
+            return false;
+        }
+
+        if (!FitWeaponToGrip())
+        {
+            GD.PushError($"Weapon mount failed | no mesh bounds found under {_weaponRoot.GetPath()}.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool FitWeaponToGrip()
     {
         if (!TryGetCombinedLocalAabb(_weaponRoot, out Aabb localBounds))
         {
-            return;
+            return false;
         }
 
         int majorAxis = GetLargestAxis(localBounds.Size);
         float majorSize = GetAxisValue(localBounds.Size, majorAxis);
         if (majorSize <= 0.0001f)
         {
-            return;
+            GD.PushError($"Weapon mount failed | computed zero-sized bounds for {_weaponRoot.GetPath()}.");
+            return false;
         }
 
         float scale = TargetLength / majorSize;
         _weaponRoot.RotationDegrees = WeaponRotationDegrees;
-        _weaponRoot.Scale = Vector3.One * scale;
+        Vector3 scaleVector = CreateScaleVector(majorAxis, scale, scale * Mathf.Max(ThicknessScale, 0.01f));
+        _weaponRoot.Scale = scaleVector;
 
         Basis rotationBasis = _weaponRoot.Transform.Basis.Orthonormalized();
         float centerX = localBounds.Position.X + (localBounds.Size.X * 0.5f);
@@ -73,7 +97,7 @@ public partial class WeaponVisualMount : Node3D
         for (int axis = 0; axis < 3; axis++)
         {
             Vector3 axisDirection = rotationBasis * localAxes[axis];
-            offset -= axisDirection * (alignmentValues[axis] * scale);
+            offset -= axisDirection * (alignmentValues[axis] * GetAxisValue(scaleVector, axis));
         }
 
         _weaponRoot.Position = offset + FineOffset;
@@ -86,8 +110,10 @@ public partial class WeaponVisualMount : Node3D
         if (EnableDebugLog)
         {
             GD.Print(
-                $"Weapon mount | node {_weaponRoot.Name} | bounds {localBounds} | major_axis {majorAxis} | scale {scale:0.00} | position {_weaponRoot.Position} | rotation {_weaponRoot.RotationDegrees}");
+                $"Weapon mount | node {_weaponRoot.Name} | bounds {localBounds} | major_axis {majorAxis} | scale {_weaponRoot.Scale} | position {_weaponRoot.Position} | rotation {_weaponRoot.RotationDegrees}");
         }
+
+        return true;
     }
 
     private static bool TryGetCombinedLocalAabb(Node3D root, out Aabb combined)
@@ -178,6 +204,16 @@ public partial class WeaponVisualMount : Node3D
             0 => value.X,
             1 => value.Y,
             _ => value.Z
+        };
+    }
+
+    private static Vector3 CreateScaleVector(int majorAxis, float majorScale, float minorScale)
+    {
+        return majorAxis switch
+        {
+            0 => new Vector3(majorScale, minorScale, minorScale),
+            1 => new Vector3(minorScale, majorScale, minorScale),
+            _ => new Vector3(minorScale, minorScale, majorScale)
         };
     }
 }

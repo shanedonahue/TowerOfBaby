@@ -119,7 +119,8 @@ material_override = SubResource("StandardMaterial3D_right")
 
 [node name="SwordPivot" type="Node3D" parent="VisualRoot/RightHand/WeaponGrip"]
 script = ExtResource("5_weapon_mount")
-TargetLength = 1.7
+TargetLength = 6.4
+ThicknessScale = 2.15
 GripFromBack = 0.22
 FineOffset = Vector3(0, 0.02, -0.02)
 
