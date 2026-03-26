@@ -28,6 +28,8 @@ public partial class PerformanceRunLogger : Node
     private double _sampleStartupLoadMs;
     private int _samplePersistedLoadCount;
     private double _samplePersistedLoadMs;
+    private int _sampleRamLoadCount;
+    private double _sampleRamLoadMs;
     private int _sampleGeneratedLoadCount;
     private double _sampleGeneratedLoadMs;
     private int _sampleAttachCount;
@@ -36,6 +38,11 @@ public partial class PerformanceRunLogger : Node
     private double _sampleRenderMs;
     private int _sampleCollisionCount;
     private double _sampleCollisionMs;
+    private int _sampleReleaseCount;
+    private double _sampleReleaseMs;
+    private double _sampleSearchMs;
+    private double _samplePriorityEvalMs;
+    private double _sampleVisibilityMs;
     private int _minFps = int.MaxValue;
     private int _maxFps;
     private long _previousCacheHits;
@@ -75,14 +82,21 @@ public partial class PerformanceRunLogger : Node
             _sampleStartupLoadMs += snapshot.LastStartupChunkLoadMs;
             _samplePersistedLoadCount += snapshot.LastPersistedChunkLoadCount;
             _samplePersistedLoadMs += snapshot.LastPersistedChunkLoadMs;
+            _sampleRamLoadCount += snapshot.LastRamCacheLoadCount;
+            _sampleRamLoadMs += snapshot.LastRamCacheLoadMs;
             _sampleGeneratedLoadCount += snapshot.LastGeneratedChunkLoadCount;
             _sampleGeneratedLoadMs += snapshot.LastGeneratedChunkLoadMs;
             _sampleAttachCount += snapshot.LastChunkActivationCount;
             _sampleAttachMs += snapshot.LastChunkActivationMs;
+            _sampleReleaseCount += snapshot.LastChunkReleaseCount;
+            _sampleReleaseMs += snapshot.LastChunkReleaseMs;
             _sampleRenderCount += snapshot.LastVisualRebuildCount;
             _sampleRenderMs += snapshot.LastVisualRebuildMs;
             _sampleCollisionCount += snapshot.LastCollisionRebuildCount;
             _sampleCollisionMs += snapshot.LastCollisionRebuildMs;
+            _sampleSearchMs += snapshot.LastDesiredSearchMs;
+            _samplePriorityEvalMs += snapshot.LastPriorityEvaluationMs;
+            _sampleVisibilityMs += snapshot.LastVisibilityHeuristicMs;
         }
 
         if (_sampleAccumulator < SampleIntervalSeconds)
@@ -109,14 +123,21 @@ public partial class PerformanceRunLogger : Node
             _sampleStartupLoadMs,
             _samplePersistedLoadCount,
             _samplePersistedLoadMs,
+            _sampleRamLoadCount,
+            _sampleRamLoadMs,
             _sampleGeneratedLoadCount,
             _sampleGeneratedLoadMs,
             _sampleAttachCount,
             _sampleAttachMs,
+            _sampleReleaseCount,
+            _sampleReleaseMs,
             _sampleRenderCount,
             _sampleRenderMs,
             _sampleCollisionCount,
             _sampleCollisionMs,
+            _sampleSearchMs,
+            _samplePriorityEvalMs,
+            _sampleVisibilityMs,
             snapshot == null ? 0 : snapshot.CacheHits - _previousCacheHits,
             snapshot == null ? 0 : snapshot.CacheMisses - _previousCacheMisses,
             snapshot == null ? 0 : snapshot.EvictedChunks - _previousEvictions,
@@ -131,14 +152,21 @@ public partial class PerformanceRunLogger : Node
         _sampleStartupLoadMs = 0.0;
         _samplePersistedLoadCount = 0;
         _samplePersistedLoadMs = 0.0;
+        _sampleRamLoadCount = 0;
+        _sampleRamLoadMs = 0.0;
         _sampleGeneratedLoadCount = 0;
         _sampleGeneratedLoadMs = 0.0;
         _sampleAttachCount = 0;
         _sampleAttachMs = 0.0;
+        _sampleReleaseCount = 0;
+        _sampleReleaseMs = 0.0;
         _sampleRenderCount = 0;
         _sampleRenderMs = 0.0;
         _sampleCollisionCount = 0;
         _sampleCollisionMs = 0.0;
+        _sampleSearchMs = 0.0;
+        _samplePriorityEvalMs = 0.0;
+        _sampleVisibilityMs = 0.0;
 
         if (snapshot != null)
         {
@@ -182,18 +210,35 @@ public partial class PerformanceRunLogger : Node
             int peakLoadedChunks = 0;
             int peakActiveChunks = 0;
             int peakPendingLoads = 0;
+            int peakRamCacheChunks = 0;
             double totalChunkLoadMs = 0.0;
+            double totalReleaseMs = 0.0;
             double totalRenderMs = 0.0;
             double totalCollisionMs = 0.0;
+            double totalSearchMs = 0.0;
+            double totalPriorityEvalMs = 0.0;
+            double totalVisibilityMs = 0.0;
             int totalStartupLoads = 0;
             int totalPersistedLoads = 0;
             int totalGeneratedLoads = 0;
+            int totalRamLoads = 0;
+            int totalReleases = 0;
             double totalStartupLoadMs = 0.0;
             double totalPersistedLoadMs = 0.0;
             double totalGeneratedLoadMs = 0.0;
+            double totalRamLoadMs = 0.0;
             float peakWorkingSetMiB = 0.0f;
             float peakPrivateMemoryMiB = 0.0f;
             float peakManagedHeapMiB = 0.0f;
+            int peakFrontier = 0;
+            int peakToAdd = 0;
+            int peakToRelease = 0;
+            int peakStartupSnapshotChunks = 0;
+            int peakStartupDesiredCoverage = 0;
+            int peakPersistedChunkRecords = 0;
+            long peakSearchInvalidations = 0;
+            long peakFrontierCompactions = 0;
+            long peakStartupPromotionWrites = 0;
             float averageFrameMs = ComputeAverageFrameMs();
             float p95FrameMs = ComputePercentileFrameMs(0.95f);
             float maxFrameMs = ComputePercentileFrameMs(1.0f);
@@ -225,18 +270,35 @@ public partial class PerformanceRunLogger : Node
                 peakLoadedChunks = Mathf.Max(peakLoadedChunks, sample.Snapshot.LoadedChunkCount);
                 peakActiveChunks = Mathf.Max(peakActiveChunks, sample.Snapshot.ActiveChunkCount);
                 peakPendingLoads = Mathf.Max(peakPendingLoads, sample.Snapshot.PendingLoadCount + sample.Snapshot.RunningLoadCount);
+                peakRamCacheChunks = Mathf.Max(peakRamCacheChunks, sample.Snapshot.RamCacheChunkCount);
+                peakFrontier = Mathf.Max(peakFrontier, sample.Snapshot.FrontierSize);
+                peakToAdd = Mathf.Max(peakToAdd, sample.Snapshot.ToAddCount);
+                peakToRelease = Mathf.Max(peakToRelease, sample.Snapshot.ToReleaseCount);
+                peakStartupSnapshotChunks = Mathf.Max(peakStartupSnapshotChunks, sample.Snapshot.StartupSnapshotChunkCount);
+                peakStartupDesiredCoverage = Mathf.Max(peakStartupDesiredCoverage, sample.Snapshot.StartupDesiredCoverageCount);
+                peakPersistedChunkRecords = Mathf.Max(peakPersistedChunkRecords, sample.Snapshot.PersistedChunkRecordCount);
+                peakSearchInvalidations = Math.Max(peakSearchInvalidations, sample.Snapshot.SearchInvalidationCount);
+                peakFrontierCompactions = Math.Max(peakFrontierCompactions, sample.Snapshot.FrontierCompactionCount);
+                peakStartupPromotionWrites = Math.Max(peakStartupPromotionWrites, sample.Snapshot.StartupPromotionWrites);
                 peakWorkingSetMiB = Mathf.Max(peakWorkingSetMiB, sample.WorkingSetMiB);
                 peakPrivateMemoryMiB = Mathf.Max(peakPrivateMemoryMiB, sample.PrivateMemoryMiB);
                 peakManagedHeapMiB = Mathf.Max(peakManagedHeapMiB, sample.ManagedHeapMiB);
                 totalStartupLoads += sample.StartupLoadCount;
                 totalPersistedLoads += sample.PersistedLoadCount;
+                totalRamLoads += sample.RamLoadCount;
                 totalGeneratedLoads += sample.GeneratedLoadCount;
                 totalStartupLoadMs += sample.StartupLoadMs;
                 totalPersistedLoadMs += sample.PersistedLoadMs;
+                totalRamLoadMs += sample.RamLoadMs;
                 totalGeneratedLoadMs += sample.GeneratedLoadMs;
                 totalChunkLoadMs += sample.TotalLoadMs;
+                totalReleases += sample.ReleaseCount;
+                totalReleaseMs += sample.ReleaseMs;
                 totalRenderMs += sample.RenderMs;
                 totalCollisionMs += sample.CollisionMs;
+                totalSearchMs += sample.SearchMs;
+                totalPriorityEvalMs += sample.PriorityEvalMs;
+                totalVisibilityMs += sample.VisibilityMs;
             }
 
             averageFps /= _samples.Count;
@@ -250,15 +312,32 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"PeakLoadedChunks: {peakLoadedChunks}");
             builder.AppendLine($"PeakActiveChunks: {peakActiveChunks}");
             builder.AppendLine($"PeakPendingLoads: {peakPendingLoads}");
+            builder.AppendLine($"PeakRamCacheChunks: {peakRamCacheChunks}");
+            builder.AppendLine($"PeakFrontier: {peakFrontier}");
+            builder.AppendLine($"PeakToAdd: {peakToAdd}");
+            builder.AppendLine($"PeakToRelease: {peakToRelease}");
+            builder.AppendLine($"PeakStartupSnapshotChunks: {peakStartupSnapshotChunks}");
+            builder.AppendLine($"PeakStartupDesiredCoverage: {peakStartupDesiredCoverage}");
+            builder.AppendLine($"PeakPersistedChunkRecords: {peakPersistedChunkRecords}");
+            builder.AppendLine($"SearchInvalidations: {peakSearchInvalidations}");
+            builder.AppendLine($"FrontierCompactions: {peakFrontierCompactions}");
+            builder.AppendLine($"RamChunkLoads: {totalRamLoads}");
             builder.AppendLine($"StartupChunkLoads: {totalStartupLoads}");
             builder.AppendLine($"PersistedChunkLoads: {totalPersistedLoads}");
             builder.AppendLine($"GeneratedChunkLoads: {totalGeneratedLoads}");
+            builder.AppendLine($"ChunkReleases: {totalReleases}");
+            builder.AppendLine($"StartupPromotionWrites: {peakStartupPromotionWrites}");
+            builder.AppendLine($"AccumulatedRamChunkLoadMs: {totalRamLoadMs:0.00}");
             builder.AppendLine($"AccumulatedStartupChunkLoadMs: {totalStartupLoadMs:0.00}");
             builder.AppendLine($"AccumulatedPersistedChunkLoadMs: {totalPersistedLoadMs:0.00}");
             builder.AppendLine($"AccumulatedGeneratedChunkLoadMs: {totalGeneratedLoadMs:0.00}");
             builder.AppendLine($"AccumulatedChunkLoadMs: {totalChunkLoadMs:0.00}");
+            builder.AppendLine($"AccumulatedChunkReleaseMs: {totalReleaseMs:0.00}");
             builder.AppendLine($"AccumulatedRenderRebuildMs: {totalRenderMs:0.00}");
             builder.AppendLine($"AccumulatedCollisionRebuildMs: {totalCollisionMs:0.00}");
+            builder.AppendLine($"AccumulatedDesiredSearchMs: {totalSearchMs:0.00}");
+            builder.AppendLine($"AccumulatedPriorityEvalMs: {totalPriorityEvalMs:0.00}");
+            builder.AppendLine($"AccumulatedVisibilityMs: {totalVisibilityMs:0.00}");
             builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");
             builder.AppendLine($"LocomotionRightStepCount: {rightStepCount}");
             builder.AppendLine($"LocomotionPeakFootSkate: {peakFootSkate:0.000}");
@@ -268,7 +347,7 @@ public partial class PerformanceRunLogger : Node
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,active_chunks,loaded_chunks,desired_chunks,pending_loads,running_loads,pending_activation,dirty_render,dirty_collision,load_count,load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,render_count,render_ms,collision_count,collision_ms,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,collision_count,collision_ms,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
@@ -276,7 +355,7 @@ public partial class PerformanceRunLogger : Node
             if (snapshot == null)
             {
                 builder.AppendLine(
-                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},,,,,,,,,,,,,,,,,,,,,,,,," +
+                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
                     $",{LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)}");
                 continue;
             }
@@ -290,15 +369,26 @@ public partial class PerformanceRunLogger : Node
                 sample.PrivateMemoryMiB.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.ManagedHeapMiB.ToString("0.00", CultureInfo.InvariantCulture),
                 snapshot.ActiveChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.ResidentChunkCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.LoadedChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.RamCacheChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.DesiredColumnCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.DesiredChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.ToAddCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.ToReleaseCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.FrontierSize.ToString(CultureInfo.InvariantCulture),
+                snapshot.VisitedCandidateCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.PendingLoadCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.RunningLoadCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.PendingActivationCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.PreparedChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.InFlightChunkCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.DirtyRenderCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.DirtyCollisionCount.ToString(CultureInfo.InvariantCulture),
                 sample.TotalLoadCount.ToString(CultureInfo.InvariantCulture),
                 sample.TotalLoadMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.RamLoadCount.ToString(CultureInfo.InvariantCulture),
+                sample.RamLoadMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.StartupLoadCount.ToString(CultureInfo.InvariantCulture),
                 sample.StartupLoadMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.PersistedLoadCount.ToString(CultureInfo.InvariantCulture),
@@ -307,16 +397,35 @@ public partial class PerformanceRunLogger : Node
                 sample.GeneratedLoadMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.AttachCount.ToString(CultureInfo.InvariantCulture),
                 sample.AttachMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.ReleaseCount.ToString(CultureInfo.InvariantCulture),
+                sample.ReleaseMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.RenderCount.ToString(CultureInfo.InvariantCulture),
                 sample.RenderMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.CollisionCount.ToString(CultureInfo.InvariantCulture),
                 sample.CollisionMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.SearchMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.PriorityEvalMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.VisibilityMs.ToString("0.00", CultureInfo.InvariantCulture),
+                snapshot.ResidentReuseHits.ToString(CultureInfo.InvariantCulture),
+                snapshot.RamCacheHits.ToString(CultureInfo.InvariantCulture),
+                snapshot.StartupSnapshotHits.ToString(CultureInfo.InvariantCulture),
+                snapshot.DatabaseHits.ToString(CultureInfo.InvariantCulture),
+                snapshot.GenerationFallbacks.ToString(CultureInfo.InvariantCulture),
+                snapshot.PersistedChunkRecordCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.StartupSnapshotChunkCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.StartupDesiredCoverageCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.SearchInvalidationCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.StalePriorityRefreshCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.FrontierCompactionCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.DirtyPersistWrites.ToString(CultureInfo.InvariantCulture),
+                snapshot.StartupPromotionWrites.ToString(CultureInfo.InvariantCulture),
                 snapshot.CacheHits.ToString(CultureInfo.InvariantCulture),
                 snapshot.CacheMisses.ToString(CultureInfo.InvariantCulture),
                 snapshot.EvictedChunks.ToString(CultureInfo.InvariantCulture),
                 sample.CacheHitsDelta.ToString(CultureInfo.InvariantCulture),
                 sample.CacheMissesDelta.ToString(CultureInfo.InvariantCulture),
                 sample.EvictionsDelta.ToString(CultureInfo.InvariantCulture),
+                snapshot.SearchThrottleState,
                 snapshot.InitialLoadProgress.ToString("0.000", CultureInfo.InvariantCulture),
                 snapshot.InitialLoadComplete ? "1" : "0",
                 LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)));
@@ -390,14 +499,21 @@ public partial class PerformanceRunLogger : Node
         double StartupLoadMs,
         int PersistedLoadCount,
         double PersistedLoadMs,
+        int RamLoadCount,
+        double RamLoadMs,
         int GeneratedLoadCount,
         double GeneratedLoadMs,
         int AttachCount,
         double AttachMs,
+        int ReleaseCount,
+        double ReleaseMs,
         int RenderCount,
         double RenderMs,
         int CollisionCount,
         double CollisionMs,
+        double SearchMs,
+        double PriorityEvalMs,
+        double VisibilityMs,
         long CacheHitsDelta,
         long CacheMissesDelta,
         long EvictionsDelta,

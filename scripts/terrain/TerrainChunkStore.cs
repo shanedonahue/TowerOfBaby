@@ -91,6 +91,34 @@ public sealed class TerrainChunkStore
         }
     }
 
+    public HashSet<Vector3I> LoadPersistedChunkKeys()
+    {
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT chunk_x, chunk_y, chunk_z
+                FROM chunks
+                """;
+
+            using SqliteDataReader reader = command.ExecuteReader();
+            HashSet<Vector3I> keys = new();
+            while (reader.Read())
+            {
+                keys.Add(new Vector3I(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2)));
+            }
+
+            return keys;
+        }
+    }
+
     public void Save(Vector3I key, VoxelChunkData data)
     {
         lock (_databaseLock)

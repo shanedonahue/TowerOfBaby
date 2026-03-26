@@ -29,6 +29,7 @@ public partial class TerrainChunk : Node3D
     public double LastRenderBuildMs { get; private set; }
     public double LastCollisionBuildMs { get; private set; }
     public bool PersistenceDirty { get; private set; }
+    public TerrainChunkLoadSource LoadSource { get; private set; } = TerrainChunkLoadSource.ProceduralGeneration;
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
@@ -55,9 +56,10 @@ public partial class TerrainChunk : Node3D
         Position = origin;
     }
 
-    public void SetData(VoxelChunkData data, double collisionDelaySeconds)
+    public void SetData(VoxelChunkData data, TerrainChunkLoadSource source, double collisionDelaySeconds)
     {
         _data = data;
+        LoadSource = source;
         PersistenceDirty = false;
         MarkDirty(includeCollision: true, collisionDelaySeconds);
     }
