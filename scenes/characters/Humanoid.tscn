@@ -2,6 +2,9 @@
 
 [ext_resource type="Script" path="res://scripts/entities/controller/player/PlayerLocomotionAdapter.cs" id="1_adapter"]
 [ext_resource type="Script" path="res://scripts/entities/motion/LocomotionDebug.cs" id="2_debug"]
+[ext_resource type="Script" path="res://scripts/entities/controller/player/PlayerAttackDebug.cs" id="3_attack_debug"]
+[ext_resource type="PackedScene" path="res://assets/character/equipment/weapon/Sword.glb" id="4_sword"]
+[ext_resource type="Script" path="res://scripts/entities/body/biped/WeaponVisualMount.cs" id="5_weapon_mount"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
 radius = 0.32
@@ -34,6 +37,14 @@ bottom_radius = 0.5
 radial_segments = 14
 
 [sub_resource type="BoxMesh" id="BoxMesh_foot"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_arm"]
+height = 1.0
+top_radius = 0.5
+bottom_radius = 0.5
+radial_segments = 14
+
+[sub_resource type="BoxMesh" id="BoxMesh_hand"]
 
 [node name="Humanoid" type="CharacterBody3D"]
 script = ExtResource("1_adapter")
@@ -80,6 +91,40 @@ material_override = SubResource("StandardMaterial3D_right")
 mesh = SubResource("BoxMesh_foot")
 material_override = SubResource("StandardMaterial3D_right")
 
+[node name="LeftUpperArm" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_arm")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="LeftLowerArm" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_arm")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="LeftHand" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("BoxMesh_hand")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="RightUpperArm" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_arm")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="RightLowerArm" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_arm")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="RightHand" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("BoxMesh_hand")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="WeaponGrip" type="Node3D" parent="VisualRoot/RightHand"]
+
+[node name="SwordPivot" type="Node3D" parent="VisualRoot/RightHand/WeaponGrip"]
+script = ExtResource("5_weapon_mount")
+TargetLength = 1.7
+GripFromBack = 0.22
+FineOffset = Vector3(0, 0.02, -0.02)
+
+[node name="Sword" parent="VisualRoot/RightHand/WeaponGrip/SwordPivot" instance=ExtResource("4_sword")]
+
 [node name="CameraYaw" type="Node3D" parent="."]
 top_level = true
 
@@ -94,4 +139,8 @@ fov = 72.0
 
 [node name="LocomotionDebug" type="Node3D" parent="."]
 script = ExtResource("2_debug")
+top_level = true
+
+[node name="AttackDebug" type="Node3D" parent="."]
+script = ExtResource("3_attack_debug")
 top_level = true

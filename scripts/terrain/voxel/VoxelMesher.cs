@@ -131,6 +131,7 @@ public static class VoxelMesher
             VoxelMaterialId.Rock => new Color(0.42f, 0.4f, 0.38f),
             VoxelMaterialId.Cliff => new Color(0.5f, 0.46f, 0.33f),
             VoxelMaterialId.Snow => new Color(0.83f, 0.84f, 0.86f),
+            VoxelMaterialId.Scorched => new Color(0.11f, 0.1f, 0.1f),
             _ => new Color(0.39f, 0.3f, 0.18f)
         };
     }

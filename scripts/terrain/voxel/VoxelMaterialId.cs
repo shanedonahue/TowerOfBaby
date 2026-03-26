@@ -6,5 +6,6 @@ public enum VoxelMaterialId : byte
     Grass = 1,
     Rock = 2,
     Cliff = 3,
-    Snow = 4
+    Snow = 4,
+    Scorched = 5
 }

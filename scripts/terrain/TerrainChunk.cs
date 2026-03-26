@@ -137,6 +137,24 @@ public partial class TerrainChunk : Node3D
         return modified;
     }
 
+    public bool ApplySlashBrush(
+        VoxelSlashEdit edit,
+        System.Func<Vector3, float, VoxelMaterialId> materialResolver)
+    {
+        if (_data == null)
+        {
+            return false;
+        }
+
+        bool modified = VoxelTerrainEditing.ApplySlash(_data, edit, materialResolver);
+        if (modified)
+        {
+            PersistenceDirty = true;
+        }
+
+        return modified;
+    }
+
     public void MarkPersisted()
     {
         PersistenceDirty = false;

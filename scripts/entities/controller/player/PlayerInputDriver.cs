@@ -64,7 +64,7 @@ public sealed class PlayerInputDriver
             : Vector3.Zero;
         Vector3 facingDirection = axis.LengthSquared() > 0.0001f
             ? moveDirection
-            : cameraForward;
+            : Vector3.Zero;
 
         return new MovementIntent(moveDirection, Mathf.Clamp(axis.Length(), 0.0f, 1.0f), facingDirection);
     }

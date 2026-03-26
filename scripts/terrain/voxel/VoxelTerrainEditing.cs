@@ -9,6 +9,29 @@ public readonly record struct VoxelSphereEdit(
     float DeltaDensity,
     float RetextureMargin);
 
+public readonly record struct VoxelSlashEdit(
+    Vector3 Center,
+    Vector3 Direction,
+    Vector3 SurfaceNormal,
+    float Length,
+    float Width,
+    float Depth,
+    float DensityDelta,
+    float PaintStrength,
+    float RetextureMargin)
+{
+    public float BoundingRadius
+    {
+        get
+        {
+            float halfLength = Length * 0.5f;
+            float paintWidth = (Width * 0.5f) + Mathf.Max(RetextureMargin, 0.0f);
+            float paintDepth = Depth + Mathf.Max(RetextureMargin, 0.0f);
+            return Mathf.Sqrt((halfLength * halfLength) + (paintWidth * paintWidth) + (paintDepth * paintDepth));
+        }
+    }
+}
+
 public static class VoxelTerrainEditing
 {
     public static bool ApplySphere(
@@ -84,6 +107,110 @@ public static class VoxelTerrainEditing
         return true;
     }
 
+    public static bool ApplySlash(
+        VoxelChunkData data,
+        VoxelSlashEdit edit,
+        Func<Vector3, float, VoxelMaterialId> materialResolver)
+    {
+        if (data == null)
+        {
+            throw new ArgumentNullException(nameof(data));
+        }
+
+        if (materialResolver == null)
+        {
+            throw new ArgumentNullException(nameof(materialResolver));
+        }
+
+        if (edit.Length <= 0.0f || edit.Width <= 0.0f || edit.Depth <= 0.0f)
+        {
+            return false;
+        }
+
+        if (Mathf.IsZeroApprox(edit.DensityDelta) && edit.PaintStrength <= 0.0f)
+        {
+            return false;
+        }
+
+        Vector3 normal = SafeNormalized(edit.SurfaceNormal, Vector3.Up);
+        Vector3 direction = SafeNormalized(ProjectOntoPlane(edit.Direction, normal), Vector3.Forward);
+        Vector3 across = normal.Cross(direction);
+        across = across.LengthSquared() > 0.0001f
+            ? across.Normalized()
+            : SafeNormalized(normal.Cross(Vector3.Forward), Vector3.Right);
+
+        float halfLength = Mathf.Max(edit.Length * 0.5f, data.VoxelSize);
+        float halfWidth = Mathf.Max(edit.Width * 0.5f, data.VoxelSize * 0.5f);
+        float halfDepth = Mathf.Max(edit.Depth * 0.5f, data.VoxelSize * 0.35f);
+        float retexturePadding = Mathf.Max(edit.RetextureMargin, data.VoxelSize);
+
+        Vector3 localCenter = edit.Center - data.Origin;
+        IndexBounds densityBounds = ComputeBounds(data, localCenter, edit.BoundingRadius);
+        if (!densityBounds.IsValid)
+        {
+            return false;
+        }
+
+        bool modified = false;
+        if (!Mathf.IsZeroApprox(edit.DensityDelta))
+        {
+            for (int z = densityBounds.Min.Z; z <= densityBounds.Max.Z; z++)
+            {
+                for (int y = densityBounds.Min.Y; y <= densityBounds.Max.Y; y++)
+                {
+                    for (int x = densityBounds.Min.X; x <= densityBounds.Max.X; x++)
+                    {
+                        Vector3 position = data.GetPointPosition(x, y, z);
+                        float influence = ComputeSlashInfluence(position, edit.Center, direction, across, normal, halfLength, halfWidth, halfDepth);
+                        if (influence <= 0.0f)
+                        {
+                            continue;
+                        }
+
+                        data.SetDensity(x, y, z, data.GetDensity(x, y, z) + (edit.DensityDelta * influence));
+                        modified = true;
+                    }
+                }
+            }
+        }
+
+        float paintHalfLength = halfLength + retexturePadding;
+        float paintHalfWidth = halfWidth + retexturePadding;
+        float paintHalfDepth = halfDepth + (retexturePadding * 0.75f);
+        IndexBounds materialBounds = ComputeBounds(data, localCenter, edit.BoundingRadius + retexturePadding);
+        for (int z = materialBounds.Min.Z; z <= materialBounds.Max.Z; z++)
+        {
+            for (int y = materialBounds.Min.Y; y <= materialBounds.Max.Y; y++)
+            {
+                for (int x = materialBounds.Min.X; x <= materialBounds.Max.X; x++)
+                {
+                    Vector3 position = data.GetPointPosition(x, y, z);
+                    float paintInfluence = ComputeSlashInfluence(position, edit.Center, direction, across, normal, paintHalfLength, paintHalfWidth, paintHalfDepth);
+                    if (paintInfluence <= 0.0f)
+                    {
+                        continue;
+                    }
+
+                    float density = data.GetDensity(x, y, z);
+                    VoxelMaterialId nextMaterial = materialResolver(position, density);
+                    if ((paintInfluence * edit.PaintStrength) >= 0.16f &&
+                        density >= data.IsoLevel - (data.VoxelSize * 0.55f))
+                    {
+                        nextMaterial = VoxelMaterialId.Scorched;
+                    }
+
+                    if (data.GetMaterial(x, y, z) != nextMaterial)
+                    {
+                        data.SetMaterial(x, y, z, nextMaterial);
+                        modified = true;
+                    }
+                }
+            }
+        }
+
+        return modified;
+    }
+
     private static IndexBounds ComputeBounds(VoxelChunkData data, Vector3 localCenter, float radius)
     {
         float inverseVoxelSize = 1.0f / data.VoxelSize;
@@ -104,6 +231,54 @@ public static class VoxelTerrainEditing
             minIndex.Y <= maxIndex.Y &&
             minIndex.Z <= maxIndex.Z;
         return new IndexBounds(minIndex, maxIndex, isValid);
+    }
+
+    private static float ComputeSlashInfluence(
+        Vector3 position,
+        Vector3 center,
+        Vector3 direction,
+        Vector3 across,
+        Vector3 normal,
+        float halfLength,
+        float halfWidth,
+        float halfDepth)
+    {
+        Vector3 delta = position - center;
+        float along = delta.Dot(direction);
+        float alongAbs = Mathf.Abs(along);
+        if (alongAbs > halfLength)
+        {
+            return 0.0f;
+        }
+
+        float acrossDistance = delta.Dot(across);
+        float normalDistance = delta.Dot(normal);
+        float radial =
+            ((acrossDistance * acrossDistance) / Mathf.Max(halfWidth * halfWidth, 0.0001f)) +
+            ((normalDistance * normalDistance) / Mathf.Max(halfDepth * halfDepth, 0.0001f));
+        if (radial >= 1.0f)
+        {
+            return 0.0f;
+        }
+
+        float alongWeight = 1.0f - Mathf.Clamp(alongAbs / halfLength, 0.0f, 1.0f);
+        alongWeight *= alongWeight * (3.0f - (2.0f * alongWeight));
+        float radialWeight = 1.0f - radial;
+        radialWeight *= radialWeight;
+        return alongWeight * radialWeight;
+    }
+
+    private static Vector3 SafeNormalized(Vector3 value, Vector3 fallback)
+    {
+        return value.LengthSquared() > 0.0001f
+            ? value.Normalized()
+            : fallback;
+    }
+
+    private static Vector3 ProjectOntoPlane(Vector3 value, Vector3 planeNormal)
+    {
+        Vector3 normal = SafeNormalized(planeNormal, Vector3.Up);
+        return value - (normal * value.Dot(normal));
     }
 
     private readonly record struct IndexBounds(Vector3I Min, Vector3I Max, bool IsValid);

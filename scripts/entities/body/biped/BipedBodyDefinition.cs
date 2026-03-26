@@ -6,6 +6,8 @@ public sealed class BipedBodyDefinition
 {
     public BipedLegDefinition LeftLeg { get; init; } = new();
     public BipedLegDefinition RightLeg { get; init; } = new();
+    public BipedArmDefinition LeftArm { get; init; } = new();
+    public BipedArmDefinition RightArm { get; init; } = new();
     public float PelvisHeight { get; init; } = 0.98f;
     public float PelvisWidth { get; init; } = 0.32f;
     public float PelvisDepth { get; init; } = 0.2f;
@@ -26,6 +28,15 @@ public sealed class BipedBodyDefinition
         {
             yield return LeftLeg;
             yield return RightLeg;
+        }
+    }
+
+    public IEnumerable<BipedArmDefinition> Arms
+    {
+        get
+        {
+            yield return LeftArm;
+            yield return RightArm;
         }
     }
 }

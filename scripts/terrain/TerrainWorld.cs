@@ -203,6 +203,28 @@ public partial class TerrainWorld : Node3D
         }
     }
 
+    public void ApplySlash(VoxelSlashEdit edit)
+    {
+        float boundsRadius = edit.BoundingRadius;
+        foreach (Vector3I key in GetChunkKeysIntersectingSphere(edit.Center, boundsRadius))
+        {
+            TerrainChunk chunk = GetOrCreateChunkForEdit(key);
+            if (!chunk.IntersectsSphere(edit.Center, boundsRadius))
+            {
+                continue;
+            }
+
+            if (!chunk.ApplySlashBrush(edit, ResolveEditedMaterial))
+            {
+                continue;
+            }
+
+            chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
+            QueueChunkForRebuild(chunk);
+            _terrainDesirabilityDirty = true;
+        }
+    }
+
     public void AdjustBrushRadius(float delta)
     {
         BrushRadius = Mathf.Clamp(BrushRadius + delta, BrushRadiusMin, BrushRadiusMax);
@@ -215,6 +237,15 @@ public partial class TerrainWorld : Node3D
             : Vector3.Up;
         float offset = additive ? BrushBuildSurfaceOffset : -BrushSurfaceInset;
         return hitPoint + (normal * offset);
+    }
+
+    public Vector3 ResolveSlashCenter(Vector3 hitPoint, Vector3 hitNormal, float slashDepth)
+    {
+        Vector3 normal = hitNormal.LengthSquared() > 0.0001f
+            ? hitNormal.Normalized()
+            : Vector3.Up;
+        float inset = Mathf.Max(0.04f, slashDepth * 0.45f);
+        return hitPoint - (normal * inset);
     }
 
     public void ClearStartupCache()
