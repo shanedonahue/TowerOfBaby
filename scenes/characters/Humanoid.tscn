@@ -1,0 +1,97 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/entities/controller/player/PlayerLocomotionAdapter.cs" id="1_adapter"]
+[ext_resource type="Script" path="res://scripts/entities/motion/LocomotionDebug.cs" id="2_debug"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.32
+height = 1.2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_body"]
+albedo_color = Color(0.9, 0.86, 0.78, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_left"]
+albedo_color = Color(0.27, 0.74, 0.88, 1)
+roughness = 0.92
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_right"]
+albedo_color = Color(0.97, 0.62, 0.31, 1)
+roughness = 0.92
+
+[sub_resource type="BoxMesh" id="BoxMesh_pelvis"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_torso"]
+height = 1.0
+top_radius = 0.5
+bottom_radius = 0.5
+radial_segments = 18
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_leg"]
+height = 1.0
+top_radius = 0.5
+bottom_radius = 0.5
+radial_segments = 14
+
+[sub_resource type="BoxMesh" id="BoxMesh_foot"]
+
+[node name="Humanoid" type="CharacterBody3D"]
+script = ExtResource("1_adapter")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.93, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="VisualRoot" type="Node3D" parent="."]
+
+[node name="Pelvis" type="Node3D" parent="VisualRoot"]
+
+[node name="PelvisMesh" type="MeshInstance3D" parent="VisualRoot/Pelvis"]
+mesh = SubResource("BoxMesh_pelvis")
+material_override = SubResource("StandardMaterial3D_body")
+
+[node name="Torso" type="Node3D" parent="VisualRoot/Pelvis"]
+
+[node name="TorsoMesh" type="MeshInstance3D" parent="VisualRoot/Pelvis/Torso"]
+mesh = SubResource("CylinderMesh_torso")
+material_override = SubResource("StandardMaterial3D_body")
+
+[node name="LeftUpperLeg" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_leg")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="LeftLowerLeg" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_leg")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="LeftFoot" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("BoxMesh_foot")
+material_override = SubResource("StandardMaterial3D_left")
+
+[node name="RightUpperLeg" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_leg")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="RightLowerLeg" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("CylinderMesh_leg")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="RightFoot" type="MeshInstance3D" parent="VisualRoot"]
+mesh = SubResource("BoxMesh_foot")
+material_override = SubResource("StandardMaterial3D_right")
+
+[node name="CameraYaw" type="Node3D" parent="."]
+top_level = true
+
+[node name="CameraPitch" type="Node3D" parent="CameraYaw"]
+
+[node name="SpringArm3D" type="SpringArm3D" parent="CameraYaw/CameraPitch"]
+spring_length = 5.4
+
+[node name="Camera3D" type="Camera3D" parent="CameraYaw/CameraPitch/SpringArm3D"]
+current = true
+fov = 72.0
+
+[node name="LocomotionDebug" type="Node3D" parent="."]
+script = ExtResource("2_debug")
+top_level = true

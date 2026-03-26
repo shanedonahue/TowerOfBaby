@@ -2,13 +2,10 @@
 
 [ext_resource type="PackedScene" path="res://scenes/terrain/TerrainWorld.tscn" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/terrain/TerrainChunk.tscn" id="2_chunk"]
+[ext_resource type="PackedScene" path="res://scenes/characters/Humanoid.tscn" id="3_humanoid"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
 [ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/world/TimeOfDayController.cs" id="6_time"]
-
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
-radius = 0.38
-height = 1.1
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.34117648, 0.68235296, 0.98039216, 1)
@@ -49,17 +46,12 @@ billboard_mode = 1
 script = ExtResource("4_root")
 TerrainWorldPath = NodePath("TerrainWorld")
 
-[node name="Player" type="CharacterBody3D" parent="." unique_id=222714919]
+[node name="Player" parent="." unique_id=222714919 instance=ExtResource("3_humanoid")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=939901646]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.95, 0)
-shape = SubResource("CapsuleShape3D_player")
 
 [node name="TerrainWorld" parent="." unique_id=710875367 instance=ExtResource("1_world")]
 ChunkScene = ExtResource("2_chunk")
 TrackedCharacterPath = NodePath("../Player")
-EnableStartupStatePersistence = false
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1986201173]
 environment = SubResource("Environment_main")
