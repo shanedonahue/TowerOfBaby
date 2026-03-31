@@ -21,6 +21,10 @@ public sealed class BipedBodyDefinition
     public float TorsoDepth { get; init; } = 0.16f;
     public float TorsoLean { get; init; } = 0.08f;
     public float TorsoFollowSpeed { get; init; } = 8.0f;
+    public float ArmFollowSharpness { get; init; } = 18.0f;
+    public float AttackWindupTorsoTwistDegrees { get; init; } = 22.0f;
+    public float AttackReleaseTorsoTwistDegrees { get; init; } = -18.0f;
+    public float AttackFollowThroughTorsoTwistDegrees { get; init; } = -8.0f;
 
     public IEnumerable<BipedLegDefinition> Legs
     {

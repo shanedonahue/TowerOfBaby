@@ -15,7 +15,7 @@ public sealed class BipedArmDefinition
     public float HandLength { get; init; } = 0.16f;
     public float HandWidth { get; init; } = 0.07f;
     public float HandThickness { get; init; } = 0.07f;
-    public float ElbowForwardBias { get; init; } = 0.28f;
-    public float ElbowOutwardBias { get; init; } = 0.72f;
-    public float ElbowDownBias { get; init; } = 0.36f;
+    public float ElbowForwardBias { get; init; } = 0.22f;
+    public float ElbowOutwardBias { get; init; } = 0.24f;
+    public float ElbowDownBias { get; init; } = 0.58f;
 }

@@ -46,9 +46,9 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public float FloorAngleDegrees = 55.0f;
 
     [ExportGroup("Foot Planner")]
-    [Export] public float SupportForwardLimit = 0.32f;
+    [Export] public float SupportForwardLimit = 0.34f;
     [Export] public float SupportBackwardLimit = 0.24f;
-    [Export] public float SupportLateralLimit = 0.18f;
+    [Export] public float SupportLateralLimit = 0.16f;
     [Export] public float SupportVerticalLimit = 0.24f;
     [Export] public float StepPredictionTime = 0.2f;
     [Export] public float MinimumStepDistance = 0.16f;
@@ -57,14 +57,14 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
 
     [ExportGroup("Foot Swing")]
     [Export] public float StepDurationSeconds = 0.22f;
-    [Export] public float StepLiftHeight = 0.16f;
+    [Export] public float StepLiftHeight = 0.14f;
     [Export] public float StepLiftDistanceScale = 0.08f;
 
     [ExportGroup("Body")]
     [Export] public float PelvisHeight = 0.98f;
     [Export] public float TorsoHeight = 0.72f;
-    [Export] public float HipHalfWidth = 0.18f;
-    [Export] public float FootForwardOffset = 0.16f;
+    [Export] public float HipHalfWidth = 0.17f;
+    [Export] public float FootForwardOffset = 0.18f;
     [Export] public float UpperLegLength = 0.62f;
     [Export] public float LowerLegLength = 0.62f;
     [Export] public float FootLength = 0.28f;
@@ -72,7 +72,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public float FootHeight = 0.08f;
 
     [ExportGroup("Arms")]
-    [Export] public float ShoulderHalfWidth = 0.24f;
+    [Export] public float ShoulderHalfWidth = 0.22f;
     [Export] public float ShoulderHeightOffset = 0.18f;
     [Export] public float ShoulderForwardOffset = 0.02f;
     [Export] public float UpperArmLength = 0.44f;
@@ -80,6 +80,13 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public float HandLength = 0.16f;
     [Export] public float HandWidth = 0.07f;
     [Export] public float HandThickness = 0.07f;
+    [Export] public float RelaxedHandSideOffset = 0.28f;
+    [Export] public float RelaxedHandDownOffset = 0.16f;
+    [Export] public float RelaxedHandForwardOffset = 0.12f;
+    [Export] public float ElbowForwardBias = 0.22f;
+    [Export] public float ElbowOutwardBias = 0.24f;
+    [Export] public float ElbowDownBias = 0.58f;
+    [Export] public float ArmFollowSharpness = 18.0f;
 
     [ExportGroup("Attack")]
     [Export] public float AttackCooldown = 0.58f;
@@ -95,6 +102,9 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public float AttackRecoverySeconds = 0.19f;
     [Export] public float AttackOriginForwardOffset = 0.2f;
     [Export] public float AttackOriginHeightOffset = 0.08f;
+    [Export] public float AttackWindupTorsoTwistDegrees = 22.0f;
+    [Export] public float AttackReleaseTorsoTwistDegrees = -18.0f;
+    [Export] public float AttackFollowThroughTorsoTwistDegrees = -8.0f;
     [Export] public bool EnableAttackDebugLogs = true;
 
     [ExportGroup("Camera")]
@@ -457,12 +467,18 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
             {
                 Side = side,
                 ShoulderOffset = new Vector3(ShoulderHalfWidth * sideSign, ShoulderHeightOffset, ShoulderForwardOffset),
-                RelaxedHandOffset = new Vector3(0.34f * sideSign, -0.06f, 0.1f),
+                RelaxedHandOffset = new Vector3(
+                    RelaxedHandSideOffset * sideSign,
+                    -RelaxedHandDownOffset,
+                    RelaxedHandForwardOffset),
                 UpperArmLength = UpperArmLength,
                 LowerArmLength = LowerArmLength,
                 HandLength = HandLength,
                 HandWidth = HandWidth,
-                HandThickness = HandThickness
+                HandThickness = HandThickness,
+                ElbowForwardBias = ElbowForwardBias,
+                ElbowOutwardBias = ElbowOutwardBias,
+                ElbowDownBias = ElbowDownBias
             };
         }
 
@@ -473,7 +489,11 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
             LeftArm = CreateArm(FootSide.Left),
             RightArm = CreateArm(FootSide.Right),
             PelvisHeight = PelvisHeight,
-            TorsoHeight = TorsoHeight
+            TorsoHeight = TorsoHeight,
+            ArmFollowSharpness = ArmFollowSharpness,
+            AttackWindupTorsoTwistDegrees = AttackWindupTorsoTwistDegrees,
+            AttackReleaseTorsoTwistDegrees = AttackReleaseTorsoTwistDegrees,
+            AttackFollowThroughTorsoTwistDegrees = AttackFollowThroughTorsoTwistDegrees
         };
     }
 

@@ -64,7 +64,7 @@ public sealed class BipedPoseSolver
         }
 
         float attackBlend = attackState.UpperBodyBlend;
-        float attackTwist = EvaluateAttackTorsoTwist(attackState);
+        float attackTwist = EvaluateAttackTorsoTwist(attackState, _bodyDefinition);
         if (attackBlend > 0.0f && Mathf.Abs(attackTwist) > 0.0001f)
         {
             Vector3 attackForward = new Basis(supportUp, attackTwist) * torsoForward;
@@ -168,7 +168,7 @@ public sealed class BipedPoseSolver
         Vector3 leftTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.LeftArm, supportUp, attackState);
         Vector3 rightTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.RightArm, supportUp, attackState);
 
-        float handBlend = 1.0f - Mathf.Exp(-14.0f * delta);
+        float handBlend = 1.0f - Mathf.Exp(-Mathf.Max(0.01f, _bodyDefinition.ArmFollowSharpness) * delta);
         if (!_initialized || _leftHandPosition == Vector3.Zero)
         {
             _leftHandPosition = leftTarget;
@@ -212,14 +212,14 @@ public sealed class BipedPoseSolver
         bool rightArm = armDefinition.Side == FootSide.Right;
 
         Vector3 windup = rightArm
-            ? new Vector3(0.48f, 0.18f, -0.08f)
-            : new Vector3(-0.16f, 0.18f, 0.08f);
+            ? new Vector3(0.4f, 0.12f, -0.02f)
+            : new Vector3(-0.12f, 0.12f, 0.1f);
         Vector3 release = rightArm
-            ? new Vector3(-0.26f, 0.12f, 0.42f)
-            : new Vector3(-0.06f, 0.22f, 0.2f);
+            ? new Vector3(-0.2f, 0.08f, 0.36f)
+            : new Vector3(-0.04f, 0.16f, 0.18f);
         Vector3 followThrough = rightArm
-            ? new Vector3(-0.18f, -0.04f, 0.3f)
-            : new Vector3(-0.12f, 0.1f, 0.12f);
+            ? new Vector3(-0.14f, -0.06f, 0.24f)
+            : new Vector3(-0.08f, 0.02f, 0.12f);
 
         Vector3 target = attackState.Phase switch
         {
@@ -293,15 +293,15 @@ public sealed class BipedPoseSolver
             handPosition + (up * (definition.HandThickness * 0.5f)));
     }
 
-    private static float EvaluateAttackTorsoTwist(AttackPresentationState attackState)
+    private static float EvaluateAttackTorsoTwist(AttackPresentationState attackState, BipedBodyDefinition bodyDefinition)
     {
         float eased = Mathf.SmoothStep(0.0f, 1.0f, attackState.PhaseProgress);
         float degrees = attackState.Phase switch
         {
-            AttackPhase.Windup => Mathf.Lerp(0.0f, 28.0f, eased),
-            AttackPhase.Release => Mathf.Lerp(28.0f, -24.0f, eased),
-            AttackPhase.FollowThrough => Mathf.Lerp(-24.0f, -10.0f, eased),
-            AttackPhase.Recovery => Mathf.Lerp(-10.0f, 0.0f, eased),
+            AttackPhase.Windup => Mathf.Lerp(0.0f, bodyDefinition.AttackWindupTorsoTwistDegrees, eased),
+            AttackPhase.Release => Mathf.Lerp(bodyDefinition.AttackWindupTorsoTwistDegrees, bodyDefinition.AttackReleaseTorsoTwistDegrees, eased),
+            AttackPhase.FollowThrough => Mathf.Lerp(bodyDefinition.AttackReleaseTorsoTwistDegrees, bodyDefinition.AttackFollowThroughTorsoTwistDegrees, eased),
+            AttackPhase.Recovery => Mathf.Lerp(bodyDefinition.AttackFollowThroughTorsoTwistDegrees, 0.0f, eased),
             _ => 0.0f
         };
         return Mathf.DegToRad(degrees);
