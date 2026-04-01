@@ -1,5 +1,6 @@
 using Godot;
 using System.Collections.Generic;
+using System.Diagnostics;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -7,6 +8,7 @@ namespace TowerOfBaby.Terrain;
 internal sealed class TerrainCacheManager
 {
     private readonly TerrainChunkStore _chunkStore;
+    private readonly TerrainStatsTracker _terrainStats;
     private readonly object _cacheLock = new();
     private readonly Dictionary<Vector3I, RamCacheEntry> _ramCache = new();
     private readonly HashSet<Vector3I> _knownPersistedKeys = new();
@@ -14,9 +16,10 @@ internal sealed class TerrainCacheManager
     private HashSet<Vector3I> _startupSnapshotKeys = new();
     private ulong _touchSequence;
 
-    public TerrainCacheManager(TerrainChunkStore chunkStore)
+    public TerrainCacheManager(TerrainChunkStore chunkStore, TerrainStatsTracker terrainStats = null)
     {
         _chunkStore = chunkStore;
+        _terrainStats = terrainStats;
         foreach (Vector3I key in _chunkStore.LoadPersistedChunkKeys())
         {
             _knownPersistedKeys.Add(key);
@@ -198,7 +201,21 @@ internal sealed class TerrainCacheManager
 
             if (entry.Dirty || promoteStartupSnapshot)
             {
-                _chunkStore.Save(key, entry.Data);
+                if (_terrainStats?.Enabled == true)
+                {
+                    Stopwatch saveStopwatch = Stopwatch.StartNew();
+                    _chunkStore.Save(key, entry.Data);
+                    _terrainStats.RecordChunkSave(
+                        key,
+                        promoteStartupSnapshot ? "startup_promotion" : "persisted_chunk",
+                        saveStopwatch.Elapsed.TotalMilliseconds,
+                        entry.Dirty);
+                }
+                else
+                {
+                    _chunkStore.Save(key, entry.Data);
+                }
+
                 lock (_cacheLock)
                 {
                     if (entry.Dirty)

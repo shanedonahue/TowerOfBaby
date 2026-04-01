@@ -1,5 +1,6 @@
 using Godot;
 using System.Collections.Generic;
+using System.Diagnostics;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -7,6 +8,8 @@ namespace TowerOfBaby.Terrain;
 public partial class TerrainWorld : Node3D
 {
     [Signal] public delegate void InitialLoadCompletedEventHandler();
+    private const string PlayerDetailRequestId = "__player_proximity";
+    private const string BiomeDetailRequestId = "__biome_policy";
 
     [Export] public PackedScene ChunkScene = null!;
     [Export] public NodePath TrackedCharacterPath = new();
@@ -65,6 +68,13 @@ public partial class TerrainWorld : Node3D
     [Export] public float BuildStrength = 2.8f;
     [Export] public float BrushRetextureMargin = 1.6f;
 
+    [ExportGroup("Local Detail")]
+    [Export] public bool EnableLocalDetailRequests = true;
+    [Export] public float PlayerDetailRequestRadius = 10.0f;
+    [Export] public float BiomeDetailActivationRadius = 18.0f;
+    [Export] public float BiomeDetailVerticalMargin = 3.8f;
+    [Export] public float DetailRequestSnapStep = 2.4f;
+
     [ExportGroup("Persistence")]
     [Export] public bool EnableStartupStatePersistence = true;
     [Export] public int VerticalChunkCount = 3;
@@ -84,6 +94,10 @@ public partial class TerrainWorld : Node3D
     [Export] public int StartupCollisionChunkRebuildsPerFrame = 4;
     [Export] public float CollisionRebuildDelaySeconds = 0.08f;
 
+    [ExportGroup("Debug")]
+    [Export] public bool EnableTerrainInstrumentation = true;
+    [Export] public bool EnableBiomeDebugTint = false;
+
     private readonly Dictionary<Vector3I, TerrainChunk> _residentChunks = new();
     private readonly HashSet<TerrainChunk> _dirtyRenderChunks = new();
     private readonly HashSet<TerrainChunk> _dirtyCollisionChunks = new();
@@ -96,9 +110,12 @@ public partial class TerrainWorld : Node3D
     private readonly Dictionary<Vector2I, float> _visibilityHeuristicCache = new();
 
     private VoxelFieldGenerator _prioritySampler = null!;
+    private TerrainBiomeClassifier _biomeClassifier = null!;
+    private TerrainStructureSource _structureSource = null!;
     private TerrainWorldSettings _settings = null!;
     private TerrainChunkStore _chunkStore = null!;
     private TerrainCacheManager _cacheManager = null!;
+    private TerrainStatsTracker _terrainStats = null!;
     private Node3D _trackedCharacter = null!;
     private readonly HashSet<Vector3I> _startupLoadedChunks = new();
 
@@ -148,9 +165,12 @@ public partial class TerrainWorld : Node3D
             VoxelSize = VoxelSize,
             BaseY = BaseY
         };
+        _terrainStats = new TerrainStatsTracker(EnableTerrainInstrumentation);
+        _biomeClassifier = new TerrainBiomeClassifier(Seed);
+        _structureSource = new TerrainStructureSource(Seed, _settings);
         _prioritySampler = new VoxelFieldGenerator(Seed, TerrainHeight, DetailHeight, CaveScale, CaveThreshold);
         _chunkStore = new TerrainChunkStore(Seed);
-        _cacheManager = new TerrainCacheManager(_chunkStore);
+        _cacheManager = new TerrainCacheManager(_chunkStore, _terrainStats);
         _trackedCharacter = GetNodeOrNull<Node3D>(TrackedCharacterPath) ?? GetTree().GetFirstNodeInGroup("terrain_tracker") as Node3D;
 
         if (EnableStartupStatePersistence)
@@ -171,6 +191,7 @@ public partial class TerrainWorld : Node3D
         ProcessPreparedChunkReleases();
         ProcessQueuedChunkLoads();
         ProcessPendingChunkActivations();
+        EvaluateResidentDetailRequests();
         ProcessDirtyChunks();
         _cacheManager.MaintainCapacity(MaxLoadedChunks, _residentChunks.Count, _loadScheduler.PreparedCount);
     }
@@ -183,46 +204,119 @@ public partial class TerrainWorld : Node3D
             BrushRadius,
             strength,
             BrushRetextureMargin);
-
-        foreach (Vector3I key in GetChunkKeysIntersectingSphere(worldCenter, BrushRadius))
-        {
-            TerrainChunk chunk = GetOrCreateChunkForEdit(key);
-            if (!chunk.IntersectsSphere(worldCenter, BrushRadius))
-            {
-                continue;
-            }
-
-            if (!chunk.ApplySphereBrush(edit, ResolveEditedMaterial))
-            {
-                continue;
-            }
-
-            chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
-            QueueChunkForRebuild(chunk);
-            _terrainDesirabilityDirty = true;
-        }
+        ApplyDeform(
+            additive ? "build_brush" : "carve_brush",
+            worldCenter,
+            BrushRadius,
+            BrushRadius + Mathf.Max(BrushRetextureMargin, VoxelSize),
+            strength,
+            chunk => chunk.ApplySphereBrush(edit, ResolveEditedMaterial));
     }
 
     public void ApplySlash(VoxelSlashEdit edit)
     {
-        float boundsRadius = edit.BoundingRadius;
-        foreach (Vector3I key in GetChunkKeysIntersectingSphere(edit.Center, boundsRadius))
+        ApplyDeform(
+            "slash",
+            edit.Center,
+            edit.BoundingRadius,
+            edit.BoundingRadius + Mathf.Max(edit.RetextureMargin, VoxelSize),
+            edit.DensityDelta,
+            chunk => chunk.ApplySlashBrush(edit, ResolveEditedMaterial));
+    }
+
+    private void ApplyDeform(
+        string operation,
+        Vector3 center,
+        float boundsRadius,
+        float dirtyBoundsRadius,
+        float strength,
+        System.Func<TerrainChunk, VoxelEditStats> applyEdit)
+    {
+        Stopwatch deformStopwatch = null;
+        if (_terrainStats.Enabled)
+        {
+            _terrainStats.LogDeformBegin(operation, center, boundsRadius, strength);
+            deformStopwatch = Stopwatch.StartNew();
+        }
+
+        int editedChunkCount = 0;
+        int editedSampleCount = 0;
+        double dirtyBoundsVolume = 0.0;
+        int detailPromotionCount = 0;
+        foreach (Vector3I key in GetChunkKeysIntersectingSphere(center, boundsRadius))
         {
             TerrainChunk chunk = GetOrCreateChunkForEdit(key);
-            if (!chunk.IntersectsSphere(edit.Center, boundsRadius))
+            if (!chunk.IntersectsSphere(center, boundsRadius))
             {
                 continue;
             }
 
-            if (!chunk.ApplySlashBrush(edit, ResolveEditedMaterial))
+            bool hasDetailBounds = chunk.TryGetLocalBoundsForSphere(center, dirtyBoundsRadius, out Aabb detailBounds);
+            bool detailPromoted = false;
+            Aabb remeshBounds = detailBounds;
+            if (hasDetailBounds)
+            {
+                detailPromoted = chunk.EnsureDetailBrick(
+                    detailBounds,
+                    detailLevel: 2,
+                    SampleTerrainDensity,
+                    ResolveEditedMaterial,
+                    persistentEdits: true,
+                    preserveExistingCoverage: true);
+                if (chunk.TryGetEditedDetailLocalBounds(out Aabb editedDetailBounds))
+                {
+                    RequestDetailOnChunk(
+                        chunk,
+                        editedDetailBounds,
+                        2,
+                        TerrainDetailRegionSource.Edit,
+                        TerrainChunk.EditedDetailRegionReason,
+                        priority: 100.0f,
+                        sticky: true,
+                        requestId: TerrainChunk.EditedDetailRegionRequestId);
+
+                    if (detailPromoted)
+                    {
+                        remeshBounds = editedDetailBounds;
+                    }
+                }
+            }
+
+            VoxelEditStats editStats = applyEdit(chunk);
+            if (!editStats.Modified)
             {
                 continue;
             }
 
-            chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
+            if (hasDetailBounds)
+            {
+                chunk.MarkDirtyBounds(remeshBounds, includeCollision: true, CollisionRebuildDelaySeconds);
+                dirtyBoundsVolume += remeshBounds.Size.X * remeshBounds.Size.Y * remeshBounds.Size.Z;
+                if (detailPromoted)
+                {
+                    detailPromotionCount++;
+                }
+
+                _terrainStats.LogChunkDirtyBounds(chunk.ChunkKey, operation, remeshBounds, chunk.RenderDirtyBounds, detailPromoted);
+            }
+            else
+            {
+                chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
+            }
+
             QueueChunkForRebuild(chunk);
             _terrainDesirabilityDirty = true;
+            editedChunkCount++;
+            editedSampleCount += editStats.TotalSamplesTouched;
         }
+
+        _terrainStats.RecordDeform(
+            operation,
+            deformStopwatch?.Elapsed.TotalMilliseconds ?? 0.0,
+            editedChunkCount,
+            editedSampleCount,
+            dirtyBoundsVolume,
+            detailPromotionCount);
     }
 
     public void AdjustBrushRadius(float delta)
@@ -297,6 +391,14 @@ public partial class TerrainWorld : Node3D
             $"Loads: running {snapshot.RunningLoadCount} | queued {snapshot.PendingLoadCount} | prepared {snapshot.PreparedChunkCount} | activate {snapshot.PendingActivationCount} | last {snapshot.LastChunkLoadCount} ({snapshot.LastChunkLoadMs:0.00} ms)\n" +
             $"Load source: resident {_residentReuseHits} | ram {snapshot.LastRamCacheLoadCount} | startup {snapshot.LastStartupChunkLoadCount} | db {snapshot.LastPersistedChunkLoadCount} | gen {snapshot.LastGeneratedChunkLoadCount}\n" +
             $"Release: {snapshot.LastChunkReleaseCount} ({snapshot.LastChunkReleaseMs:0.00} ms) | render {snapshot.LastVisualRebuildCount} ({snapshot.LastVisualRebuildMs:0.00} ms) | collision {snapshot.LastCollisionRebuildCount} ({snapshot.LastCollisionRebuildMs:0.00} ms)\n" +
+            $"Biome: tracked {snapshot.TrackedBiomeId} | {snapshot.TrackedBiomeSummary}\n" +
+            $"Structure: tracked {snapshot.TrackedStructureCount} {snapshot.TrackedStructureType} detail {(snapshot.TrackedStructureRequestsHigherDetail ? "high" : "normal")} | {snapshot.TrackedStructureSummary}\n" +
+            $"Detail: tracked {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount} | {snapshot.TrackedDetailSummary}\n" +
+            $"Detail hi: tracked {(snapshot.TrackedDetailBrickActive ? "on" : "off")} tris {snapshot.TrackedDetailBrickTriangleCount} replace {snapshot.TrackedDetailBrickReplaceCoarseCellCount} | {snapshot.TrackedDetailBrickSummary}\n" +
+            $"Edit hi: tracked {(snapshot.TrackedEditedDetailActive ? "on" : "off")} tris {snapshot.TrackedEditedDetailTriangleCount} replace {snapshot.TrackedEditedReplaceCoarseCellCount} | {snapshot.TrackedEditedDetailSummary}\n" +
+            $"Dirty bounds: render {snapshot.TrackedRenderDirtyBoundsSummary} | collision {snapshot.TrackedCollisionDirtyBoundsSummary}\n" +
+            $"Deform: ops {snapshot.DeformOperationCount} | last {snapshot.LastDeformKind} {snapshot.LastDeformMs:0.00} ms | chunks {snapshot.LastDeformEditedChunkCount}/{ComputeAverage(snapshot.TotalEditedChunkCount, snapshot.DeformOperationCount):0.0} avg | samples {snapshot.LastDeformEditedSampleCount}/{ComputeAverage(snapshot.TotalEditedSampleCount, snapshot.DeformOperationCount):0.0} avg | dirty {snapshot.LastDeformDirtyBoundsVolume:0.0}/{ComputeAverage(snapshot.TotalEditedDirtyBoundsVolume, snapshot.DeformOperationCount):0.0} avg | promotions {snapshot.LastDeformEditDetailPromotionCount}/{ComputeAverage(snapshot.EditDetailPromotionCount, snapshot.DeformOperationCount):0.0} avg\n" +
+            $"Terrain stats: mesh {snapshot.MeshRebuildCount} ({snapshot.MeshRebuildMs:0.00} ms) | collision {snapshot.CollisionRebuildCount} ({snapshot.CollisionRebuildMs:0.00} ms) | persist load {snapshot.PersistenceLoadCount} ({snapshot.PersistenceLoadMs:0.00} ms) | save {snapshot.PersistenceSaveCount} ({snapshot.PersistenceSaveMs:0.00} ms)\n" +
             $"Cache: ram {snapshot.RamCacheHits} | startup {snapshot.StartupSnapshotHits} | db {snapshot.DatabaseHits} | gen {snapshot.GenerationFallbacks} | evicted {snapshot.EvictedChunks} | writes {snapshot.DirtyPersistWrites} | startup->db {snapshot.StartupPromotionWrites}\n" +
             $"Selected: {snapshot.LastSelectedChunkSummary}\n" +
             $"Released: {snapshot.LastReleasedChunkSummary}\n" +
@@ -305,6 +407,63 @@ public partial class TerrainWorld : Node3D
 
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
     {
+        TerrainInstrumentationSnapshot terrainInstrumentation = _terrainStats == null
+            ? TerrainInstrumentationSnapshot.Empty
+            : _terrainStats.GetSnapshot();
+        Vector3 trackedPosition = _trackedCharacter?.GlobalPosition ?? Vector3.Zero;
+        Vector3I trackedChunkKey = GetChunkKeyAtWorldPosition(trackedPosition);
+        TerrainBiomeSample trackedBiome = _trackedCharacter == null
+            ? TerrainBiomeSample.Default
+            : GetBiomeAtWorldPosition(trackedPosition);
+        TerrainChunkStructureMetadata trackedStructure = GetStructureInfluenceForChunk(trackedChunkKey);
+        int trackedDetailRegionCount = 0;
+        int trackedDirtyDetailRegionCount = 0;
+        int trackedMaxDetailLevel = 0;
+        string trackedDetailSourceSummary = "none";
+        string trackedDetailSummary = "none";
+        bool trackedDetailBrickActive = false;
+        string trackedDetailBrickSummary = "none";
+        int trackedDetailBrickTriangleCount = 0;
+        int trackedDetailBrickReplaceCoarseCellCount = 0;
+        bool trackedEditedDetailActive = false;
+        string trackedEditedDetailSummary = "none";
+        int trackedEditedDetailTriangleCount = 0;
+        int trackedEditedReplaceCoarseCellCount = 0;
+        string trackedRenderDirtyBoundsSummary = "none";
+        string trackedCollisionDirtyBoundsSummary = "none";
+        if (_residentChunks.TryGetValue(trackedChunkKey, out TerrainChunk trackedChunk))
+        {
+            trackedDetailRegionCount = trackedChunk.DetailRegionCount;
+            trackedDirtyDetailRegionCount = trackedChunk.DirtyDetailRegionCount;
+            trackedMaxDetailLevel = trackedChunk.MaxRequestedDetailLevel;
+            trackedDetailSourceSummary = trackedChunk.DetailRegionSourceSummary;
+            trackedDetailSummary = trackedChunk.DetailRegionSummary;
+            trackedDetailBrickActive = trackedChunk.HasDetailBrick;
+            trackedDetailBrickSummary = trackedChunk.DetailBrickSummary;
+            trackedDetailBrickTriangleCount = trackedChunk.LastDetailTriangleCount;
+            trackedDetailBrickReplaceCoarseCellCount = trackedChunk.LastReplacedCoarseCellCount;
+            trackedEditedDetailActive = trackedChunk.HasEditedDetailBrick;
+            trackedEditedDetailSummary = trackedChunk.HasEditedDetailBrick
+                ? trackedChunk.EditedDetailBrickSummary
+                : "none";
+            trackedEditedDetailTriangleCount = trackedChunk.HasEditedDetailBrick
+                ? trackedChunk.LastDetailTriangleCount
+                : 0;
+            trackedEditedReplaceCoarseCellCount = trackedChunk.HasEditedDetailBrick
+                ? trackedChunk.LastReplacedCoarseCellCount
+                : 0;
+            trackedRenderDirtyBoundsSummary = trackedChunk.RenderDirtyBoundsSummary;
+            trackedCollisionDirtyBoundsSummary = trackedChunk.CollisionDirtyBoundsSummary;
+        }
+        else if (trackedStructure.IsInInfluenceZone)
+        {
+            trackedDetailRegionCount = trackedStructure.StructureCount;
+            trackedMaxDetailLevel = trackedStructure.RequestHigherTerrainDetail ? 2 : 1;
+            trackedDetailSourceSummary = TerrainDetailRegionSource.Structure.ToString();
+            trackedDetailSummary =
+                $"{trackedDetailRegionCount} regions max {trackedMaxDetailLevel} dirty 0 src {trackedDetailSourceSummary} preview {trackedStructure.DominantStructureId}";
+        }
+
         int activeCount = 0;
         foreach (TerrainChunk chunk in _residentChunks.Values)
         {
@@ -323,6 +482,7 @@ public partial class TerrainWorld : Node3D
 
         return new TerrainWorldProfileSnapshot
         {
+            TerrainStatsEnabled = terrainInstrumentation.Enabled,
             ActiveChunkCount = activeCount,
             ResidentChunkCount = _residentChunks.Count,
             LoadedChunkCount = _residentChunks.Count + _cacheManager.RamCacheCount + _loadScheduler.PreparedCount,
@@ -361,6 +521,31 @@ public partial class TerrainWorld : Node3D
             LastPersistedChunkLoadMs = _lastPersistedChunkLoadMs,
             LastRamCacheLoadMs = _lastRamCacheLoadMs,
             LastGeneratedChunkLoadMs = _lastGeneratedChunkLoadMs,
+            DeformOperationCount = terrainInstrumentation.DeformOperationCount,
+            TotalEditedChunkCount = terrainInstrumentation.TotalEditedChunkCount,
+            TotalEditedSampleCount = terrainInstrumentation.TotalEditedSampleCount,
+            TotalEditedDirtyBoundsVolume = terrainInstrumentation.TotalEditedDirtyBoundsVolume,
+            EditDetailPromotionCount = terrainInstrumentation.EditDetailPromotionCount,
+            LastDeformEditedChunkCount = terrainInstrumentation.LastDeformEditedChunkCount,
+            LastDeformEditedSampleCount = terrainInstrumentation.LastDeformEditedSampleCount,
+            LastDeformDirtyBoundsVolume = terrainInstrumentation.LastDeformDirtyBoundsVolume,
+            LastDeformEditDetailPromotionCount = terrainInstrumentation.LastDeformEditDetailPromotionCount,
+            LastDeformMs = terrainInstrumentation.LastDeformMs,
+            LastDeformKind = terrainInstrumentation.LastDeformKind,
+            MeshRebuildCount = terrainInstrumentation.MeshRebuildCount,
+            MeshRebuildMs = terrainInstrumentation.MeshRebuildMs,
+            LastMeshRebuildMs = terrainInstrumentation.LastMeshRebuildMs,
+            CollisionRebuildCount = terrainInstrumentation.CollisionRebuildCount,
+            CollisionRebuildMs = terrainInstrumentation.CollisionRebuildMs,
+            LastCollisionChunkRebuildMs = terrainInstrumentation.LastCollisionRebuildMs,
+            PersistenceLoadCount = terrainInstrumentation.PersistenceLoadCount,
+            PersistenceLoadMs = terrainInstrumentation.PersistenceLoadMs,
+            LastPersistenceLoadMs = terrainInstrumentation.LastPersistenceLoadMs,
+            LastPersistenceLoadScope = terrainInstrumentation.LastPersistenceLoadScope,
+            PersistenceSaveCount = terrainInstrumentation.PersistenceSaveCount,
+            PersistenceSaveMs = terrainInstrumentation.PersistenceSaveMs,
+            LastPersistenceSaveMs = terrainInstrumentation.LastPersistenceSaveMs,
+            LastPersistenceSaveScope = terrainInstrumentation.LastPersistenceSaveScope,
             ResidentReuseHits = _residentReuseHits,
             CacheHits = totalCacheHits,
             CacheMisses = totalCacheMisses,
@@ -379,12 +564,122 @@ public partial class TerrainWorld : Node3D
             StartupPromotionWrites = _cacheManager.StartupPromotionWrites,
             SearchThrottleState = _desiredSetBuilder.ThrottleState.ToString(),
             SearchInvalidationReason = _desiredSetBuilder.LastInvalidationReason,
+            TrackedBiomeId = trackedBiome.DominantBiome,
+            TrackedBiomeSummary = trackedBiome.Summary,
+            TrackedStructureCount = trackedStructure.StructureCount,
+            TrackedStructureType = trackedStructure.DominantStructureType,
+            TrackedStructureRequestsHigherDetail = trackedStructure.RequestHigherTerrainDetail,
+            TrackedStructureSummary = trackedStructure.Summary,
+            TrackedDetailRegionCount = trackedDetailRegionCount,
+            TrackedDirtyDetailRegionCount = trackedDirtyDetailRegionCount,
+            TrackedMaxDetailLevel = trackedMaxDetailLevel,
+            TrackedDetailSourceSummary = trackedDetailSourceSummary,
+            TrackedDetailSummary = trackedDetailSummary,
+            TrackedDetailBrickActive = trackedDetailBrickActive,
+            TrackedDetailBrickSummary = trackedDetailBrickSummary,
+            TrackedDetailBrickTriangleCount = trackedDetailBrickTriangleCount,
+            TrackedDetailBrickReplaceCoarseCellCount = trackedDetailBrickReplaceCoarseCellCount,
+            TrackedEditedDetailActive = trackedEditedDetailActive,
+            TrackedEditedDetailSummary = trackedEditedDetailSummary,
+            TrackedEditedDetailTriangleCount = trackedEditedDetailTriangleCount,
+            TrackedEditedReplaceCoarseCellCount = trackedEditedReplaceCoarseCellCount,
+            TrackedRenderDirtyBoundsSummary = trackedRenderDirtyBoundsSummary,
+            TrackedCollisionDirtyBoundsSummary = trackedCollisionDirtyBoundsSummary,
             LastSelectedChunkSummary = _lastSelectedChunkSummary,
             LastReleasedChunkSummary = _lastReleasedChunkSummary,
             LastChunkSourceSummary = _lastChunkSourceSummary,
             InitialLoadProgress = GetInitialLoadProgress(),
             InitialLoadComplete = _initialLoadComplete
         };
+    }
+
+    public TerrainBiomeSample GetBiomeForChunk(Vector3I chunkKey)
+    {
+        if (_residentChunks.TryGetValue(chunkKey, out TerrainChunk residentChunk))
+        {
+            return residentChunk.BiomeSample;
+        }
+
+        return _biomeClassifier.SampleChunk(chunkKey, _settings);
+    }
+
+    public TerrainBiomeSample GetBiomeAtWorldPosition(Vector3 worldPosition)
+    {
+        return _biomeClassifier.SampleWorldPosition(worldPosition);
+    }
+
+    public TerrainChunkStructureMetadata GetStructureInfluenceForChunk(Vector3I chunkKey)
+    {
+        if (_residentChunks.TryGetValue(chunkKey, out TerrainChunk residentChunk))
+        {
+            return residentChunk.StructureMetadata;
+        }
+
+        return _structureSource.GetChunkStructureMetadata(chunkKey);
+    }
+
+    public bool IsChunkNearStructure(Vector3I chunkKey)
+    {
+        return GetStructureInfluenceForChunk(chunkKey).IsInInfluenceZone;
+    }
+
+    public bool ShouldPromoteTerrainDetail(Vector3I chunkKey)
+    {
+        return GetStructureInfluenceForChunk(chunkKey).RequestHigherTerrainDetail;
+    }
+
+    public System.Collections.Generic.IReadOnlyList<TerrainStructureInstance> GetOverlappingStructuresForChunk(Vector3I chunkKey)
+    {
+        return GetStructureInfluenceForChunk(chunkKey).OverlappingStructures;
+    }
+
+    public bool TryRequestChunkDetail(
+        Vector3I chunkKey,
+        Aabb localBounds,
+        int detailLevel,
+        TerrainDetailRegionSource source,
+        string reason,
+        string requestId = "")
+    {
+        if (!_residentChunks.TryGetValue(chunkKey, out TerrainChunk chunk))
+        {
+            return false;
+        }
+
+        return RequestDetailOnChunk(chunk, localBounds, detailLevel, source, reason, priority: 0.0f, sticky: false, requestId: requestId);
+    }
+
+    public bool ChunkHasDetailRegions(Vector3I chunkKey)
+    {
+        return _residentChunks.TryGetValue(chunkKey, out TerrainChunk chunk) && chunk.HasDetailRegions;
+    }
+
+    public System.Collections.Generic.IReadOnlyList<TerrainDetailRegion> GetDetailRegionsForChunk(Vector3I chunkKey)
+    {
+        if (_residentChunks.TryGetValue(chunkKey, out TerrainChunk chunk))
+        {
+            return chunk.DetailRegionManager.Regions;
+        }
+
+        return System.Array.Empty<TerrainDetailRegion>();
+    }
+
+    public string GetDetailRegionSummaryForChunk(Vector3I chunkKey)
+    {
+        if (_residentChunks.TryGetValue(chunkKey, out TerrainChunk chunk))
+        {
+            return chunk.DetailRegionSummary;
+        }
+
+        TerrainChunkStructureMetadata structureMetadata = GetStructureInfluenceForChunk(chunkKey);
+        if (!structureMetadata.IsInInfluenceZone)
+        {
+            return "none";
+        }
+
+        int previewLevel = structureMetadata.RequestHigherTerrainDetail ? 2 : 1;
+        return
+            $"{structureMetadata.StructureCount} regions max {previewLevel} dirty 0 src {TerrainDetailRegionSource.Structure} preview {structureMetadata.DominantStructureId}";
     }
 
     public float GetInitialLoadProgress()
@@ -452,7 +747,7 @@ public partial class TerrainWorld : Node3D
             if (_residentChunks.ContainsKey(key) && !previousDesired.Contains(key))
             {
                 _residentReuseHits++;
-                _lastChunkSourceSummary = $"{key} <- {TerrainChunkLoadSource.Resident}";
+                _lastChunkSourceSummary = BuildChunkSourceSummary(key, TerrainChunkLoadSource.Resident);
             }
         }
 
@@ -646,8 +941,7 @@ public partial class TerrainWorld : Node3D
     {
         foreach (PreparedChunkResult result in _loadScheduler.DrainCompletedLoads())
         {
-            RegisterLoadStats(result);
-            _lastChunkSourceSummary = $"{result.Key} <- {result.Source}";
+            RegisterChunkLoadStats(result.Key, result.Source, result.LoadMs, "stream");
 
             if (_loadScheduler.IsTargetKey(result.Key) && _desiredChunks.Contains(result.Key))
             {
@@ -659,28 +953,30 @@ public partial class TerrainWorld : Node3D
         }
     }
 
-    private void RegisterLoadStats(PreparedChunkResult result)
+    private void RegisterChunkLoadStats(Vector3I key, TerrainChunkLoadSource source, double loadMs, string context)
     {
         _lastChunkLoadCount++;
-        _lastChunkLoadMs += result.LoadMs;
+        _lastChunkLoadMs += loadMs;
+        _lastChunkSourceSummary = BuildChunkSourceSummary(key, source);
+        _terrainStats.RecordChunkLoadSource(key, source, loadMs, context);
 
-        switch (result.Source)
+        switch (source)
         {
             case TerrainChunkLoadSource.RamCache:
                 _lastRamCacheLoadCount++;
-                _lastRamCacheLoadMs += result.LoadMs;
+                _lastRamCacheLoadMs += loadMs;
                 break;
             case TerrainChunkLoadSource.StartupSnapshot:
                 _lastStartupChunkLoadCount++;
-                _lastStartupChunkLoadMs += result.LoadMs;
+                _lastStartupChunkLoadMs += loadMs;
                 break;
             case TerrainChunkLoadSource.PersistedChunk:
                 _lastPersistedChunkLoadCount++;
-                _lastPersistedChunkLoadMs += result.LoadMs;
+                _lastPersistedChunkLoadMs += loadMs;
                 break;
             default:
                 _lastGeneratedChunkLoadCount++;
-                _lastGeneratedChunkLoadMs += result.LoadMs;
+                _lastGeneratedChunkLoadMs += loadMs;
                 break;
         }
     }
@@ -756,16 +1052,285 @@ public partial class TerrainWorld : Node3D
             TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
             AddChild(chunk);
             chunk.Initialize(prepared.Key, _settings);
+            chunk.SetBiomeSample(GetBiomeForChunk(prepared.Key), EnableBiomeDebugTint);
+            chunk.SetStructureMetadata(GetStructureInfluenceForChunk(prepared.Key));
             chunk.SetData(prepared.Data, prepared.Source, 0.0);
             chunk.Visible = _desiredChunks.Contains(prepared.Key);
             chunk.ProcessMode = chunk.Visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
             _residentChunks[prepared.Key] = chunk;
+            _lastChunkSourceSummary = BuildChunkSourceSummary(prepared.Key, prepared.Source);
             QueueChunkForRebuild(chunk);
 
             _lastChunkActivationCount++;
             _lastChunkActivationMs += (Time.GetTicksUsec() - attachStart) / 1000.0;
             activationBudget--;
         }
+    }
+
+    private void EvaluateResidentDetailRequests()
+    {
+        if (_residentChunks.Count == 0)
+        {
+            return;
+        }
+
+        if (!EnableLocalDetailRequests)
+        {
+            ClearAutomaticResidentDetailRequests();
+            return;
+        }
+
+        bool hasTrackedCharacter = _trackedCharacter != null && IsInstanceValid(_trackedCharacter);
+        Vector3 trackedPosition = hasTrackedCharacter
+            ? _trackedCharacter.GlobalPosition
+            : Vector3.Zero;
+        List<TerrainChunk> chunks = new(_residentChunks.Values);
+        foreach (TerrainChunk chunk in chunks)
+        {
+            if (!IsInstanceValid(chunk) || !chunk.HasData)
+            {
+                continue;
+            }
+
+            bool requestChanged = RefreshChunkDetailRequests(chunk, trackedPosition, hasTrackedCharacter);
+            bool brickChanged = ReconcileChunkDetailBrick(chunk);
+            if (brickChanged)
+            {
+                chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
+                QueueChunkForRebuild(chunk);
+                continue;
+            }
+
+            if (requestChanged && !chunk.RenderDirty)
+            {
+                chunk.ClearDetailRegionDirtyFlags();
+            }
+        }
+    }
+
+    private void ClearAutomaticResidentDetailRequests()
+    {
+        List<TerrainChunk> chunks = new(_residentChunks.Values);
+        foreach (TerrainChunk chunk in chunks)
+        {
+            if (!IsInstanceValid(chunk) || !chunk.HasData)
+            {
+                continue;
+            }
+
+            int removedPlayer = chunk.RemoveDetailRequestsBySource(TerrainDetailRegionSource.PlayerProximity);
+            _terrainStats.LogDetailRegionRemoval(chunk.ChunkKey, TerrainDetailRegionSource.PlayerProximity, removedPlayer);
+            int removedBiome = chunk.RemoveDetailRequestsBySource(TerrainDetailRegionSource.Biome);
+            _terrainStats.LogDetailRegionRemoval(chunk.ChunkKey, TerrainDetailRegionSource.Biome, removedBiome);
+            int removedStructure = chunk.RemoveDetailRequestsBySource(TerrainDetailRegionSource.Structure);
+            _terrainStats.LogDetailRegionRemoval(chunk.ChunkKey, TerrainDetailRegionSource.Structure, removedStructure);
+
+            bool requestChanged = removedPlayer > 0 || removedBiome > 0 || removedStructure > 0;
+            bool brickChanged = requestChanged && ReconcileChunkDetailBrick(chunk);
+            if (brickChanged)
+            {
+                chunk.MarkDirty(includeCollision: true, CollisionRebuildDelaySeconds);
+                QueueChunkForRebuild(chunk);
+                continue;
+            }
+
+            if (requestChanged && !chunk.RenderDirty)
+            {
+                chunk.ClearDetailRegionDirtyFlags();
+            }
+        }
+    }
+
+    private bool RefreshChunkDetailRequests(TerrainChunk chunk, Vector3 trackedPosition, bool hasTrackedCharacter)
+    {
+        bool changed = false;
+        changed |= hasTrackedCharacter
+            ? UpdatePlayerProximityDetailRequest(chunk, trackedPosition)
+            : RemoveDetailRequest(chunk, TerrainDetailRegionSource.PlayerProximity, PlayerDetailRequestId);
+        changed |= hasTrackedCharacter
+            ? UpdateBiomeDetailRequest(chunk, trackedPosition)
+            : RemoveDetailRequest(chunk, TerrainDetailRegionSource.Biome, BiomeDetailRequestId);
+        changed |= UpdateStructureDetailRequests(chunk);
+        return changed;
+    }
+
+    private bool UpdatePlayerProximityDetailRequest(TerrainChunk chunk, Vector3 trackedPosition)
+    {
+        if (PlayerDetailRequestRadius <= 0.01f)
+        {
+            return RemoveDetailRequest(chunk, TerrainDetailRegionSource.PlayerProximity, PlayerDetailRequestId);
+        }
+
+        if (!chunk.TryGetLocalBoundsForSphere(trackedPosition, PlayerDetailRequestRadius, out Aabb localBounds))
+        {
+            return RemoveDetailRequest(chunk, TerrainDetailRegionSource.PlayerProximity, PlayerDetailRequestId);
+        }
+
+        Aabb snappedBounds = SnapLocalBounds(chunk, localBounds);
+        float distance = DistanceToChunkBounds(chunk, trackedPosition);
+        int detailLevel = distance <= PlayerDetailRequestRadius * 0.45f ? 2 : 1;
+        float priority = 80.0f - distance;
+        string reason = $"player_proximity dist {distance:0.0}";
+        return RequestDetailOnChunk(
+            chunk,
+            snappedBounds,
+            detailLevel,
+            TerrainDetailRegionSource.PlayerProximity,
+            reason,
+            priority,
+            sticky: false,
+            requestId: PlayerDetailRequestId);
+    }
+
+    private bool UpdateBiomeDetailRequest(TerrainChunk chunk, Vector3 trackedPosition)
+    {
+        if (!TryBuildBiomeDetailRequest(chunk, trackedPosition, out Aabb localBounds, out int detailLevel, out float priority, out string reason))
+        {
+            return RemoveDetailRequest(chunk, TerrainDetailRegionSource.Biome, BiomeDetailRequestId);
+        }
+
+        return RequestDetailOnChunk(
+            chunk,
+            SnapLocalBounds(chunk, localBounds),
+            detailLevel,
+            TerrainDetailRegionSource.Biome,
+            reason,
+            priority,
+            sticky: false,
+            requestId: BiomeDetailRequestId);
+    }
+
+    private bool RemoveDetailRequest(TerrainChunk chunk, TerrainDetailRegionSource source, string requestId)
+    {
+        bool removed = chunk.RemoveDetailRequest(requestId);
+        _terrainStats.LogDetailRegionRemoval(chunk.ChunkKey, source, removed ? 1 : 0);
+        return removed;
+    }
+
+    private bool UpdateStructureDetailRequests(TerrainChunk chunk)
+    {
+        bool changed = false;
+        foreach (TerrainStructureInstance structure in chunk.StructureMetadata.OverlappingStructures)
+        {
+            if (!chunk.TryGetLocalBoundsForWorldBounds(structure.InfluenceBounds, out Aabb localBounds))
+            {
+                continue;
+            }
+
+            string requestId = $"structure:{structure.Id}";
+            string reason = $"structure:{structure.Type}:{structure.Id} p {structure.Priority:0.00}";
+            changed |= RequestDetailOnChunk(
+                chunk,
+                localBounds,
+                structure.RequestHigherTerrainDetail ? 2 : 1,
+                TerrainDetailRegionSource.Structure,
+                reason,
+                60.0f + (structure.Priority * 10.0f),
+                sticky: true,
+                requestId: requestId);
+        }
+
+        return changed;
+    }
+
+    private bool ReconcileChunkDetailBrick(TerrainChunk chunk)
+    {
+        if (!TryBuildDetailAggregate(chunk, out Aabb localBounds, out int detailLevel))
+        {
+            return chunk.RemoveTransientDetailBrick();
+        }
+
+        return chunk.EnsureDetailBrick(
+            localBounds,
+            detailLevel,
+            SampleTerrainDensity,
+            ResolveEditedMaterial,
+            persistentEdits: false,
+            preserveExistingCoverage: false);
+    }
+
+    private bool TryBuildBiomeDetailRequest(
+        TerrainChunk chunk,
+        Vector3 trackedPosition,
+        out Aabb localBounds,
+        out int detailLevel,
+        out float priority,
+        out string reason)
+    {
+        float activationRadius = Mathf.Max(BiomeDetailActivationRadius, 0.0f);
+        if (activationRadius <= 0.01f || DistanceToChunkBounds(chunk, trackedPosition) > activationRadius)
+        {
+            localBounds = default;
+            detailLevel = 0;
+            priority = 0.0f;
+            reason = string.Empty;
+            return false;
+        }
+
+        TerrainBiomeSample sample = chunk.BiomeSample;
+        float policy =
+            (sample.RockyWeight * 0.85f) +
+            (sample.CanyonWeight * 1.0f) +
+            (sample.VolcanicWeight * 0.95f) +
+            (sample.SwampWeight * 0.28f) +
+            (sample.PlainsWeight * 0.10f) +
+            (sample.Ruggedness * 0.55f) +
+            (sample.Activity * 0.38f);
+        if (policy < 0.34f)
+        {
+            localBounds = default;
+            detailLevel = 0;
+            priority = 0.0f;
+            reason = string.Empty;
+            return false;
+        }
+
+        Vector3 center = chunk.Position + new Vector3(chunk.ChunkSize * 0.5f, 0.0f, chunk.ChunkSize * 0.5f);
+        float surfaceY = _prioritySampler.SampleSurfaceHeight(center.X, center.Z);
+        float horizontalRadius = Mathf.Lerp(chunk.ChunkSize * 0.18f, chunk.ChunkSize * 0.34f, Mathf.Clamp(policy, 0.0f, 1.0f));
+        float verticalHalfExtent = Mathf.Lerp(
+            Mathf.Max(chunk.VoxelSize * 1.5f, BiomeDetailVerticalMargin * 0.5f),
+            Mathf.Max(BiomeDetailVerticalMargin, chunk.ChunkSize * 0.18f),
+            Mathf.Clamp(policy, 0.0f, 1.0f));
+        Aabb worldBounds = new(
+            new Vector3(center.X - horizontalRadius, surfaceY - verticalHalfExtent, center.Z - horizontalRadius),
+            new Vector3(horizontalRadius * 2.0f, verticalHalfExtent * 2.0f, horizontalRadius * 2.0f));
+        if (!chunk.TryGetLocalBoundsForWorldBounds(worldBounds, out localBounds))
+        {
+            detailLevel = 0;
+            priority = 0.0f;
+            reason = string.Empty;
+            return false;
+        }
+
+        detailLevel = policy >= 0.70f ? 2 : 1;
+        priority = 34.0f + (policy * 18.0f);
+        reason = $"biome:{sample.DominantBiome} pol {policy:0.00} rug {sample.Ruggedness:0.00} act {sample.Activity:0.00}";
+        return true;
+    }
+
+    private bool TryBuildDetailAggregate(TerrainChunk chunk, out Aabb localBounds, out int detailLevel)
+    {
+        bool hasBounds = false;
+        localBounds = default;
+        detailLevel = 0;
+
+        foreach (TerrainDetailRegion region in chunk.DetailRegionManager.Regions)
+        {
+            if (!hasBounds)
+            {
+                localBounds = region.LocalBounds;
+                hasBounds = true;
+            }
+            else
+            {
+                localBounds = Union(localBounds, region.LocalBounds);
+            }
+
+            detailLevel = Mathf.Max(detailLevel, region.RequestedDetailLevel);
+        }
+
+        return hasBounds;
     }
 
     private void ProcessDirtyChunks()
@@ -794,9 +1359,20 @@ public partial class TerrainWorld : Node3D
                     continue;
                 }
 
+                TerrainChunkDirtyBoundsSnapshot renderDirtyBounds = chunk.RenderDirtyBounds;
+                _terrainStats.LogChunkRemeshBegin(chunk.ChunkKey, "render", renderDirtyBounds);
                 chunk.RebuildRenderMesh();
                 _lastVisualRebuildCount++;
                 _lastVisualRebuildMs += chunk.LastRenderBuildMs;
+                _terrainStats.RecordMeshRebuild(
+                    chunk.ChunkKey,
+                    chunk.LastRenderBuildMs,
+                    renderDirtyBounds,
+                    chunk.HasDetailBrick,
+                    chunk.LastUsedPersistentDetailEdits,
+                    chunk.LastDetailTriangleCount,
+                    chunk.LastReplacedCoarseCellCount,
+                    chunk.LastTotalTriangleCount);
                 visualBudget--;
                 if (!chunk.RenderDirty)
                 {
@@ -829,10 +1405,26 @@ public partial class TerrainWorld : Node3D
                     continue;
                 }
 
+                if (nowSeconds < chunk.CollisionReadyAtSeconds)
+                {
+                    continue;
+                }
+
+                TerrainChunkDirtyBoundsSnapshot collisionDirtyBounds = chunk.CollisionDirtyBounds;
+                _terrainStats.LogChunkRemeshBegin(chunk.ChunkKey, "collision", collisionDirtyBounds);
                 if (chunk.TryRebuildCollision(nowSeconds))
                 {
                     _lastCollisionRebuildCount++;
                     _lastCollisionRebuildMs += chunk.LastCollisionBuildMs;
+                    _terrainStats.RecordCollisionRebuild(
+                        chunk.ChunkKey,
+                        chunk.LastCollisionBuildMs,
+                        collisionDirtyBounds,
+                        chunk.HasDetailBrick,
+                        chunk.LastUsedPersistentDetailEdits,
+                        chunk.LastDetailTriangleCount,
+                        chunk.LastReplacedCoarseCellCount,
+                        chunk.LastTotalTriangleCount);
                     collisionBudget--;
                     if (!chunk.CollisionDirty)
                     {
@@ -878,16 +1470,21 @@ public partial class TerrainWorld : Node3D
             return existingChunk;
         }
 
+        ulong start = Time.GetTicksUsec();
         ChunkAcquisitionResult acquired = _cacheManager.AcquireChunk(key, _useStartupSnapshot, GenerateChunkData);
+        double loadMs = (Time.GetTicksUsec() - start) / 1000.0;
+        RegisterChunkLoadStats(key, acquired.Source, loadMs, "edit");
         TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
         AddChild(chunk);
         chunk.Initialize(key, _settings);
+        chunk.SetBiomeSample(GetBiomeForChunk(key), EnableBiomeDebugTint);
+        chunk.SetStructureMetadata(GetStructureInfluenceForChunk(key));
         chunk.SetData(acquired.Data, acquired.Source, 0.0);
         chunk.Visible = _desiredChunks.Contains(key);
         chunk.ProcessMode = chunk.Visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
         _residentChunks[key] = chunk;
+        _lastChunkSourceSummary = BuildChunkSourceSummary(key, acquired.Source);
         QueueChunkForRebuild(chunk);
-        _lastChunkSourceSummary = $"{key} <- {acquired.Source}";
         return chunk;
     }
 
@@ -920,9 +1517,19 @@ public partial class TerrainWorld : Node3D
         return _prioritySampler.SampleMaterial(worldPosition, density);
     }
 
+    private float SampleTerrainDensity(Vector3 worldPosition)
+    {
+        return _prioritySampler.SampleDensity(worldPosition);
+    }
+
     private ColumnPriorityInfo EvaluateColumnPriority(Vector2I columnKey)
     {
         ulong start = Time.GetTicksUsec();
+        TerrainBiomeSample biomeSample = _biomeClassifier.SampleColumn(columnKey, _settings);
+        Vector3I representativeChunkKey = new(columnKey.X, 0, columnKey.Y);
+        TerrainChunkStructureMetadata structureMetadata = GetStructureInfluenceForChunk(representativeChunkKey);
+        int detailRegionCount = GetPreviewDetailRegionCount(representativeChunkKey, structureMetadata);
+        int maxDetailLevel = GetPreviewMaxDetailLevel(representativeChunkKey, structureMetadata);
 
         Vector2 offset = new(columnKey.X - _searchEvaluationContext.CenterChunk.X, columnKey.Y - _searchEvaluationContext.CenterChunk.Y);
         float distance = offset.Length();
@@ -966,12 +1573,22 @@ public partial class TerrainWorld : Node3D
             shoulderBonus,
             loadCostBonus,
             EstimateColumnSource(columnKey),
+            biomeSample.DominantBiome,
+            structureMetadata.StructureCount,
+            structureMetadata.DominantStructureType,
+            structureMetadata.RequestHigherTerrainDetail,
+            detailRegionCount,
+            maxDetailLevel,
             guaranteed);
     }
 
     private ChunkPriorityInfo EvaluateChunkPriority(Vector3I key)
     {
         ulong start = Time.GetTicksUsec();
+        TerrainBiomeSample biomeSample = GetBiomeForChunk(key);
+        TerrainChunkStructureMetadata structureMetadata = GetStructureInfluenceForChunk(key);
+        int detailRegionCount = GetPreviewDetailRegionCount(key, structureMetadata);
+        int maxDetailLevel = GetPreviewMaxDetailLevel(key, structureMetadata);
 
         Vector2 offset = new(key.X - _searchEvaluationContext.CenterChunk.X, key.Z - _searchEvaluationContext.CenterChunk.Y);
         float distance = offset.Length();
@@ -1016,6 +1633,12 @@ public partial class TerrainWorld : Node3D
             loadCostBonus,
             verticalBias,
             estimatedSource,
+            biomeSample.DominantBiome,
+            structureMetadata.StructureCount,
+            structureMetadata.DominantStructureType,
+            structureMetadata.RequestHigherTerrainDetail,
+            detailRegionCount,
+            maxDetailLevel,
             guaranteed);
     }
 
@@ -1026,7 +1649,17 @@ public partial class TerrainWorld : Node3D
             ? chunk.LoadSource
             : TerrainChunkLoadSource.Resident;
         string reason = $"not desired | {retain.Summary}";
-        return new ChunkReleaseInfo(key, retain.TotalScore, reason, source);
+        return new ChunkReleaseInfo(
+            key,
+            retain.TotalScore,
+            reason,
+            source,
+            retain.DominantBiome,
+            retain.StructureCount,
+            retain.DominantStructureType,
+            retain.RequestsHigherTerrainDetail,
+            retain.DetailRegionCount,
+            retain.MaxDetailLevel);
     }
 
     private float MeasureVisibilityHeuristic(Vector2I columnKey)
@@ -1267,7 +1900,25 @@ public partial class TerrainWorld : Node3D
 
     private void LoadStartupState()
     {
-        if (_trackedCharacter == null || !_chunkStore.TryLoadStartupState(out TerrainStartupState startupState))
+        if (_trackedCharacter == null)
+        {
+            return;
+        }
+
+        Stopwatch startupLoadStopwatch = _terrainStats.Enabled
+            ? Stopwatch.StartNew()
+            : null;
+        bool loaded = _chunkStore.TryLoadStartupState(out TerrainStartupState startupState);
+        if (_terrainStats.Enabled)
+        {
+            _terrainStats.RecordPersistenceLoad(
+                "startup_state",
+                startupLoadStopwatch?.Elapsed.TotalMilliseconds ?? 0.0,
+                loaded,
+                loaded ? startupState.Chunks.Count : 0);
+        }
+
+        if (!loaded)
         {
             return;
         }
@@ -1337,6 +1988,7 @@ public partial class TerrainWorld : Node3D
     {
         if (!EnableStartupStatePersistence || _trackedCharacter == null)
         {
+            _terrainStats?.Close();
             return;
         }
 
@@ -1353,7 +2005,20 @@ public partial class TerrainWorld : Node3D
         }
 
         startupChunks.AddRange(_cacheManager.BuildStartupCacheSnapshots());
+        if (_terrainStats.Enabled)
+        {
+            Stopwatch saveStopwatch = Stopwatch.StartNew();
+            _chunkStore.SaveStartupState(_trackedCharacter.GlobalPosition, startupChunks);
+            _terrainStats.RecordPersistenceSave(
+                "startup_state",
+                saveStopwatch.Elapsed.TotalMilliseconds,
+                startupChunks.Count);
+            _terrainStats.Close();
+            return;
+        }
+
         _chunkStore.SaveStartupState(_trackedCharacter.GlobalPosition, startupChunks);
+        _terrainStats?.Close();
     }
 
     private void LogStreamingTuningSummary()
@@ -1381,6 +2046,179 @@ public partial class TerrainWorld : Node3D
         }
 
         return count;
+    }
+
+    private bool RequestDetailOnChunk(
+        TerrainChunk chunk,
+        Aabb localBounds,
+        int detailLevel,
+        TerrainDetailRegionSource source,
+        string reason,
+        float priority,
+        bool sticky,
+        string requestId = "")
+    {
+        if (!chunk.RequestDetail(localBounds, detailLevel, source, reason, priority, sticky, requestId))
+        {
+            return false;
+        }
+
+        TerrainDetailRegion latestRegion = null;
+        System.Collections.Generic.IReadOnlyList<TerrainDetailRegion> regions = chunk.DetailRegionManager.Regions;
+        foreach (TerrainDetailRegion region in regions)
+        {
+            if (region.Source != source)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(requestId) &&
+                !string.Equals(region.Id, requestId, System.StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(reason) &&
+                !string.Equals(region.Reason, reason, System.StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!region.Overlaps(localBounds))
+            {
+                continue;
+            }
+
+            if (latestRegion == null ||
+                region.RequestedDetailLevel > latestRegion.RequestedDetailLevel ||
+                (region.RequestedDetailLevel == latestRegion.RequestedDetailLevel && region.Priority >= latestRegion.Priority))
+            {
+                latestRegion = region;
+            }
+        }
+
+        _terrainStats.LogDetailRegionRequest(chunk.ChunkKey, latestRegion);
+        return true;
+    }
+
+    private Aabb SnapLocalBounds(TerrainChunk chunk, Aabb localBounds)
+    {
+        float snapStep = Mathf.Max(DetailRequestSnapStep, chunk.VoxelSize);
+        if (snapStep <= 0.0001f)
+        {
+            return localBounds;
+        }
+
+        Vector3 start = localBounds.Position;
+        Vector3 end = localBounds.Position + localBounds.Size;
+        Vector3 snappedMin = new(
+            Mathf.Floor(start.X / snapStep) * snapStep,
+            Mathf.Floor(start.Y / snapStep) * snapStep,
+            Mathf.Floor(start.Z / snapStep) * snapStep);
+        Vector3 snappedMax = new(
+            Mathf.Ceil(end.X / snapStep) * snapStep,
+            Mathf.Ceil(end.Y / snapStep) * snapStep,
+            Mathf.Ceil(end.Z / snapStep) * snapStep);
+        Vector3 min = new(
+            Mathf.Clamp(snappedMin.X, 0.0f, chunk.ChunkSize),
+            Mathf.Clamp(snappedMin.Y, 0.0f, chunk.ChunkSize),
+            Mathf.Clamp(snappedMin.Z, 0.0f, chunk.ChunkSize));
+        Vector3 max = new(
+            Mathf.Clamp(snappedMax.X, 0.0f, chunk.ChunkSize),
+            Mathf.Clamp(snappedMax.Y, 0.0f, chunk.ChunkSize),
+            Mathf.Clamp(snappedMax.Z, 0.0f, chunk.ChunkSize));
+        return new Aabb(min, max - min);
+    }
+
+    private static float DistanceToChunkBounds(TerrainChunk chunk, Vector3 worldPosition)
+    {
+        Vector3 min = chunk.Position;
+        Vector3 max = chunk.Position + (Vector3.One * chunk.ChunkSize);
+        Vector3 clamped = new(
+            Mathf.Clamp(worldPosition.X, min.X, max.X),
+            Mathf.Clamp(worldPosition.Y, min.Y, max.Y),
+            Mathf.Clamp(worldPosition.Z, min.Z, max.Z));
+        return clamped.DistanceTo(worldPosition);
+    }
+
+    private static Aabb Union(Aabb a, Aabb b)
+    {
+        Vector3 aEnd = a.Position + a.Size;
+        Vector3 bEnd = b.Position + b.Size;
+        Vector3 min = new(
+            Mathf.Min(a.Position.X, b.Position.X),
+            Mathf.Min(a.Position.Y, b.Position.Y),
+            Mathf.Min(a.Position.Z, b.Position.Z));
+        Vector3 max = new(
+            Mathf.Max(aEnd.X, bEnd.X),
+            Mathf.Max(aEnd.Y, bEnd.Y),
+            Mathf.Max(aEnd.Z, bEnd.Z));
+        return new Aabb(min, max - min);
+    }
+
+    private static double ComputeAverage(long total, long count)
+    {
+        if (count <= 0)
+        {
+            return 0.0;
+        }
+
+        return (double)total / count;
+    }
+
+    private static double ComputeAverage(double total, long count)
+    {
+        if (count <= 0)
+        {
+            return 0.0;
+        }
+
+        return total / count;
+    }
+
+    private int GetPreviewDetailRegionCount(Vector3I key, TerrainChunkStructureMetadata structureMetadata)
+    {
+        if (_residentChunks.TryGetValue(key, out TerrainChunk chunk))
+        {
+            return chunk.DetailRegionCount;
+        }
+
+        return structureMetadata.StructureCount;
+    }
+
+    private int GetPreviewMaxDetailLevel(Vector3I key, TerrainChunkStructureMetadata structureMetadata)
+    {
+        if (_residentChunks.TryGetValue(key, out TerrainChunk chunk))
+        {
+            return chunk.MaxRequestedDetailLevel;
+        }
+
+        if (!structureMetadata.IsInInfluenceZone)
+        {
+            return 0;
+        }
+
+        return structureMetadata.RequestHigherTerrainDetail ? 2 : 1;
+    }
+
+    private string BuildChunkSourceSummary(Vector3I key, TerrainChunkLoadSource source)
+    {
+        TerrainBiomeSample biomeSample = GetBiomeForChunk(key);
+        TerrainChunkStructureMetadata structureMetadata = GetStructureInfluenceForChunk(key);
+        int detailRegionCount = GetPreviewDetailRegionCount(key, structureMetadata);
+        int maxDetailLevel = GetPreviewMaxDetailLevel(key, structureMetadata);
+        bool hasDetailBrick = _residentChunks.TryGetValue(key, out TerrainChunk residentChunk) && residentChunk.HasDetailBrick;
+        bool hasEditedDetail = residentChunk != null && residentChunk.HasEditedDetailBrick;
+        return
+            $"{key} <- {source} biome {biomeSample.DominantBiome} struct {structureMetadata.StructureCount}/{structureMetadata.DominantStructureType}/{(structureMetadata.RequestHigherTerrainDetail ? "hi" : "std")} detail {detailRegionCount}/{maxDetailLevel} detail_hi {(hasDetailBrick ? "on" : "off")} edit_hi {(hasEditedDetail ? "on" : "off")}";
+    }
+
+    private Vector3I GetChunkKeyAtWorldPosition(Vector3 worldPosition)
+    {
+        return new Vector3I(
+            Mathf.FloorToInt(worldPosition.X / _settings.ChunkSize),
+            Mathf.Clamp(Mathf.FloorToInt((worldPosition.Y - _settings.BaseY) / _settings.ChunkSize), 0, VerticalChunkCount - 1),
+            Mathf.FloorToInt(worldPosition.Z / _settings.ChunkSize));
     }
 
     private static bool AreSetsEqual(HashSet<Vector3I> a, HashSet<Vector3I> b)

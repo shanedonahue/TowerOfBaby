@@ -133,13 +133,13 @@ public sealed class TerrainChunkStore
                     chunk_x, chunk_y, chunk_z,
                     points_per_axis, voxel_size, iso_level,
                     origin_x, origin_y, origin_z,
-                    densities_blob, materials_blob, updated_at_unix
+                    densities_blob, materials_blob, detail_brick_blob, updated_at_unix
                 )
                 VALUES (
                     $x, $y, $z,
                     $pointsPerAxis, $voxelSize, $isoLevel,
                     $originX, $originY, $originZ,
-                    $densities, $materials, $updatedAtUnix
+                    $densities, $materials, $detailBrick, $updatedAtUnix
                 )
                 ON CONFLICT(chunk_x, chunk_y, chunk_z) DO UPDATE SET
                     points_per_axis = excluded.points_per_axis,
@@ -150,6 +150,7 @@ public sealed class TerrainChunkStore
                     origin_z = excluded.origin_z,
                     densities_blob = excluded.densities_blob,
                     materials_blob = excluded.materials_blob,
+                    detail_brick_blob = excluded.detail_brick_blob,
                     updated_at_unix = excluded.updated_at_unix
                 """;
 
@@ -164,6 +165,7 @@ public sealed class TerrainChunkStore
             command.Parameters.AddWithValue("$originZ", data.Origin.Z);
             command.Parameters.AddWithValue("$densities", FloatArrayToBytes(data.CopyDensities()));
             command.Parameters.AddWithValue("$materials", data.CopyMaterials());
+            command.Parameters.AddWithValue("$detailBrick", (object)data.CopyEditedDetailBrickBlob() ?? DBNull.Value);
             command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             command.ExecuteNonQuery();
         }
@@ -219,14 +221,14 @@ public sealed class TerrainChunkStore
                         was_active,
                         points_per_axis, voxel_size, iso_level,
                         origin_x, origin_y, origin_z,
-                        densities_blob, materials_blob, updated_at_unix
+                        densities_blob, materials_blob, detail_brick_blob, updated_at_unix
                     )
                     VALUES (
                         $x, $y, $z,
                         $wasActive,
                         $pointsPerAxis, $voxelSize, $isoLevel,
                         $originX, $originY, $originZ,
-                        $densities, $materials, $updatedAtUnix
+                        $densities, $materials, $detailBrick, $updatedAtUnix
                     )
                     """;
 
@@ -242,6 +244,7 @@ public sealed class TerrainChunkStore
                 command.Parameters.AddWithValue("$originZ", chunk.Data.Origin.Z);
                 command.Parameters.AddWithValue("$densities", FloatArrayToBytes(chunk.Data.CopyDensities()));
                 command.Parameters.AddWithValue("$materials", chunk.Data.CopyMaterials());
+                command.Parameters.AddWithValue("$detailBrick", (object)chunk.Data.CopyEditedDetailBrickBlob() ?? DBNull.Value);
                 command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 command.ExecuteNonQuery();
             }
@@ -307,6 +310,7 @@ public sealed class TerrainChunkStore
                     origin_z REAL NOT NULL,
                     densities_blob BLOB NOT NULL,
                     materials_blob BLOB NOT NULL,
+                    detail_brick_blob BLOB NULL,
                     updated_at_unix INTEGER NOT NULL,
                     PRIMARY KEY (chunk_x, chunk_y, chunk_z)
                 );
@@ -332,11 +336,15 @@ public sealed class TerrainChunkStore
                     origin_z REAL NOT NULL,
                     densities_blob BLOB NOT NULL,
                     materials_blob BLOB NOT NULL,
+                    detail_brick_blob BLOB NULL,
                     updated_at_unix INTEGER NOT NULL,
                     PRIMARY KEY (chunk_x, chunk_y, chunk_z)
                 );
                 """;
             command.ExecuteNonQuery();
+
+            EnsureColumnExists(connection, "chunks", "detail_brick_blob", "BLOB NULL");
+            EnsureColumnExists(connection, "startup_chunks", "detail_brick_blob", "BLOB NULL");
         }
     }
 
@@ -350,7 +358,7 @@ public sealed class TerrainChunkStore
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText =
                 $"""
-                SELECT points_per_axis, voxel_size, iso_level, origin_x, origin_y, origin_z, densities_blob, materials_blob
+                SELECT points_per_axis, voxel_size, iso_level, origin_x, origin_y, origin_z, densities_blob, materials_blob, detail_brick_blob
                 FROM {tableName}
                 WHERE chunk_x = $x AND chunk_y = $y AND chunk_z = $z
                 LIMIT 1
@@ -372,12 +380,35 @@ public sealed class TerrainChunkStore
             Vector3 origin = new(reader.GetFloat(3), reader.GetFloat(4), reader.GetFloat(5));
             byte[] densityBytes = (byte[])reader["densities_blob"];
             byte[] materialBytes = (byte[])reader["materials_blob"];
+            byte[] detailBrickBytes = reader.IsDBNull(8)
+                ? null
+                : (byte[])reader["detail_brick_blob"];
 
             VoxelChunkData loaded = new(pointsPerAxis, voxelSize, origin, isoLevel);
             loaded.LoadFromBuffers(BytesToFloatArray(densityBytes), materialBytes);
+            loaded.LoadEditedDetailBrickFromBlob(detailBrickBytes);
             data = loaded;
             return true;
         }
+    }
+
+    private static void EnsureColumnExists(SqliteConnection connection, string tableName, string columnName, string columnDefinition)
+    {
+        using SqliteCommand pragmaCommand = connection.CreateCommand();
+        pragmaCommand.CommandText = $"PRAGMA table_info({tableName});";
+
+        using SqliteDataReader reader = pragmaCommand.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        using SqliteCommand alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
+        alterCommand.ExecuteNonQuery();
     }
 
     private static byte[] FloatArrayToBytes(float[] values)

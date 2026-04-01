@@ -35,10 +35,16 @@ internal sealed record ColumnPriorityInfo(
     float ShoulderBonus,
     float LoadCostBonus,
     TerrainChunkLoadSource EstimatedSource,
+    BiomeId DominantBiome,
+    int StructureCount,
+    TerrainStructureType DominantStructureType,
+    bool RequestsHigherTerrainDetail,
+    int DetailRegionCount,
+    int MaxDetailLevel,
     bool IsGuaranteed)
 {
     public string Summary =>
-        $"{Key} score {TotalScore:0.0} dist {Distance:0.0} align {ForwardAlignment:0.00} vis {Visibility:0.00} resident {ResidentBonus:0.0} retain {HysteresisBonus:0.0} adj {AdjacencyBonus:0.0} shoulder {ShoulderBonus:0.0} cost {LoadCostBonus:0.0} src {EstimatedSource}";
+        $"{Key} biome {DominantBiome} struct {StructureCount}/{DominantStructureType}/{(RequestsHigherTerrainDetail ? "hi" : "std")} detail {DetailRegionCount}/{MaxDetailLevel} score {TotalScore:0.0} dist {Distance:0.0} align {ForwardAlignment:0.00} vis {Visibility:0.00} resident {ResidentBonus:0.0} retain {HysteresisBonus:0.0} adj {AdjacencyBonus:0.0} shoulder {ShoulderBonus:0.0} cost {LoadCostBonus:0.0} src {EstimatedSource}";
 }
 
 internal sealed record ChunkPriorityInfo(
@@ -53,19 +59,31 @@ internal sealed record ChunkPriorityInfo(
     float LoadCostBonus,
     float VerticalBias,
     TerrainChunkLoadSource EstimatedSource,
+    BiomeId DominantBiome,
+    int StructureCount,
+    TerrainStructureType DominantStructureType,
+    bool RequestsHigherTerrainDetail,
+    int DetailRegionCount,
+    int MaxDetailLevel,
     bool IsGuaranteed)
 {
     public string Summary =>
-        $"{Key} score {TotalScore:0.0} dist {Distance:0.0} align {ForwardAlignment:0.00} vis {Visibility:0.00} retain {HysteresisBonus:0.0} adj {AdjacencyBonus:0.0} shoulder {ShoulderBonus:0.0} cost {LoadCostBonus:0.0} y {VerticalBias:0.0} src {EstimatedSource}";
+        $"{Key} biome {DominantBiome} struct {StructureCount}/{DominantStructureType}/{(RequestsHigherTerrainDetail ? "hi" : "std")} detail {DetailRegionCount}/{MaxDetailLevel} score {TotalScore:0.0} dist {Distance:0.0} align {ForwardAlignment:0.00} vis {Visibility:0.00} retain {HysteresisBonus:0.0} adj {AdjacencyBonus:0.0} shoulder {ShoulderBonus:0.0} cost {LoadCostBonus:0.0} y {VerticalBias:0.0} src {EstimatedSource}";
 }
 
 internal sealed record ChunkReleaseInfo(
     Vector3I Key,
     float RetainScore,
     string Reason,
-    TerrainChunkLoadSource LastSource)
+    TerrainChunkLoadSource LastSource,
+    BiomeId DominantBiome,
+    int StructureCount,
+    TerrainStructureType DominantStructureType,
+    bool RequestsHigherTerrainDetail,
+    int DetailRegionCount,
+    int MaxDetailLevel)
 {
-    public string Summary => $"{Key} retain {RetainScore:0.0} src {LastSource} {Reason}";
+    public string Summary => $"{Key} biome {DominantBiome} struct {StructureCount}/{DominantStructureType}/{(RequestsHigherTerrainDetail ? "hi" : "std")} detail {DetailRegionCount}/{MaxDetailLevel} retain {RetainScore:0.0} src {LastSource} {Reason}";
 }
 
 internal readonly record struct ChunkAcquisitionResult(VoxelChunkData Data, TerrainChunkLoadSource Source);

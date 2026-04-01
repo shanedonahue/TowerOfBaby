@@ -294,6 +294,18 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Terrain init {snapshot.InitialLoadProgress * 100.0f:0}%  hit {ComputeHitRate(snapshot.CacheHits, snapshot.CacheMisses):0}%  churn h/m/e {_churnHitsDelta}/{_churnMissesDelta}/{_churnEvictionsDelta}");
             _detailBuilder.AppendLine(
+                $"Biome current {snapshot.TrackedBiomeId}  {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Struct current {snapshot.TrackedStructureCount} {snapshot.TrackedStructureType} {(snapshot.TrackedStructureRequestsHigherDetail ? "hi" : "std")}  {TrimForOverlay(snapshot.TrackedStructureSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Detail current {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount}  {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Detail hi current {(snapshot.TrackedDetailBrickActive ? "on" : "off")} tri {snapshot.TrackedDetailBrickTriangleCount} replace {snapshot.TrackedDetailBrickReplaceCoarseCellCount}  {TrimForOverlay(snapshot.TrackedDetailBrickSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Edit hi current {(snapshot.TrackedEditedDetailActive ? "on" : "off")} tri {snapshot.TrackedEditedDetailTriangleCount} replace {snapshot.TrackedEditedReplaceCoarseCellCount}  {TrimForOverlay(snapshot.TrackedEditedDetailSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Dirty current r {TrimForOverlay(snapshot.TrackedRenderDirtyBoundsSummary, 42)}  c {TrimForOverlay(snapshot.TrackedCollisionDirtyBoundsSummary, 42)}");
+            _detailBuilder.AppendLine(
                 $"Chunks active {snapshot.ActiveChunkCount}  resident {snapshot.ResidentChunkCount}  desired {snapshot.DesiredChunkCount}  ram {snapshot.RamCacheChunkCount}  in-flight {snapshot.InFlightChunkCount}");
             _detailBuilder.AppendLine(
                 $"Loads run {snapshot.RunningLoadCount}  queued {snapshot.PendingLoadCount}  prepared {snapshot.PreparedChunkCount}  activate {snapshot.PendingActivationCount}  add {snapshot.ToAddCount}  release {snapshot.ToReleaseCount}");
@@ -303,6 +315,19 @@ public partial class FpsOverlay : CanvasLayer
                 $"Timing search {snapshot.LastDesiredSearchMs:0.00} ms  priority {snapshot.LastPriorityEvaluationMs:0.00} ms  visibility {snapshot.LastVisibilityHeuristicMs:0.00} ms");
             _detailBuilder.AppendLine(
                 $"Ops load {snapshot.LastChunkLoadCount}/{snapshot.LastChunkLoadMs:0.00} ms  release {snapshot.LastChunkReleaseCount}/{snapshot.LastChunkReleaseMs:0.00} ms  render {snapshot.LastVisualRebuildCount}/{snapshot.LastVisualRebuildMs:0.00} ms");
+            if (snapshot.TerrainStatsEnabled)
+            {
+                _detailBuilder.AppendLine(
+                    $"Deform {snapshot.DeformOperationCount} ops  last {snapshot.LastDeformKind} {snapshot.LastDeformMs:0.00} ms  chunks {snapshot.LastDeformEditedChunkCount}/{ComputeAverage(snapshot.TotalEditedChunkCount, snapshot.DeformOperationCount):0.0} avg  samples {snapshot.LastDeformEditedSampleCount}/{ComputeAverage(snapshot.TotalEditedSampleCount, snapshot.DeformOperationCount):0.0} avg");
+                _detailBuilder.AppendLine(
+                    $"Edit detail dirty {snapshot.LastDeformDirtyBoundsVolume:0.0}/{ComputeAverage(snapshot.TotalEditedDirtyBoundsVolume, snapshot.DeformOperationCount):0.0} avg  promotions {snapshot.LastDeformEditDetailPromotionCount}/{ComputeAverage(snapshot.EditDetailPromotionCount, snapshot.DeformOperationCount):0.0} avg");
+                _detailBuilder.AppendLine(
+                    $"Terrain prof mesh {snapshot.MeshRebuildCount}/{snapshot.MeshRebuildMs:0.00} ms  collision {snapshot.CollisionRebuildCount}/{snapshot.CollisionRebuildMs:0.00} ms  load {snapshot.PersistenceLoadCount}/{snapshot.PersistenceLoadMs:0.00} ms  save {snapshot.PersistenceSaveCount}/{snapshot.PersistenceSaveMs:0.00} ms");
+            }
+            else
+            {
+                _detailBuilder.AppendLine("Terrain prof disabled");
+            }
             _detailBuilder.AppendLine(
                 $"Startup keys {snapshot.StartupSnapshotChunkCount}  coverage {snapshot.StartupDesiredCoverageCount}/{Mathf.Max(1, snapshot.DesiredChunkCount)}  records {snapshot.PersistedChunkRecordCount}");
             _detailBuilder.AppendLine(
@@ -371,6 +396,26 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         return (float)hits / total * 100.0f;
+    }
+
+    private static double ComputeAverage(long total, long count)
+    {
+        if (count <= 0)
+        {
+            return 0.0;
+        }
+
+        return (double)total / count;
+    }
+
+    private static double ComputeAverage(double total, long count)
+    {
+        if (count <= 0)
+        {
+            return 0.0;
+        }
+
+        return total / count;
     }
 
     private static bool IsExpandPressed()

@@ -2,6 +2,7 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainWorldProfileSnapshot
 {
+    public bool TerrainStatsEnabled { get; init; }
     public int ActiveChunkCount { get; init; }
     public int ResidentChunkCount { get; init; }
     public int LoadedChunkCount { get; init; }
@@ -40,6 +41,31 @@ public sealed class TerrainWorldProfileSnapshot
     public double LastPersistedChunkLoadMs { get; init; }
     public double LastRamCacheLoadMs { get; init; }
     public double LastGeneratedChunkLoadMs { get; init; }
+    public long DeformOperationCount { get; init; }
+    public long TotalEditedChunkCount { get; init; }
+    public long TotalEditedSampleCount { get; init; }
+    public double TotalEditedDirtyBoundsVolume { get; init; }
+    public long EditDetailPromotionCount { get; init; }
+    public int LastDeformEditedChunkCount { get; init; }
+    public int LastDeformEditedSampleCount { get; init; }
+    public double LastDeformDirtyBoundsVolume { get; init; }
+    public int LastDeformEditDetailPromotionCount { get; init; }
+    public double LastDeformMs { get; init; }
+    public string LastDeformKind { get; init; } = string.Empty;
+    public long MeshRebuildCount { get; init; }
+    public double MeshRebuildMs { get; init; }
+    public double LastMeshRebuildMs { get; init; }
+    public long CollisionRebuildCount { get; init; }
+    public double CollisionRebuildMs { get; init; }
+    public double LastCollisionChunkRebuildMs { get; init; }
+    public long PersistenceLoadCount { get; init; }
+    public double PersistenceLoadMs { get; init; }
+    public double LastPersistenceLoadMs { get; init; }
+    public string LastPersistenceLoadScope { get; init; } = string.Empty;
+    public long PersistenceSaveCount { get; init; }
+    public double PersistenceSaveMs { get; init; }
+    public double LastPersistenceSaveMs { get; init; }
+    public string LastPersistenceSaveScope { get; init; } = string.Empty;
     public long ResidentReuseHits { get; init; }
     public long CacheHits { get; init; }
     public long CacheMisses { get; init; }
@@ -61,6 +87,27 @@ public sealed class TerrainWorldProfileSnapshot
     public long EvictedChunksDelta { get; init; }
     public string SearchThrottleState { get; init; } = string.Empty;
     public string SearchInvalidationReason { get; init; } = string.Empty;
+    public BiomeId TrackedBiomeId { get; init; }
+    public string TrackedBiomeSummary { get; init; } = string.Empty;
+    public int TrackedStructureCount { get; init; }
+    public TerrainStructureType TrackedStructureType { get; init; }
+    public bool TrackedStructureRequestsHigherDetail { get; init; }
+    public string TrackedStructureSummary { get; init; } = string.Empty;
+    public int TrackedDetailRegionCount { get; init; }
+    public int TrackedDirtyDetailRegionCount { get; init; }
+    public int TrackedMaxDetailLevel { get; init; }
+    public string TrackedDetailSourceSummary { get; init; } = string.Empty;
+    public string TrackedDetailSummary { get; init; } = string.Empty;
+    public bool TrackedDetailBrickActive { get; init; }
+    public string TrackedDetailBrickSummary { get; init; } = string.Empty;
+    public int TrackedDetailBrickTriangleCount { get; init; }
+    public int TrackedDetailBrickReplaceCoarseCellCount { get; init; }
+    public bool TrackedEditedDetailActive { get; init; }
+    public string TrackedEditedDetailSummary { get; init; } = string.Empty;
+    public int TrackedEditedDetailTriangleCount { get; init; }
+    public int TrackedEditedReplaceCoarseCellCount { get; init; }
+    public string TrackedRenderDirtyBoundsSummary { get; init; } = string.Empty;
+    public string TrackedCollisionDirtyBoundsSummary { get; init; } = string.Empty;
     public string LastSelectedChunkSummary { get; init; } = string.Empty;
     public string LastReleasedChunkSummary { get; init; } = string.Empty;
     public string LastChunkSourceSummary { get; init; } = string.Empty;

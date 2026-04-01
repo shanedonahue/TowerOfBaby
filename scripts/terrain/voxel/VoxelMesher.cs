@@ -2,6 +2,15 @@ using Godot;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
+public readonly record struct VoxelMeshBuildResult(
+    ArrayMesh Mesh,
+    int TotalTriangleCount,
+    bool UsedDetailBrick,
+    bool UsedPersistentDetailEdits,
+    int DetailTriangleCount,
+    int ReplacedCoarseCellCount,
+    int DetailCellCount);
+
 public static class VoxelMesher
 {
     private static readonly Vector3I[] CornerOffsets =
@@ -16,11 +25,14 @@ public static class VoxelMesher
         new(0, 1, 1)
     };
 
-    public static ArrayMesh BuildMesh(VoxelChunkData data)
+    public static VoxelMeshBuildResult BuildMesh(VoxelChunkData data)
     {
         SurfaceTool surfaceTool = new();
         surfaceTool.Begin(Mesh.PrimitiveType.Triangles);
         int vertexCount = 0;
+        int replacedCoarseCellCount = 0;
+        int detailCellCount = 0;
+        VoxelDetailBrickData detailBrick = data.DetailBrick;
 
         int cells = data.CellsPerAxis;
         for (int z = 0; z < cells; z++)
@@ -29,22 +41,67 @@ public static class VoxelMesher
             {
                 for (int x = 0; x < cells; x++)
                 {
-                    PolygonizeCube(surfaceTool, data, x, y, z, ref vertexCount);
+                    if (detailBrick != null && detailBrick.ShouldReplaceCoarseCell(x, y, z))
+                    {
+                        replacedCoarseCellCount++;
+                        continue;
+                    }
+
+                    PolygonizeCube(surfaceTool, data, data.Origin, x, y, z, ref vertexCount);
+                }
+            }
+        }
+
+        int detailVertexStart = vertexCount;
+        if (detailBrick != null)
+        {
+            int detailCells = detailBrick.Data.CellsPerAxis;
+            for (int z = 0; z < detailCells; z++)
+            {
+                for (int y = 0; y < detailCells; y++)
+                {
+                    for (int x = 0; x < detailCells; x++)
+                    {
+                        PolygonizeCube(surfaceTool, detailBrick.Data, data.Origin, x, y, z, ref vertexCount);
+                        detailCellCount++;
+                    }
                 }
             }
         }
 
         if (vertexCount == 0)
         {
-            return new ArrayMesh();
+            return new VoxelMeshBuildResult(
+                new ArrayMesh(),
+                TotalTriangleCount: 0,
+                UsedDetailBrick: detailBrick != null,
+                UsedPersistentDetailEdits: detailBrick?.HasPersistentEdits == true,
+                DetailTriangleCount: 0,
+                ReplacedCoarseCellCount: replacedCoarseCellCount,
+                DetailCellCount: detailCellCount);
         }
 
         surfaceTool.GenerateNormals();
         surfaceTool.GenerateTangents();
-        return surfaceTool.Commit();
+        ArrayMesh mesh = surfaceTool.Commit();
+        return new VoxelMeshBuildResult(
+            mesh,
+            TotalTriangleCount: vertexCount / 3,
+            UsedDetailBrick: detailBrick != null,
+            UsedPersistentDetailEdits: detailBrick?.HasPersistentEdits == true,
+            DetailTriangleCount: (vertexCount - detailVertexStart) / 3,
+            ReplacedCoarseCellCount: replacedCoarseCellCount,
+            DetailCellCount: detailCellCount);
     }
 
-    private static void PolygonizeCube(SurfaceTool surfaceTool, VoxelChunkData data, int x, int y, int z, ref int vertexCount)
+    private static void PolygonizeCube(
+        SurfaceTool surfaceTool,
+        VoxelChunkData data,
+        Vector3 meshOrigin,
+        int x,
+        int y,
+        int z,
+        ref int vertexCount)
     {
         Vector3[] positions = new Vector3[8];
         float[] densities = new float[8];
@@ -54,7 +111,7 @@ public static class VoxelMesher
         for (int corner = 0; corner < 8; corner++)
         {
             Vector3I offset = CornerOffsets[corner];
-            positions[corner] = data.GetPointPosition(x + offset.X, y + offset.Y, z + offset.Z) - data.Origin;
+            positions[corner] = data.GetPointPosition(x + offset.X, y + offset.Y, z + offset.Z) - meshOrigin;
             densities[corner] = data.GetDensity(x + offset.X, y + offset.Y, z + offset.Z);
             materials[corner] = data.GetMaterial(x + offset.X, y + offset.Y, z + offset.Z);
             if (densities[corner] >= data.IsoLevel)
