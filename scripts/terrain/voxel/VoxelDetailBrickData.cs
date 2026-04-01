@@ -4,7 +4,7 @@ using System.IO;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
-public sealed class VoxelDetailBrickData
+public sealed class VoxelDetailBrickData : IDisposable
 {
     private const int SerializationVersion = 2;
     private const int ReplacePaddingCoarseCells = 1;
@@ -138,9 +138,13 @@ public sealed class VoxelDetailBrickData
 
     public VoxelDetailBrickData CreateMeshSnapshot()
     {
-        VoxelChunkData dataSnapshot = new(Data.PointsPerAxis, Data.VoxelSize, Data.Origin, Data.IsoLevel);
-        dataSnapshot.LoadFromBuffers(Data.CopyDensities(), Data.CopyMaterials());
+        VoxelChunkData dataSnapshot = Data.CreateMeshSnapshot(includeTransientDetailBrick: false);
         return new VoxelDetailBrickData(CoarseCellMin, CoarseCellCount, DetailScale, dataSnapshot, HasPersistentEdits);
+    }
+
+    public void Dispose()
+    {
+        Data?.Dispose();
     }
 
     public byte[] Serialize()

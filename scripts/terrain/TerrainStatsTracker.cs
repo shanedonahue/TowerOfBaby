@@ -22,6 +22,10 @@ internal readonly record struct TerrainInstrumentationSnapshot(
     long MeshBuildWorkerCount,
     double MeshBuildWorkerMs,
     double LastMeshBuildWorkerMs,
+    double AverageCoarseMeshWorkerHeapDeltaKiB,
+    double PeakCoarseMeshWorkerHeapDeltaKiB,
+    double AverageDetailMeshWorkerHeapDeltaKiB,
+    double PeakDetailMeshWorkerHeapDeltaKiB,
     long MeshRebuildCount,
     double MeshRebuildMs,
     double LastMeshRebuildMs,
@@ -56,6 +60,10 @@ internal readonly record struct TerrainInstrumentationSnapshot(
             MeshBuildWorkerCount: 0,
             MeshBuildWorkerMs: 0.0,
             LastMeshBuildWorkerMs: 0.0,
+            AverageCoarseMeshWorkerHeapDeltaKiB: 0.0,
+            PeakCoarseMeshWorkerHeapDeltaKiB: 0.0,
+            AverageDetailMeshWorkerHeapDeltaKiB: 0.0,
+            PeakDetailMeshWorkerHeapDeltaKiB: 0.0,
             MeshRebuildCount: 0,
             MeshRebuildMs: 0.0,
             LastMeshRebuildMs: 0.0,
@@ -123,6 +131,12 @@ internal sealed class TerrainStatsTracker
     private long _meshBuildWorkerCount;
     private double _meshBuildWorkerMs;
     private double _lastMeshBuildWorkerMs;
+    private long _coarseMeshBuildCount;
+    private double _coarseMeshBuildHeapDeltaKiB;
+    private double _peakCoarseMeshBuildHeapDeltaKiB;
+    private long _detailMeshBuildCount;
+    private double _detailMeshBuildHeapDeltaKiB;
+    private double _peakDetailMeshBuildHeapDeltaKiB;
 
     private long _collisionRebuildCount;
     private double _collisionRebuildMs;
@@ -164,6 +178,10 @@ internal sealed class TerrainStatsTracker
             _meshBuildWorkerCount,
             _meshBuildWorkerMs,
             _lastMeshBuildWorkerMs,
+            _coarseMeshBuildCount > 0 ? _coarseMeshBuildHeapDeltaKiB / _coarseMeshBuildCount : 0.0,
+            _peakCoarseMeshBuildHeapDeltaKiB,
+            _detailMeshBuildCount > 0 ? _detailMeshBuildHeapDeltaKiB / _detailMeshBuildCount : 0.0,
+            _peakDetailMeshBuildHeapDeltaKiB,
             _meshRebuildCount,
             _meshRebuildMs,
             _lastMeshRebuildMs,
@@ -238,6 +256,8 @@ internal sealed class TerrainStatsTracker
         double ms,
         double queueWaitMs,
         int queueDepth,
+        TerrainVisualBuildRequestKind buildKind,
+        TerrainVisualBuildQueueClass queueClass,
         TerrainChunkDirtyBoundsSnapshot dirtyBounds,
         long managedHeapDeltaBytes,
         int gen0Collections,
@@ -257,8 +277,22 @@ internal sealed class TerrainStatsTracker
         _meshBuildWorkerCount++;
         _meshBuildWorkerMs += ms;
         _lastMeshBuildWorkerMs = ms;
+        double heapDeltaKiB = Math.Abs(managedHeapDeltaBytes) / 1024.0;
+        if (usedDetailBrick)
+        {
+            _detailMeshBuildCount++;
+            _detailMeshBuildHeapDeltaKiB += heapDeltaKiB;
+            _peakDetailMeshBuildHeapDeltaKiB = Math.Max(_peakDetailMeshBuildHeapDeltaKiB, heapDeltaKiB);
+        }
+        else
+        {
+            _coarseMeshBuildCount++;
+            _coarseMeshBuildHeapDeltaKiB += heapDeltaKiB;
+            _peakCoarseMeshBuildHeapDeltaKiB = Math.Max(_peakCoarseMeshBuildHeapDeltaKiB, heapDeltaKiB);
+        }
+
         WriteLine(
-            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker ms={ms:0.000} queue_wait_ms={queueWaitMs:0.000} queue_depth={queueDepth} heap_delta_kib={managedHeapDeltaBytes / 1024.0:0.0} gc0={gen0Collections} gc1={gen1Collections} gc2={gen2Collections} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker kind={buildKind} queue_class={queueClass} ms={ms:0.000} queue_wait_ms={queueWaitMs:0.000} queue_depth={queueDepth} heap_delta_kib={managedHeapDeltaBytes / 1024.0:0.0} gc0={gen0Collections} gc1={gen1Collections} gc2={gen2Collections} gc_triggered={(gen0Collections + gen1Collections + gen2Collections) > 0} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
     }
 
     public void RecordMeshCommit(
@@ -437,6 +471,26 @@ internal sealed class TerrainStatsTracker
 
         _coalescedRebuildRequestCount++;
         WriteLine($"{Prefix} event=rebuild_request_coalesced chunk={FormatVector(key)} queue={queue} reason={Sanitize(reason)}");
+    }
+
+    public void RecordSkippedLowPriorityBuild(Vector3I key, string queue, string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine($"{Prefix} event=rebuild_request_skipped chunk={FormatVector(key)} queue={queue} reason={Sanitize(reason)}");
+    }
+
+    public void RecordSuppressedRebuildRequest(Vector3I key, string queue, string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine($"{Prefix} event=rebuild_request_suppressed chunk={FormatVector(key)} queue={queue} reason={Sanitize(reason)}");
     }
 
     public void Close()

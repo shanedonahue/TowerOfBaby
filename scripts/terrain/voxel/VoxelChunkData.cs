@@ -1,24 +1,28 @@
 using Godot;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
-public sealed class VoxelChunkData
+public sealed class VoxelChunkData : IDisposable
 {
     public int PointsPerAxis { get; }
     public float VoxelSize { get; }
     public float IsoLevel { get; }
     public Vector3 Origin { get; }
 
+    private readonly int _pointCount;
     private readonly float[] _densities;
     private readonly byte[] _materials;
+    private readonly bool _isMeshSnapshot;
     private readonly List<TerrainPersistedDetailRegionData> _persistedDetailRegions = new();
     private VoxelDetailBrickData _detailBrick;
+    private bool _disposed;
 
     public int CellsPerAxis => PointsPerAxis - 1;
     public float ChunkSize => CellsPerAxis * VoxelSize;
-    public int PointCount => _densities.Length;
+    public int PointCount => _pointCount;
     public bool HasDetailBrick => _detailBrick != null;
     public VoxelDetailBrickData DetailBrick => _detailBrick;
     public bool HasEditedDetailBrick => _detailBrick?.HasPersistentEdits == true;
@@ -27,13 +31,44 @@ public sealed class VoxelChunkData
     public int PersistedDetailRegionCount => _persistedDetailRegions.Count;
 
     public VoxelChunkData(int pointsPerAxis, float voxelSize, Vector3 origin, float isoLevel = 0.0f)
+        : this(
+            pointsPerAxis,
+            voxelSize,
+            origin,
+            isoLevel,
+            new float[pointsPerAxis * pointsPerAxis * pointsPerAxis],
+            new byte[pointsPerAxis * pointsPerAxis * pointsPerAxis],
+            isMeshSnapshot: false)
+    {
+    }
+
+    private VoxelChunkData(
+        int pointsPerAxis,
+        float voxelSize,
+        Vector3 origin,
+        float isoLevel,
+        float[] densities,
+        byte[] materials,
+        bool isMeshSnapshot)
     {
         PointsPerAxis = pointsPerAxis;
         VoxelSize = voxelSize;
         Origin = origin;
         IsoLevel = isoLevel;
-        _densities = new float[pointsPerAxis * pointsPerAxis * pointsPerAxis];
-        _materials = new byte[pointsPerAxis * pointsPerAxis * pointsPerAxis];
+        _pointCount = pointsPerAxis * pointsPerAxis * pointsPerAxis;
+        if (densities == null || densities.Length < _pointCount)
+        {
+            throw new ArgumentException("Density buffer is too small for the requested voxel chunk dimensions.", nameof(densities));
+        }
+
+        if (materials == null || materials.Length < _pointCount)
+        {
+            throw new ArgumentException("Material buffer is too small for the requested voxel chunk dimensions.", nameof(materials));
+        }
+
+        _densities = densities;
+        _materials = materials;
+        _isMeshSnapshot = isMeshSnapshot;
     }
 
     public void SetDensity(int x, int y, int z, float density)
@@ -162,18 +197,28 @@ public sealed class VoxelChunkData
 
     public float[] CopyDensities()
     {
-        return (float[])_densities.Clone();
+        float[] copy = new float[_pointCount];
+        Array.Copy(_densities, copy, _pointCount);
+        return copy;
     }
 
     public byte[] CopyMaterials()
     {
-        return (byte[])_materials.Clone();
+        byte[] copy = new byte[_pointCount];
+        Array.Copy(_materials, copy, _pointCount);
+        return copy;
     }
 
     public VoxelChunkData CreateMeshSnapshot(bool includeTransientDetailBrick)
     {
-        VoxelChunkData snapshot = new(PointsPerAxis, VoxelSize, Origin, IsoLevel);
-        snapshot.LoadFromBuffers(CopyDensities(), CopyMaterials());
+        VoxelChunkData snapshot = new(
+            PointsPerAxis,
+            VoxelSize,
+            Origin,
+            IsoLevel,
+            RentDensityCopy(),
+            RentMaterialCopy(),
+            isMeshSnapshot: true);
         if (_detailBrick != null && (includeTransientDetailBrick || _detailBrick.HasPersistentEdits))
         {
             snapshot._detailBrick = _detailBrick.CreateMeshSnapshot();
@@ -184,13 +229,13 @@ public sealed class VoxelChunkData
 
     public void LoadFromBuffers(float[] densities, byte[] materials)
     {
-        if (densities.Length != _densities.Length || materials.Length != _materials.Length)
+        if (densities.Length != _pointCount || materials.Length != _pointCount)
         {
             throw new System.ArgumentException("Chunk buffer sizes do not match VoxelChunkData dimensions.");
         }
 
-        densities.CopyTo(_densities, 0);
-        materials.CopyTo(_materials, 0);
+        Array.Copy(densities, _densities, _pointCount);
+        Array.Copy(materials, _materials, _pointCount);
         _detailBrick = null;
         _persistedDetailRegions.Clear();
     }
@@ -273,6 +318,20 @@ public sealed class VoxelChunkData
     public void ClearPersistedDetailRegions()
     {
         _persistedDetailRegions.Clear();
+    }
+
+    public void Dispose()
+    {
+        if (!_isMeshSnapshot || _disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _detailBrick?.Dispose();
+        _detailBrick = null;
+        ArrayPool<float>.Shared.Return(_densities);
+        ArrayPool<byte>.Shared.Return(_materials);
     }
 
     public float SampleDensityTrilinear(Vector3 worldPosition)
@@ -402,6 +461,20 @@ public sealed class VoxelChunkData
     private int GetIndex(int x, int y, int z)
     {
         return x + (PointsPerAxis * (y + (PointsPerAxis * z)));
+    }
+
+    private float[] RentDensityCopy()
+    {
+        float[] copy = ArrayPool<float>.Shared.Rent(_pointCount);
+        Array.Copy(_densities, copy, _pointCount);
+        return copy;
+    }
+
+    private byte[] RentMaterialCopy()
+    {
+        byte[] copy = ArrayPool<byte>.Shared.Rent(_pointCount);
+        Array.Copy(_materials, copy, _pointCount);
+        return copy;
     }
 
     private TerrainPersistedDetailRegionData[] BuildPersistedDetailRegionsSnapshot()

@@ -40,7 +40,16 @@ public sealed class TerrainWorldProfileSnapshot
     public double LastMeshWorkerQueueWaitMs { get; init; }
     public double AverageMeshWorkerQueueWaitMs { get; init; }
     public double PeakMeshWorkerQueueWaitMs { get; init; }
+    public int HighPriorityMeshQueueDepth { get; init; }
+    public int LowPriorityMeshQueueDepth { get; init; }
     public long LowPriorityDeferredMeshBuildCount { get; init; }
+    public long SkippedLowPriorityMeshBuildCount { get; init; }
+    public int LastSkippedLowPriorityMeshBuildCount { get; init; }
+    public long SuppressedDuplicateMeshBuildCount { get; init; }
+    public int LastSuppressedDuplicateMeshBuildCount { get; init; }
+    public bool PressureModeActive { get; init; }
+    public long PressureModeActiveFrameCount { get; init; }
+    public int PressureModeActivationCount { get; init; }
     public int LastDeferredDetailPromotionCount { get; init; }
     public int LastCoalescedRebuildRequestCount { get; init; }
     public string MeshBackendName { get; init; } = string.Empty;
@@ -69,6 +78,10 @@ public sealed class TerrainWorldProfileSnapshot
     public long MeshBuildWorkerCount { get; init; }
     public double MeshBuildWorkerMs { get; init; }
     public double LastMeshBuildWorkerMs { get; init; }
+    public double AverageCoarseMeshWorkerHeapDeltaKiB { get; init; }
+    public double PeakCoarseMeshWorkerHeapDeltaKiB { get; init; }
+    public double AverageDetailMeshWorkerHeapDeltaKiB { get; init; }
+    public double PeakDetailMeshWorkerHeapDeltaKiB { get; init; }
     public long MeshRebuildCount { get; init; }
     public double MeshRebuildMs { get; init; }
     public double LastMeshRebuildMs { get; init; }

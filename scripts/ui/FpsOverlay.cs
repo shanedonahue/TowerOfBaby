@@ -324,7 +324,11 @@ public partial class FpsOverlay : CanvasLayer
                 _detailBuilder.AppendLine(
                     $"Terrain prof {snapshot.MeshBackendName}  worker {snapshot.MeshBuildWorkerCount}/{snapshot.MeshBuildWorkerMs:0.00} ms  commit {snapshot.MeshRebuildCount}/{snapshot.MeshRebuildMs:0.00} ms  collision {snapshot.CollisionRebuildCount}/{snapshot.CollisionRebuildMs:0.00} ms");
                 _detailBuilder.AppendLine(
-                    $"Mesh queue build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount}  wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms  low-pri {snapshot.LowPriorityDeferredMeshBuildCount}  commit {snapshot.PendingMeshCommitCount}  detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount}  coalesced {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}");
+                    $"Mesh queue build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount}  hi/lo {snapshot.HighPriorityMeshQueueDepth}/{snapshot.LowPriorityMeshQueueDepth}  wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms  low-pri defer {snapshot.LowPriorityDeferredMeshBuildCount} skip {snapshot.LastSkippedLowPriorityMeshBuildCount}/{snapshot.SkippedLowPriorityMeshBuildCount} suppress {snapshot.LastSuppressedDuplicateMeshBuildCount}/{snapshot.SuppressedDuplicateMeshBuildCount}");
+                _detailBuilder.AppendLine(
+                    $"Pressure {(snapshot.PressureModeActive ? "on" : "off")}  frames {snapshot.PressureModeActiveFrameCount}  activations {snapshot.PressureModeActivationCount}  commit {snapshot.PendingMeshCommitCount}  detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount}  coalesced {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}");
+                _detailBuilder.AppendLine(
+                    $"Worker heap coarse/detail avg {snapshot.AverageCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.AverageDetailMeshWorkerHeapDeltaKiB:0.0} KiB  max {snapshot.PeakCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.0} KiB");
             }
             else
             {

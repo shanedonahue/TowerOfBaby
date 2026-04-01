@@ -22,12 +22,32 @@ internal enum TerrainMeshDetailMode
     IncludeTransientDetail = 1
 }
 
-internal readonly record struct TerrainMeshQueueResult(bool Enqueued, bool Coalesced, bool Deferred);
+internal enum TerrainVisualBuildQueueClass
+{
+    Critical = 0,
+    NearCoarse = 1,
+    Background = 2
+}
+
+internal readonly record struct TerrainMeshQueueResult(
+    bool Enqueued,
+    bool Coalesced,
+    bool Deferred,
+    bool Skipped = false,
+    bool Suppressed = false);
+
+internal readonly record struct TerrainMeshBuildExecutionBudget(
+    int MaxConcurrentJobs,
+    int MaxEditJobs,
+    int MaxCoarseJobs,
+    int MaxDetailJobs,
+    int MaxBackgroundJobs);
 
 internal readonly record struct TerrainVisualBuildRequest(
     TerrainChunk Chunk,
     Vector3I Key,
     TerrainVisualBuildRequestKind Kind,
+    TerrainVisualBuildQueueClass QueueClass,
     float PriorityScore,
     TerrainMeshDetailMode DetailMode,
     bool BypassBackpressure,
@@ -38,6 +58,7 @@ internal readonly record struct TerrainVisualBuildJob(
     Vector3I Key,
     int Revision,
     TerrainVisualBuildRequestKind Kind,
+    TerrainVisualBuildQueueClass QueueClass,
     float PriorityScore,
     TerrainMeshDetailMode DetailMode,
     string Reason,
@@ -61,15 +82,23 @@ internal readonly record struct TerrainVisualBuildCompletedJob(
 internal sealed class TerrainMeshBuildScheduler
 {
     private const float MaterialPriorityUpgradeDelta = 4.0f;
+    private static readonly TerrainVisualBuildQueueClass[] QueueClassOrder =
+    {
+        TerrainVisualBuildQueueClass.Critical,
+        TerrainVisualBuildQueueClass.NearCoarse,
+        TerrainVisualBuildQueueClass.Background
+    };
 
-    private readonly PriorityQueue<QueuedEntry, QueuePriority> _queuedRequests = new();
+    private readonly PriorityQueue<QueuedEntry, QueuePriority>[] _queuedRequests = CreateQueueBuckets();
     private readonly Dictionary<Vector3I, QueuedState> _queuedStates = new();
-    private readonly PriorityQueue<QueuedEntry, QueuePriority> _deferredRequests = new();
+    private readonly PriorityQueue<QueuedEntry, QueuePriority>[] _deferredRequests = CreateQueueBuckets();
     private readonly Dictionary<Vector3I, QueuedState> _deferredStates = new();
     private readonly Dictionary<Vector3I, RunningState> _runningStates = new();
     private readonly ConcurrentQueue<TerrainVisualBuildCompletedJob> _completedJobs = new();
 
     private int _activeQueueLimit = int.MaxValue;
+    private int _lowPriorityActiveQueueLimit = 1;
+    private int _maxDeferredLowPriorityBuilds = 16;
     private int _sequence;
     private int _activeJobs;
     private long _startedJobCount;
@@ -77,6 +106,8 @@ internal sealed class TerrainMeshBuildScheduler
     private double _lastQueueWaitMs;
     private double _peakQueueWaitMs;
     private long _lowPriorityDeferredCount;
+    private long _skippedLowPriorityCount;
+    private long _suppressedDuplicateCount;
 
     public int QueuedCount => _queuedStates.Count;
     public int DeferredCount => _deferredStates.Count;
@@ -90,10 +121,38 @@ internal sealed class TerrainMeshBuildScheduler
         ? _totalQueueWaitMs / _startedJobCount
         : 0.0;
     public long LowPriorityDeferredCount => _lowPriorityDeferredCount;
+    public long SkippedLowPriorityCount => _skippedLowPriorityCount;
+    public long SuppressedDuplicateCount => _suppressedDuplicateCount;
+    public int HighPriorityQueueDepth => CountRequests(static request => request.QueueClass != TerrainVisualBuildQueueClass.Background, includeDeferred: true);
+    public int LowPriorityQueueDepth => CountRequests(static request => request.QueueClass == TerrainVisualBuildQueueClass.Background, includeDeferred: true);
+    public int HighPriorityRunningCount => CountRunningRequests(static request => request.QueueClass != TerrainVisualBuildQueueClass.Background);
+    public int ForegroundCoarseQueueDepth => CountRequests(
+        static request => request.Kind == TerrainVisualBuildRequestKind.InitialCoarse &&
+            request.QueueClass != TerrainVisualBuildQueueClass.Background,
+        includeDeferred: true);
+    public int ForegroundCoarseRunningCount => CountRunningRequests(
+        static request => request.Kind == TerrainVisualBuildRequestKind.InitialCoarse &&
+            request.QueueClass != TerrainVisualBuildQueueClass.Background);
+    public int CriticalDetailQueueDepth => CountRequests(
+        static request => request.Kind == TerrainVisualBuildRequestKind.DetailPromotion &&
+            request.QueueClass == TerrainVisualBuildQueueClass.Critical,
+        includeDeferred: true);
+    public int CriticalDetailRunningCount => CountRunningRequests(
+        static request => request.Kind == TerrainVisualBuildRequestKind.DetailPromotion &&
+            request.QueueClass == TerrainVisualBuildQueueClass.Critical);
+    public bool HasHighPriorityDemand => HighPriorityQueueDepth > 0 || HighPriorityRunningCount > 0;
+    public bool HasForegroundCoarseDemand => ForegroundCoarseQueueDepth > 0 || ForegroundCoarseRunningCount > 0;
+    public bool HasCriticalDetailDemand => CriticalDetailQueueDepth > 0 || CriticalDetailRunningCount > 0;
 
     public void SetActiveQueueLimit(int maxQueuedJobs)
     {
         _activeQueueLimit = Mathf.Max(1, maxQueuedJobs);
+    }
+
+    public void SetLowPriorityLimits(int maxActiveLowPriorityRequests, int maxDeferredLowPriorityBuilds)
+    {
+        _lowPriorityActiveQueueLimit = Mathf.Max(0, maxActiveLowPriorityRequests);
+        _maxDeferredLowPriorityBuilds = Mathf.Max(0, maxDeferredLowPriorityBuilds);
     }
 
     public bool HasPendingWork(Vector3I key)
@@ -111,12 +170,13 @@ internal sealed class TerrainMeshBuildScheduler
             TerrainVisualBuildRequest merged = MergeRequests(queuedState.Request, request);
             if (!ShouldRefreshQueueState(queuedState.Request, merged))
             {
-                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: false);
+                _suppressedDuplicateCount++;
+                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: false, Suppressed: true);
             }
 
             int token = NextToken();
             queuedState.Update(merged, token, Stopwatch.GetTimestamp());
-            _queuedRequests.Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
+            _queuedRequests[(int)merged.QueueClass].Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
             return new TerrainMeshQueueResult(Enqueued: true, Coalesced: true, Deferred: false);
         }
 
@@ -125,7 +185,8 @@ internal sealed class TerrainMeshBuildScheduler
             TerrainVisualBuildRequest merged = MergeRequests(deferredState.Request, request);
             if (!ShouldRefreshQueueState(deferredState.Request, merged))
             {
-                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: true);
+                _suppressedDuplicateCount++;
+                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: true, Suppressed: true);
             }
 
             int token = NextToken();
@@ -134,18 +195,29 @@ internal sealed class TerrainMeshBuildScheduler
             {
                 _deferredStates.Remove(request.Key);
                 _queuedStates[request.Key] = deferredState;
-                _queuedRequests.Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
+                _queuedRequests[(int)merged.QueueClass].Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
                 return new TerrainMeshQueueResult(Enqueued: true, Coalesced: true, Deferred: false);
             }
 
-            _deferredRequests.Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
+            _deferredRequests[(int)merged.QueueClass].Enqueue(new QueuedEntry(request.Key, token), ComposePriority(merged, token));
             return new TerrainMeshQueueResult(Enqueued: true, Coalesced: true, Deferred: true);
         }
 
         if (_runningStates.TryGetValue(request.Key, out RunningState runningState))
         {
-            runningState.MergePending(request);
-            return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: false);
+            if (!runningState.MergePending(request))
+            {
+                _suppressedDuplicateCount++;
+                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: false, Suppressed: true);
+            }
+
+            return new TerrainMeshQueueResult(Enqueued: true, Coalesced: true, Deferred: false);
+        }
+
+        if (ShouldSkipLowPriorityRequest(request))
+        {
+            _skippedLowPriorityCount++;
+            return new TerrainMeshQueueResult(Enqueued: false, Coalesced: false, Deferred: true, Skipped: true);
         }
 
         long queuedTimestamp = Stopwatch.GetTimestamp();
@@ -157,18 +229,22 @@ internal sealed class TerrainMeshBuildScheduler
         }
 
         EnqueueDeferred(request, newToken, queuedTimestamp);
-        _lowPriorityDeferredCount++;
+        if (request.QueueClass == TerrainVisualBuildQueueClass.Background)
+        {
+            _lowPriorityDeferredCount++;
+        }
+
         return new TerrainMeshQueueResult(Enqueued: true, Coalesced: false, Deferred: true);
     }
 
     public void StartJobs(
-        int maxConcurrentJobs,
-        System.Func<TerrainVisualBuildRequest, TerrainVisualBuildJob?> prepareJob,
-        System.Func<TerrainVisualBuildJob, TerrainVisualBuildExecutionResult> executeJob)
+        TerrainMeshBuildExecutionBudget budget,
+        Func<TerrainVisualBuildRequest, TerrainVisualBuildJob?> prepareJob,
+        Func<TerrainVisualBuildJob, TerrainVisualBuildExecutionResult> executeJob)
     {
         PromoteDeferredRequests();
-        while (RunningCount < maxConcurrentJobs &&
-               TryTakeNextQueuedRequest(out TerrainVisualBuildRequest request, out double queueWaitMs, out int queueDepthOnStart))
+        while (RunningCount < budget.MaxConcurrentJobs &&
+               TryTakeNextQueuedRequest(budget, out TerrainVisualBuildRequest request, out double queueWaitMs, out int queueDepthOnStart))
         {
             TerrainVisualBuildJob? preparedJob = prepareJob(request);
             if (!preparedJob.HasValue)
@@ -204,6 +280,20 @@ internal sealed class TerrainMeshBuildScheduler
         }
     }
 
+    public int TrimStaleBackgroundRequests(double maxWaitMs)
+    {
+        if (maxWaitMs <= 0.0)
+        {
+            return 0;
+        }
+
+        long cutoffTimestamp = Stopwatch.GetTimestamp() - (long)(maxWaitMs * Stopwatch.Frequency / 1000.0);
+        int dropped = RemoveStaleRequests(_queuedStates, cutoffTimestamp);
+        dropped += RemoveStaleRequests(_deferredStates, cutoffTimestamp);
+        _skippedLowPriorityCount += dropped;
+        return dropped;
+    }
+
     public List<TerrainVisualBuildCompletedJob> DrainCompletedJobs()
     {
         List<TerrainVisualBuildCompletedJob> results = new();
@@ -226,25 +316,58 @@ internal sealed class TerrainMeshBuildScheduler
     }
 
     private bool TryTakeNextQueuedRequest(
+        TerrainMeshBuildExecutionBudget budget,
         out TerrainVisualBuildRequest request,
         out double queueWaitMs,
         out int queueDepthOnStart)
     {
-        while (_queuedRequests.Count > 0)
+        foreach (TerrainVisualBuildQueueClass queueClass in QueueClassOrder)
         {
-            QueuedEntry entry = _queuedRequests.Dequeue();
+            if (TryTakeNextQueuedRequest(queueClass, budget, out request, out queueWaitMs, out queueDepthOnStart))
+            {
+                return true;
+            }
+        }
+
+        request = default;
+        queueWaitMs = 0.0;
+        queueDepthOnStart = 0;
+        return false;
+    }
+
+    private bool TryTakeNextQueuedRequest(
+        TerrainVisualBuildQueueClass queueClass,
+        TerrainMeshBuildExecutionBudget budget,
+        out TerrainVisualBuildRequest request,
+        out double queueWaitMs,
+        out int queueDepthOnStart)
+    {
+        PriorityQueue<QueuedEntry, QueuePriority> queue = _queuedRequests[(int)queueClass];
+        List<(QueuedEntry Entry, QueuePriority Priority)> blockedEntries = new();
+        while (queue.Count > 0)
+        {
+            QueuedEntry entry = queue.Dequeue();
             if (!_queuedStates.TryGetValue(entry.Key, out QueuedState queuedState) || queuedState.Token != entry.Token)
             {
                 continue;
             }
 
+            QueuePriority priority = ComposePriority(queuedState.Request, queuedState.Token);
+            if (!CanStartRequest(queuedState.Request, budget))
+            {
+                blockedEntries.Add((entry, priority));
+                continue;
+            }
+
             _queuedStates.Remove(entry.Key);
+            RequeueBlockedEntries(queue, blockedEntries);
             request = queuedState.Request;
             queueWaitMs = GetElapsedMilliseconds(queuedState.EnqueuedTimestamp);
             queueDepthOnStart = _queuedStates.Count + _deferredStates.Count + _runningStates.Count + 1;
             return true;
         }
 
+        RequeueBlockedEntries(queue, blockedEntries);
         request = default;
         queueWaitMs = 0.0;
         queueDepthOnStart = 0;
@@ -258,27 +381,30 @@ internal sealed class TerrainMeshBuildScheduler
 
     private static TerrainVisualBuildRequest MergeRequests(TerrainVisualBuildRequest current, TerrainVisualBuildRequest next)
     {
-        TerrainVisualBuildRequestKind kind = GetPriorityLane(next.Kind) < GetPriorityLane(current.Kind)
+        TerrainVisualBuildRequestKind kind = GetKindPriorityLane(next.Kind) < GetKindPriorityLane(current.Kind)
             ? next.Kind
             : current.Kind;
+        TerrainVisualBuildQueueClass queueClass = GetQueueClassPriorityLane(next.QueueClass) < GetQueueClassPriorityLane(current.QueueClass)
+            ? next.QueueClass
+            : current.QueueClass;
         float priorityScore = Mathf.Max(current.PriorityScore, next.PriorityScore);
         TerrainMeshDetailMode detailMode = (TerrainMeshDetailMode)Mathf.Max((int)current.DetailMode, (int)next.DetailMode);
         bool bypassBackpressure = current.BypassBackpressure || next.BypassBackpressure;
         string reason = string.IsNullOrWhiteSpace(next.Reason)
             ? current.Reason
             : next.Reason;
-        return new TerrainVisualBuildRequest(current.Chunk, current.Key, kind, priorityScore, detailMode, bypassBackpressure, reason);
+        return new TerrainVisualBuildRequest(current.Chunk, current.Key, kind, queueClass, priorityScore, detailMode, bypassBackpressure, reason);
     }
 
     private static QueuePriority ComposePriority(TerrainVisualBuildRequest request, int token)
     {
         return new QueuePriority(
-            GetPriorityLane(request.Kind),
+            GetIntraQueuePriorityLane(request.Kind),
             -request.PriorityScore,
             token);
     }
 
-    private static int GetPriorityLane(TerrainVisualBuildRequestKind kind)
+    private static int GetKindPriorityLane(TerrainVisualBuildRequestKind kind)
     {
         return kind switch
         {
@@ -288,9 +414,105 @@ internal sealed class TerrainMeshBuildScheduler
         };
     }
 
+    private static int GetQueueClassPriorityLane(TerrainVisualBuildQueueClass queueClass)
+    {
+        return queueClass switch
+        {
+            TerrainVisualBuildQueueClass.Critical => 0,
+            TerrainVisualBuildQueueClass.NearCoarse => 1,
+            _ => 2
+        };
+    }
+
+    private static int GetIntraQueuePriorityLane(TerrainVisualBuildRequestKind kind)
+    {
+        return kind switch
+        {
+            TerrainVisualBuildRequestKind.DetailPromotion => 1,
+            _ => 0
+        };
+    }
+
     private bool CanEnterActiveQueue(TerrainVisualBuildRequest request)
     {
-        return request.BypassBackpressure || GetActiveRequestCount() < _activeQueueLimit;
+        if (request.BypassBackpressure)
+        {
+            return true;
+        }
+
+        if (request.QueueClass == TerrainVisualBuildQueueClass.Critical)
+        {
+            return true;
+        }
+
+        if (GetActiveRequestCount() >= _activeQueueLimit)
+        {
+            return false;
+        }
+
+        if (request.QueueClass == TerrainVisualBuildQueueClass.NearCoarse)
+        {
+            return true;
+        }
+
+        return
+            GetActiveLowPriorityRequestCount() < _lowPriorityActiveQueueLimit &&
+            !HasHighPriorityDemand;
+    }
+
+    private bool CanStartRequest(TerrainVisualBuildRequest request, TerrainMeshBuildExecutionBudget budget)
+    {
+        if (budget.MaxConcurrentJobs <= 0 || RunningCount >= budget.MaxConcurrentJobs)
+        {
+            return false;
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.Edit)
+        {
+            int editLimit = Mathf.Max(1, budget.MaxEditJobs);
+            if (CountRunningRequests(static running => running.Kind == TerrainVisualBuildRequestKind.Edit) >= editLimit)
+            {
+                return false;
+            }
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.InitialCoarse)
+        {
+            int coarseLimit = Mathf.Max(0, budget.MaxCoarseJobs);
+            if (coarseLimit == 0 ||
+                CountRunningRequests(static running => running.Kind == TerrainVisualBuildRequestKind.InitialCoarse) >= coarseLimit)
+            {
+                return false;
+            }
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.DetailPromotion)
+        {
+            int detailLimit = Mathf.Max(0, budget.MaxDetailJobs);
+            if (detailLimit == 0 ||
+                CountRunningRequests(static running => running.Kind == TerrainVisualBuildRequestKind.DetailPromotion) >= detailLimit)
+            {
+                return false;
+            }
+        }
+
+        if (request.QueueClass == TerrainVisualBuildQueueClass.Background &&
+            CountRunningRequests(static running => running.QueueClass == TerrainVisualBuildQueueClass.Background) >= Mathf.Max(0, budget.MaxBackgroundJobs))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool ShouldSkipLowPriorityRequest(TerrainVisualBuildRequest request)
+    {
+        if (request.QueueClass != TerrainVisualBuildQueueClass.Background || request.BypassBackpressure)
+        {
+            return false;
+        }
+
+        return CountRequests(static queued => queued.QueueClass == TerrainVisualBuildQueueClass.Background, includeDeferred: true, includeRunning: true) >= _maxDeferredLowPriorityBuilds;
     }
 
     private int GetActiveRequestCount()
@@ -298,35 +520,94 @@ internal sealed class TerrainMeshBuildScheduler
         return _queuedStates.Count + _runningStates.Count;
     }
 
+    private int GetActiveLowPriorityRequestCount()
+    {
+        return
+            CountRequests(static request => request.QueueClass == TerrainVisualBuildQueueClass.Background, includeDeferred: false) +
+            CountRunningRequests(static request => request.QueueClass == TerrainVisualBuildQueueClass.Background);
+    }
+
     private void EnqueueActive(TerrainVisualBuildRequest request, int token, long enqueuedTimestamp)
     {
         _queuedStates[request.Key] = new QueuedState(request, token, enqueuedTimestamp);
-        _queuedRequests.Enqueue(new QueuedEntry(request.Key, token), ComposePriority(request, token));
+        _queuedRequests[(int)request.QueueClass].Enqueue(new QueuedEntry(request.Key, token), ComposePriority(request, token));
     }
 
     private void EnqueueDeferred(TerrainVisualBuildRequest request, int token, long enqueuedTimestamp)
     {
         _deferredStates[request.Key] = new QueuedState(request, token, enqueuedTimestamp);
-        _deferredRequests.Enqueue(new QueuedEntry(request.Key, token), ComposePriority(request, token));
+        _deferredRequests[(int)request.QueueClass].Enqueue(new QueuedEntry(request.Key, token), ComposePriority(request, token));
     }
 
     private void PromoteDeferredRequests()
     {
-        while (GetActiveRequestCount() < _activeQueueLimit &&
-               TryTakeNextDeferredRequest(out QueuedState deferredState))
+        bool promoted;
+        do
         {
-            int token = NextToken();
-            deferredState.Update(deferredState.Request, token, deferredState.EnqueuedTimestamp);
-            _queuedStates[deferredState.Request.Key] = deferredState;
-            _queuedRequests.Enqueue(new QueuedEntry(deferredState.Request.Key, token), ComposePriority(deferredState.Request, token));
+            promoted = false;
+            foreach (TerrainVisualBuildQueueClass queueClass in QueueClassOrder)
+            {
+                if (!TryPeekNextDeferredRequest(queueClass, out TerrainVisualBuildRequest request))
+                {
+                    continue;
+                }
+
+                if (!CanEnterActiveQueue(request))
+                {
+                    continue;
+                }
+
+                if (!TryTakeNextDeferredRequest(queueClass, out QueuedState deferredState))
+                {
+                    continue;
+                }
+
+                int token = NextToken();
+                deferredState.Update(deferredState.Request, token, deferredState.EnqueuedTimestamp);
+                _queuedStates[deferredState.Request.Key] = deferredState;
+                _queuedRequests[(int)deferredState.Request.QueueClass].Enqueue(
+                    new QueuedEntry(deferredState.Request.Key, token),
+                    ComposePriority(deferredState.Request, token));
+                promoted = true;
+                break;
+            }
         }
+        while (promoted);
     }
 
-    private bool TryTakeNextDeferredRequest(out QueuedState state)
+    private bool TryPeekNextDeferredRequest(TerrainVisualBuildQueueClass queueClass, out TerrainVisualBuildRequest request)
     {
-        while (_deferredRequests.Count > 0)
+        return TryPeekNextRequest(_deferredRequests[(int)queueClass], _deferredStates, out request);
+    }
+
+    private static bool TryPeekNextRequest(
+        PriorityQueue<QueuedEntry, QueuePriority> queue,
+        Dictionary<Vector3I, QueuedState> states,
+        out TerrainVisualBuildRequest request)
+    {
+        while (queue.Count > 0)
         {
-            QueuedEntry entry = _deferredRequests.Dequeue();
+            QueuedEntry entry = queue.Peek();
+            if (!states.TryGetValue(entry.Key, out QueuedState queuedState) || queuedState.Token != entry.Token)
+            {
+                queue.Dequeue();
+                continue;
+            }
+
+            request = queuedState.Request;
+            return true;
+        }
+
+        request = default;
+        return false;
+    }
+
+    private bool TryTakeNextDeferredRequest(TerrainVisualBuildQueueClass queueClass, out QueuedState state)
+    {
+        PriorityQueue<QueuedEntry, QueuePriority> queue = _deferredRequests[(int)queueClass];
+        while (queue.Count > 0)
+        {
+            QueuedEntry entry = queue.Dequeue();
             if (!_deferredStates.TryGetValue(entry.Key, out QueuedState deferredState) || deferredState.Token != entry.Token)
             {
                 continue;
@@ -349,25 +630,130 @@ internal sealed class TerrainMeshBuildScheduler
         _peakQueueWaitMs = Math.Max(_peakQueueWaitMs, queueWaitMs);
     }
 
+    private int CountRequests(
+        Func<TerrainVisualBuildRequest, bool> predicate,
+        bool includeDeferred,
+        bool includeRunning = false)
+    {
+        int count = 0;
+        foreach (QueuedState state in _queuedStates.Values)
+        {
+            if (predicate(state.Request))
+            {
+                count++;
+            }
+        }
+
+        if (includeDeferred)
+        {
+            foreach (QueuedState state in _deferredStates.Values)
+            {
+                if (predicate(state.Request))
+                {
+                    count++;
+                }
+            }
+        }
+
+        if (includeRunning)
+        {
+            foreach (RunningState state in _runningStates.Values)
+            {
+                if (predicate(state.Request))
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    private int CountRunningRequests(Func<TerrainVisualBuildRequest, bool> predicate)
+    {
+        int count = 0;
+        foreach (RunningState state in _runningStates.Values)
+        {
+            if (predicate(state.Request))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     private static double GetElapsedMilliseconds(long startTimestamp)
     {
         long elapsedTicks = Stopwatch.GetTimestamp() - startTimestamp;
         return elapsedTicks * 1000.0 / Stopwatch.Frequency;
     }
 
+    private static int RemoveStaleRequests(Dictionary<Vector3I, QueuedState> states, long cutoffTimestamp)
+    {
+        if (states.Count == 0)
+        {
+            return 0;
+        }
+
+        int removed = 0;
+        List<Vector3I> keysToRemove = new();
+        foreach ((Vector3I key, QueuedState state) in states)
+        {
+            if (state.Request.QueueClass != TerrainVisualBuildQueueClass.Background ||
+                state.EnqueuedTimestamp > cutoffTimestamp)
+            {
+                continue;
+            }
+
+            keysToRemove.Add(key);
+        }
+
+        foreach (Vector3I key in keysToRemove)
+        {
+            if (states.Remove(key))
+            {
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    private static void RequeueBlockedEntries(
+        PriorityQueue<QueuedEntry, QueuePriority> queue,
+        List<(QueuedEntry Entry, QueuePriority Priority)> blockedEntries)
+    {
+        foreach ((QueuedEntry entry, QueuePriority priority) in blockedEntries)
+        {
+            queue.Enqueue(entry, priority);
+        }
+    }
+
     private static bool ShouldRefreshQueueState(TerrainVisualBuildRequest current, TerrainVisualBuildRequest merged)
     {
         return
-            GetPriorityLane(merged.Kind) < GetPriorityLane(current.Kind) ||
+            GetQueueClassPriorityLane(merged.QueueClass) < GetQueueClassPriorityLane(current.QueueClass) ||
+            GetKindPriorityLane(merged.Kind) < GetKindPriorityLane(current.Kind) ||
             merged.DetailMode > current.DetailMode ||
             (merged.BypassBackpressure && !current.BypassBackpressure) ||
             merged.PriorityScore > (current.PriorityScore + MaterialPriorityUpgradeDelta);
     }
 
+    private static PriorityQueue<QueuedEntry, QueuePriority>[] CreateQueueBuckets()
+    {
+        return new[]
+        {
+            new PriorityQueue<QueuedEntry, QueuePriority>(),
+            new PriorityQueue<QueuedEntry, QueuePriority>(),
+            new PriorityQueue<QueuedEntry, QueuePriority>()
+        };
+    }
+
     private readonly record struct QueuedEntry(Vector3I Key, int Token);
 
     private readonly record struct QueuePriority(int Lane, float NegativePriorityScore, int Token)
-        : System.IComparable<QueuePriority>
+        : IComparable<QueuePriority>
     {
         public int CompareTo(QueuePriority other)
         {
@@ -418,16 +804,17 @@ internal sealed class TerrainMeshBuildScheduler
         public TerrainVisualBuildRequest Request { get; }
         public TerrainVisualBuildRequest? PendingMergedRequest { get; private set; }
 
-        public void MergePending(TerrainVisualBuildRequest request)
+        public bool MergePending(TerrainVisualBuildRequest request)
         {
             TerrainVisualBuildRequest baseline = PendingMergedRequest ?? Request;
             TerrainVisualBuildRequest merged = MergeRequests(baseline, request);
             if (!ShouldRefreshQueueState(baseline, merged))
             {
-                return;
+                return false;
             }
 
             PendingMergedRequest = merged;
+            return true;
         }
     }
 }

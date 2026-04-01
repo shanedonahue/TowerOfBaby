@@ -263,6 +263,7 @@ public partial class PerformanceRunLogger : Node
         if (_samples.Count > 0)
         {
             double averageFps = 0.0;
+            TerrainWorldProfileSnapshot latestSnapshot = null;
             int peakLoadedChunks = 0;
             int peakActiveChunks = 0;
             int peakPendingLoads = 0;
@@ -270,6 +271,8 @@ public partial class PerformanceRunLogger : Node
             int peakDeferredMeshBuilds = 0;
             int peakRunningMeshBuilds = 0;
             int peakPendingMeshCommits = 0;
+            int peakHighPriorityMeshQueueDepth = 0;
+            int peakLowPriorityMeshQueueDepth = 0;
             int peakRamCacheChunks = 0;
             double totalChunkLoadMs = 0.0;
             double totalReleaseMs = 0.0;
@@ -289,6 +292,8 @@ public partial class PerformanceRunLogger : Node
             long totalLowPriorityDeferredMeshBuilds = 0;
             int totalDeferredDetailPromotions = 0;
             int totalCoalescedRebuildRequests = 0;
+            long totalSkippedLowPriorityMeshBuilds = 0;
+            long totalSuppressedDuplicateMeshBuilds = 0;
             double totalStartupLoadMs = 0.0;
             double totalPersistedLoadMs = 0.0;
             double totalGeneratedLoadMs = 0.0;
@@ -310,6 +315,8 @@ public partial class PerformanceRunLogger : Node
             int totalGen0Collections = 0;
             int totalGen1Collections = 0;
             int totalGen2Collections = 0;
+            long peakPressureModeActiveFrames = 0;
+            int peakPressureModeActivationCount = 0;
             float averageFrameMs = ComputeAverageFrameMs();
             float p95FrameMs = ComputePercentileFrameMs(0.95f);
             float maxFrameMs = ComputePercentileFrameMs(1.0f);
@@ -338,6 +345,7 @@ public partial class PerformanceRunLogger : Node
                     continue;
                 }
 
+                latestSnapshot = sample.Snapshot;
                 peakLoadedChunks = Mathf.Max(peakLoadedChunks, sample.Snapshot.LoadedChunkCount);
                 peakActiveChunks = Mathf.Max(peakActiveChunks, sample.Snapshot.ActiveChunkCount);
                 peakPendingLoads = Mathf.Max(peakPendingLoads, sample.Snapshot.PendingLoadCount + sample.Snapshot.RunningLoadCount);
@@ -345,6 +353,8 @@ public partial class PerformanceRunLogger : Node
                 peakDeferredMeshBuilds = Mathf.Max(peakDeferredMeshBuilds, sample.Snapshot.DeferredMeshBuildCount);
                 peakRunningMeshBuilds = Mathf.Max(peakRunningMeshBuilds, sample.Snapshot.RunningMeshBuildCount);
                 peakPendingMeshCommits = Mathf.Max(peakPendingMeshCommits, sample.Snapshot.PendingMeshCommitCount);
+                peakHighPriorityMeshQueueDepth = Mathf.Max(peakHighPriorityMeshQueueDepth, sample.Snapshot.HighPriorityMeshQueueDepth);
+                peakLowPriorityMeshQueueDepth = Mathf.Max(peakLowPriorityMeshQueueDepth, sample.Snapshot.LowPriorityMeshQueueDepth);
                 peakRamCacheChunks = Mathf.Max(peakRamCacheChunks, sample.Snapshot.RamCacheChunkCount);
                 peakFrontier = Mathf.Max(peakFrontier, sample.Snapshot.FrontierSize);
                 peakToAdd = Mathf.Max(peakToAdd, sample.Snapshot.ToAddCount);
@@ -379,6 +389,10 @@ public partial class PerformanceRunLogger : Node
                 totalLowPriorityDeferredMeshBuilds += sample.LowPriorityDeferredMeshBuildsDelta;
                 totalDeferredDetailPromotions += sample.DeferredDetailPromotions;
                 totalCoalescedRebuildRequests += sample.CoalescedRebuildRequests;
+                totalSkippedLowPriorityMeshBuilds = Math.Max(totalSkippedLowPriorityMeshBuilds, sample.Snapshot.SkippedLowPriorityMeshBuildCount);
+                totalSuppressedDuplicateMeshBuilds = Math.Max(totalSuppressedDuplicateMeshBuilds, sample.Snapshot.SuppressedDuplicateMeshBuildCount);
+                peakPressureModeActiveFrames = Math.Max(peakPressureModeActiveFrames, sample.Snapshot.PressureModeActiveFrameCount);
+                peakPressureModeActivationCount = Math.Max(peakPressureModeActivationCount, sample.Snapshot.PressureModeActivationCount);
                 totalSearchMs += sample.SearchMs;
                 totalPriorityEvalMs += sample.PriorityEvalMs;
                 totalVisibilityMs += sample.VisibilityMs;
@@ -402,6 +416,8 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"PeakDeferredMeshBuilds: {peakDeferredMeshBuilds}");
             builder.AppendLine($"PeakRunningMeshBuilds: {peakRunningMeshBuilds}");
             builder.AppendLine($"PeakPendingMeshCommits: {peakPendingMeshCommits}");
+            builder.AppendLine($"PeakHighPriorityMeshQueueDepth: {peakHighPriorityMeshQueueDepth}");
+            builder.AppendLine($"PeakLowPriorityMeshQueueDepth: {peakLowPriorityMeshQueueDepth}");
             builder.AppendLine($"PeakRamCacheChunks: {peakRamCacheChunks}");
             builder.AppendLine($"PeakMeshWorkerQueueWaitMs: {peakMeshWorkerQueueWaitMs:0.00}");
             builder.AppendLine($"PeakFrontier: {peakFrontier}");
@@ -420,8 +436,12 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"ChunkReleases: {totalReleases}");
             builder.AppendLine($"MeshWorkerBuilds: {totalMeshWorkerBuilds}");
             builder.AppendLine($"LowPriorityDeferredMeshBuilds: {totalLowPriorityDeferredMeshBuilds}");
+            builder.AppendLine($"SkippedLowPriorityMeshBuilds: {totalSkippedLowPriorityMeshBuilds}");
+            builder.AppendLine($"SuppressedDuplicateMeshBuilds: {totalSuppressedDuplicateMeshBuilds}");
             builder.AppendLine($"DeferredDetailPromotions: {totalDeferredDetailPromotions}");
             builder.AppendLine($"CoalescedRebuildRequests: {totalCoalescedRebuildRequests}");
+            builder.AppendLine($"PressureModeActiveFrames: {peakPressureModeActiveFrames}");
+            builder.AppendLine($"PressureModeActivations: {peakPressureModeActivationCount}");
             builder.AppendLine($"StartupPromotionWrites: {peakStartupPromotionWrites}");
             builder.AppendLine($"AccumulatedRamChunkLoadMs: {totalRamLoadMs:0.00}");
             builder.AppendLine($"AccumulatedStartupChunkLoadMs: {totalStartupLoadMs:0.00}");
@@ -439,6 +459,13 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"Gen0Collections: {totalGen0Collections}");
             builder.AppendLine($"Gen1Collections: {totalGen1Collections}");
             builder.AppendLine($"Gen2Collections: {totalGen2Collections}");
+            if (latestSnapshot != null)
+            {
+                builder.AppendLine($"AverageCoarseMeshWorkerHeapDeltaKiB: {latestSnapshot.AverageCoarseMeshWorkerHeapDeltaKiB:0.00}");
+                builder.AppendLine($"PeakCoarseMeshWorkerHeapDeltaKiB: {latestSnapshot.PeakCoarseMeshWorkerHeapDeltaKiB:0.00}");
+                builder.AppendLine($"AverageDetailMeshWorkerHeapDeltaKiB: {latestSnapshot.AverageDetailMeshWorkerHeapDeltaKiB:0.00}");
+                builder.AppendLine($"PeakDetailMeshWorkerHeapDeltaKiB: {latestSnapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.00}");
+            }
             builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");
             builder.AppendLine($"LocomotionRightStepCount: {rightStepCount}");
             builder.AppendLine($"LocomotionPeakFootSkate: {peakFootSkate:0.000}");

@@ -37,9 +37,11 @@ public readonly record struct VoxelMeshBuildResult(
     public bool HasTangents => Tangents.Length > 0;
 }
 
-public readonly record struct VoxelMeshBuildOptions(bool GenerateTangents)
+public readonly record struct VoxelMeshBuildOptions(
+    bool GenerateTangents,
+    bool EnableVertexTint = false)
 {
-    public static VoxelMeshBuildOptions Default => new(false);
+    public static VoxelMeshBuildOptions Default => new(false, false);
 }
 
 public static class VoxelMesher
@@ -84,7 +86,7 @@ public static class VoxelMesher
                         continue;
                     }
 
-                    PolygonizeCube(scratch, data, data.Origin, x, y, z, options.GenerateTangents);
+                    PolygonizeCube(scratch, data, data.Origin, x, y, z, options.GenerateTangents, options.EnableVertexTint);
                 }
             }
         }
@@ -99,7 +101,7 @@ public static class VoxelMesher
                 {
                     for (int x = 0; x < detailCells; x++)
                     {
-                        PolygonizeCube(scratch, detailBrick.Data, data.Origin, x, y, z, options.GenerateTangents);
+                        PolygonizeCube(scratch, detailBrick.Data, data.Origin, x, y, z, options.GenerateTangents, options.EnableVertexTint);
                         detailCellCount++;
                     }
                 }
@@ -146,7 +148,8 @@ public static class VoxelMesher
         int x,
         int y,
         int z,
-        bool generateTangents)
+        bool generateTangents,
+        bool useVertexTint)
     {
         Span<Vector3> positions = stackalloc Vector3[8];
         Span<float> densities = stackalloc float[8];
@@ -185,7 +188,9 @@ public static class VoxelMesher
             int b = MarchingCubesTables.EdgeVertexIndices[edge, 1];
             float t;
             edgeVertices[edge] = Interpolate(positions[a], positions[b], densities[a], densities[b], data.IsoLevel, out t);
-            edgeColors[edge] = MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t);
+            edgeColors[edge] = useVertexTint
+                ? MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t)
+                : Colors.White;
             Vector3 worldPosition = edgeVertices[edge] + meshOrigin;
             edgeNormals[edge] = data.SampleSurfaceNormal(worldPosition);
         }
@@ -357,12 +362,12 @@ public static class VoxelMesher
     {
         return materialId switch
         {
-            VoxelMaterialId.Grass => new Color(0.32f, 0.42f, 0.19f),
-            VoxelMaterialId.Rock => new Color(0.42f, 0.4f, 0.38f),
-            VoxelMaterialId.Cliff => new Color(0.5f, 0.46f, 0.33f),
-            VoxelMaterialId.Snow => new Color(0.83f, 0.84f, 0.86f),
-            VoxelMaterialId.Scorched => new Color(0.11f, 0.1f, 0.1f),
-            _ => new Color(0.39f, 0.3f, 0.18f)
+            VoxelMaterialId.Grass => new Color(0.82f, 0.90f, 0.66f),
+            VoxelMaterialId.Rock => new Color(0.78f, 0.77f, 0.75f),
+            VoxelMaterialId.Cliff => new Color(0.86f, 0.76f, 0.61f),
+            VoxelMaterialId.Snow => new Color(0.94f, 0.95f, 0.97f),
+            VoxelMaterialId.Scorched => new Color(0.44f, 0.40f, 0.38f),
+            _ => new Color(0.74f, 0.62f, 0.48f)
         };
     }
 
