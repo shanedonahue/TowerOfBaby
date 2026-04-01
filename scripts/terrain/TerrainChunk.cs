@@ -374,20 +374,34 @@ public partial class TerrainChunk : Node3D
 
     private void SyncEditedDetailRegionRequest()
     {
-        if (!TryGetEditedDetailLocalBounds(out Aabb localBounds))
+        RemoveDetailRequest(EditedDetailRegionRequestId);
+        if (_data == null)
         {
-            RemoveDetailRequest(EditedDetailRegionRequestId);
             return;
         }
 
-        RequestDetail(
-            localBounds,
-            2,
-            TerrainDetailRegionSource.Edit,
-            EditedDetailRegionReason,
-            priority: 100.0f,
-            sticky: true,
-            requestId: EditedDetailRegionRequestId);
+        if (!HasEditedDetailBrick)
+        {
+            _data.RemovePersistedDetailRegion(EditedDetailRegionRequestId);
+            return;
+        }
+
+        if (TryGetEditedDetailLocalBounds(out Aabb localBounds))
+        {
+            _data.UpsertPersistedDetailRegion(BuildEditedPersistedDetailRegion(localBounds));
+        }
+
+        foreach (TerrainPersistedDetailRegionData persistedRegion in _data.PersistedDetailRegions)
+        {
+            RequestDetail(
+                persistedRegion.LocalBounds,
+                persistedRegion.RequestedDetailLevel,
+                persistedRegion.Source,
+                persistedRegion.Reason,
+                persistedRegion.Priority,
+                persistedRegion.Sticky,
+                persistedRegion.Id);
+        }
     }
 
     private void UpdateDebugName()
@@ -401,6 +415,18 @@ public partial class TerrainChunk : Node3D
     private static int GetDetailScaleForLevel(int detailLevel)
     {
         return detailLevel >= 2 ? 3 : 2;
+    }
+
+    private static TerrainPersistedDetailRegionData BuildEditedPersistedDetailRegion(Aabb localBounds)
+    {
+        return new TerrainPersistedDetailRegionData(
+            EditedDetailRegionRequestId,
+            localBounds,
+            2,
+            TerrainDetailRegionSource.Edit,
+            EditedDetailRegionReason,
+            priority: 100.0f,
+            sticky: true);
     }
 
     private void ApplySurfaceMaterialOverride()

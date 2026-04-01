@@ -123,6 +123,7 @@ public sealed class TerrainChunkStore
     {
         lock (_databaseLock)
         {
+            VoxelAdaptiveDetailPersistencePayload adaptiveDetail = data.ExportPersistedAdaptiveDetailPayload();
             using SqliteConnection connection = new(_connectionString);
             connection.Open();
 
@@ -165,9 +166,13 @@ public sealed class TerrainChunkStore
             command.Parameters.AddWithValue("$originZ", data.Origin.Z);
             command.Parameters.AddWithValue("$densities", FloatArrayToBytes(data.CopyDensities()));
             command.Parameters.AddWithValue("$materials", data.CopyMaterials());
-            command.Parameters.AddWithValue("$detailBrick", (object)data.CopyEditedDetailBrickBlob() ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$detailBrick",
+                adaptiveDetail.HasPayload ? adaptiveDetail.Blob : (object)DBNull.Value);
             command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             command.ExecuteNonQuery();
+
+            LogAdaptiveDetailSave("chunks", key, adaptiveDetail.Metrics);
         }
     }
 
@@ -175,6 +180,7 @@ public sealed class TerrainChunkStore
     {
         lock (_databaseLock)
         {
+            VoxelAdaptiveDetailPersistenceMetrics totalAdaptiveDetailMetrics = VoxelAdaptiveDetailPersistenceMetrics.None;
             using SqliteConnection connection = new(_connectionString);
             connection.Open();
             using SqliteTransaction transaction = connection.BeginTransaction();
@@ -212,6 +218,8 @@ public sealed class TerrainChunkStore
 
             foreach (TerrainStartupChunkSnapshot chunk in chunks)
             {
+                VoxelAdaptiveDetailPersistencePayload adaptiveDetail = chunk.Data.ExportPersistedAdaptiveDetailPayload();
+                totalAdaptiveDetailMetrics = totalAdaptiveDetailMetrics.Add(adaptiveDetail.Metrics);
                 using SqliteCommand command = connection.CreateCommand();
                 command.Transaction = transaction;
                 command.CommandText =
@@ -244,12 +252,15 @@ public sealed class TerrainChunkStore
                 command.Parameters.AddWithValue("$originZ", chunk.Data.Origin.Z);
                 command.Parameters.AddWithValue("$densities", FloatArrayToBytes(chunk.Data.CopyDensities()));
                 command.Parameters.AddWithValue("$materials", chunk.Data.CopyMaterials());
-                command.Parameters.AddWithValue("$detailBrick", (object)chunk.Data.CopyEditedDetailBrickBlob() ?? DBNull.Value);
+                command.Parameters.AddWithValue(
+                    "$detailBrick",
+                    adaptiveDetail.HasPayload ? adaptiveDetail.Blob : (object)DBNull.Value);
                 command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 command.ExecuteNonQuery();
             }
 
             transaction.Commit();
+            LogAdaptiveDetailBatchSave("startup_state", chunks.Count, totalAdaptiveDetailMetrics);
         }
     }
 
@@ -386,7 +397,21 @@ public sealed class TerrainChunkStore
 
             VoxelChunkData loaded = new(pointsPerAxis, voxelSize, origin, isoLevel);
             loaded.LoadFromBuffers(BytesToFloatArray(densityBytes), materialBytes);
-            loaded.LoadEditedDetailBrickFromBlob(detailBrickBytes);
+            VoxelAdaptiveDetailPersistenceMetrics adaptiveDetailMetrics = VoxelAdaptiveDetailPersistenceMetrics.None;
+            if (detailBrickBytes != null && detailBrickBytes.Length > 0)
+            {
+                try
+                {
+                    adaptiveDetailMetrics = loaded.LoadPersistedAdaptiveDetailPayload(detailBrickBytes);
+                    LogAdaptiveDetailLoad(tableName, key, adaptiveDetailMetrics);
+                }
+                catch (Exception ex)
+                {
+                    GD.PushWarning(
+                        $"Terrain adaptive detail load failed | table {tableName} | chunk {key} | bytes {detailBrickBytes.Length} | {ex.Message} | falling back to coarse terrain only.");
+                }
+            }
+
             data = loaded;
             return true;
         }
@@ -423,5 +448,43 @@ public sealed class TerrainChunkStore
         float[] values = new float[bytes.Length / sizeof(float)];
         Buffer.BlockCopy(bytes, 0, values, 0, bytes.Length);
         return values;
+    }
+
+    private static void LogAdaptiveDetailSave(string scope, Vector3I key, VoxelAdaptiveDetailPersistenceMetrics metrics)
+    {
+        if (!metrics.HasPayload)
+        {
+            return;
+        }
+
+        GD.Print(
+            $"Terrain adaptive detail save | scope {scope} | chunk {key} | detail_bricks {metrics.DetailBrickCount} | detail_regions {metrics.DetailRegionCount} | bytes {metrics.SerializedByteCount} | schema {FormatSchema(metrics.SchemaVersion)}");
+    }
+
+    private static void LogAdaptiveDetailLoad(string scope, Vector3I key, VoxelAdaptiveDetailPersistenceMetrics metrics)
+    {
+        if (!metrics.HasPayload)
+        {
+            return;
+        }
+
+        GD.Print(
+            $"Terrain adaptive detail load | scope {scope} | chunk {key} | detail_bricks {metrics.DetailBrickCount} | detail_regions {metrics.DetailRegionCount} | bytes {metrics.SerializedByteCount} | schema {FormatSchema(metrics.SchemaVersion)}");
+    }
+
+    private static void LogAdaptiveDetailBatchSave(string scope, int chunkCount, VoxelAdaptiveDetailPersistenceMetrics metrics)
+    {
+        if (!metrics.HasPayload)
+        {
+            return;
+        }
+
+        GD.Print(
+            $"Terrain adaptive detail save | scope {scope} | chunk_count {chunkCount} | detail_bricks {metrics.DetailBrickCount} | detail_regions {metrics.DetailRegionCount} | bytes {metrics.SerializedByteCount} | schema {FormatSchema(metrics.SchemaVersion)}");
+    }
+
+    private static string FormatSchema(int schemaVersion)
+    {
+        return schemaVersion <= 0 ? "legacy" : schemaVersion.ToString();
     }
 }

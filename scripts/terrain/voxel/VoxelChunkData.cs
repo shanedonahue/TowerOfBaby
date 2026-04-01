@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.Collections.Generic;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
@@ -12,6 +13,7 @@ public sealed class VoxelChunkData
 
     private readonly float[] _densities;
     private readonly byte[] _materials;
+    private readonly List<TerrainPersistedDetailRegionData> _persistedDetailRegions = new();
     private VoxelDetailBrickData _detailBrick;
 
     public int CellsPerAxis => PointsPerAxis - 1;
@@ -21,6 +23,8 @@ public sealed class VoxelChunkData
     public VoxelDetailBrickData DetailBrick => _detailBrick;
     public bool HasEditedDetailBrick => _detailBrick?.HasPersistentEdits == true;
     public VoxelDetailBrickData EditedDetailBrick => HasEditedDetailBrick ? _detailBrick : null;
+    public IReadOnlyList<TerrainPersistedDetailRegionData> PersistedDetailRegions => _persistedDetailRegions;
+    public int PersistedDetailRegionCount => _persistedDetailRegions.Count;
 
     public VoxelChunkData(int pointsPerAxis, float voxelSize, Vector3 origin, float isoLevel = 0.0f)
     {
@@ -118,6 +122,7 @@ public sealed class VoxelChunkData
         }
 
         _detailBrick = null;
+        _persistedDetailRegions.Clear();
         return true;
     }
 
@@ -175,20 +180,87 @@ public sealed class VoxelChunkData
         densities.CopyTo(_densities, 0);
         materials.CopyTo(_materials, 0);
         _detailBrick = null;
+        _persistedDetailRegions.Clear();
+    }
+
+    public VoxelAdaptiveDetailPersistencePayload ExportPersistedAdaptiveDetailPayload()
+    {
+        if (_detailBrick?.HasPersistentEdits != true)
+        {
+            return VoxelAdaptiveDetailPersistencePayload.None;
+        }
+
+        TerrainPersistedDetailRegionData[] persistedRegions = BuildPersistedDetailRegionsSnapshot();
+        VoxelDetailBrickData persistedBrick = BuildPersistedDetailBrickSnapshot(persistedRegions);
+        VoxelAdaptiveDetailState state = new(persistedBrick, persistedRegions);
+        byte[] blob = state.Serialize();
+        return new VoxelAdaptiveDetailPersistencePayload(blob, state.BuildMetrics(blob.Length));
     }
 
     public byte[] CopyEditedDetailBrickBlob()
     {
-        return _detailBrick?.HasPersistentEdits == true
-            ? _detailBrick.Serialize()
-            : null;
+        VoxelAdaptiveDetailPersistencePayload payload = ExportPersistedAdaptiveDetailPayload();
+        return payload.HasPayload ? payload.Blob : null;
+    }
+
+    public VoxelAdaptiveDetailPersistenceMetrics LoadPersistedAdaptiveDetailPayload(byte[] blob)
+    {
+        _persistedDetailRegions.Clear();
+        if (blob == null || blob.Length == 0)
+        {
+            _detailBrick = null;
+            return VoxelAdaptiveDetailPersistenceMetrics.None;
+        }
+
+        VoxelAdaptiveDetailState state = VoxelAdaptiveDetailState.Deserialize(blob);
+        _detailBrick = state.DetailBrick;
+        _persistedDetailRegions.AddRange(state.PersistedRegions);
+        return state.BuildMetrics(blob.Length);
     }
 
     public void LoadEditedDetailBrickFromBlob(byte[] blob)
     {
-        _detailBrick = blob == null || blob.Length == 0
-            ? null
-            : VoxelDetailBrickData.Deserialize(blob);
+        LoadPersistedAdaptiveDetailPayload(blob);
+    }
+
+    public void UpsertPersistedDetailRegion(TerrainPersistedDetailRegionData region)
+    {
+        if (region == null)
+        {
+            throw new ArgumentNullException(nameof(region));
+        }
+
+        int existingIndex = FindPersistedDetailRegionIndex(region.Id);
+        if (existingIndex >= 0)
+        {
+            _persistedDetailRegions[existingIndex] = region;
+        }
+        else
+        {
+            _persistedDetailRegions.Add(region);
+        }
+
+        if (_detailBrick != null)
+        {
+            _detailBrick.MarkPersistentEdits();
+        }
+    }
+
+    public bool RemovePersistedDetailRegion(string requestId)
+    {
+        int existingIndex = FindPersistedDetailRegionIndex(requestId);
+        if (existingIndex < 0)
+        {
+            return false;
+        }
+
+        _persistedDetailRegions.RemoveAt(existingIndex);
+        return true;
+    }
+
+    public void ClearPersistedDetailRegions()
+    {
+        _persistedDetailRegions.Clear();
     }
 
     public float SampleDensityTrilinear(Vector3 worldPosition)
@@ -241,6 +313,70 @@ public sealed class VoxelChunkData
         return x + (PointsPerAxis * (y + (PointsPerAxis * z)));
     }
 
+    private TerrainPersistedDetailRegionData[] BuildPersistedDetailRegionsSnapshot()
+    {
+        if (_persistedDetailRegions.Count > 0)
+        {
+            return _persistedDetailRegions.ToArray();
+        }
+
+        return _detailBrick?.HasPersistentEdits == true
+            ? [TerrainPersistedDetailRegionData.CreateLegacyEditFallback(_detailBrick.LocalBounds)]
+            : Array.Empty<TerrainPersistedDetailRegionData>();
+    }
+
+    private VoxelDetailBrickData BuildPersistedDetailBrickSnapshot(TerrainPersistedDetailRegionData[] persistedRegions)
+    {
+        if (_detailBrick == null)
+        {
+            return null;
+        }
+
+        Aabb persistedBounds = persistedRegions.Length > 0
+            ? persistedRegions[0].LocalBounds
+            : _detailBrick.LocalBounds;
+        for (int i = 1; i < persistedRegions.Length; i++)
+        {
+            persistedBounds = Union(persistedBounds, persistedRegions[i].LocalBounds);
+        }
+
+        if (!TryComputeDetailCoverage(
+            persistedBounds,
+            _detailBrick.DetailScale,
+            paddingCoarseCells: 0,
+            existing: null,
+            out DetailBrickCoverage coverage))
+        {
+            return _detailBrick;
+        }
+
+        return BuildDetailBrick(
+            coverage,
+            _detailBrick,
+            _detailBrick.Data.SampleDensityTrilinear,
+            (position, density) => _detailBrick.Data.SampleMaterialNearest(position),
+            persistentEdits: true);
+    }
+
+    private int FindPersistedDetailRegionIndex(string requestId)
+    {
+        if (string.IsNullOrWhiteSpace(requestId))
+        {
+            return -1;
+        }
+
+        string normalized = requestId.Trim();
+        for (int i = 0; i < _persistedDetailRegions.Count; i++)
+        {
+            if (string.Equals(_persistedDetailRegions[i].Id, normalized, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private bool TryComputeDetailCoverage(
         Aabb requestedLocalBounds,
         int detailScale,
@@ -249,7 +385,7 @@ public sealed class VoxelChunkData
         out DetailBrickCoverage coverage)
     {
         int effectiveScale = existing?.DetailScale ?? Math.Max(2, detailScale);
-        int effectivePadding = Math.Max(1, paddingCoarseCells);
+        int effectivePadding = Math.Max(0, paddingCoarseCells);
 
         Vector3 start = requestedLocalBounds.Position;
         Vector3 end = requestedLocalBounds.Position + requestedLocalBounds.Size;
@@ -377,4 +513,19 @@ public sealed class VoxelChunkData
         Vector3I CoarseCellMin,
         int CoarseCellCount,
         int DetailScale);
+
+    private static Aabb Union(Aabb a, Aabb b)
+    {
+        Vector3 aEnd = a.Position + a.Size;
+        Vector3 bEnd = b.Position + b.Size;
+        Vector3 min = new(
+            Mathf.Min(a.Position.X, b.Position.X),
+            Mathf.Min(a.Position.Y, b.Position.Y),
+            Mathf.Min(a.Position.Z, b.Position.Z));
+        Vector3 max = new(
+            Mathf.Max(aEnd.X, bEnd.X),
+            Mathf.Max(aEnd.Y, bEnd.Y),
+            Mathf.Max(aEnd.Z, bEnd.Z));
+        return new Aabb(min, max - min);
+    }
 }
