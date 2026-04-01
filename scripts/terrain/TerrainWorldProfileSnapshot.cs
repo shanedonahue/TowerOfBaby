@@ -47,6 +47,12 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastSkippedLowPriorityMeshBuildCount { get; init; }
     public long SuppressedDuplicateMeshBuildCount { get; init; }
     public int LastSuppressedDuplicateMeshBuildCount { get; init; }
+    public long HighPriorityEnqueueBudgetHitCount { get; init; }
+    public int LastHighPriorityEnqueueBudgetHitCount { get; init; }
+    public long DeferredHighPriorityEnqueueCount { get; init; }
+    public int LastDeferredHighPriorityEnqueueCount { get; init; }
+    public long SmoothedHighPriorityEnqueueCount { get; init; }
+    public int LastSmoothedHighPriorityEnqueueCount { get; init; }
     public bool PressureModeActive { get; init; }
     public long PressureModeActiveFrameCount { get; init; }
     public int PressureModeActivationCount { get; init; }
@@ -102,6 +108,18 @@ public sealed class TerrainWorldProfileSnapshot
     public long RequestsReactivatedByCooldownExpiryCount { get; init; }
     public long RequestsReactivatedByPressureExitCount { get; init; }
     public long CoalescedRebuildRequestCount { get; init; }
+    public long PreventedCoverageGapReleaseCount { get; init; }
+    public int LastPreventedCoverageGapReleaseCount { get; init; }
+    public long ReplacementCoverageWaitCount { get; init; }
+    public int LastReplacementCoverageWaitCount { get; init; }
+    public long ChunksHeldForCoverageSafetyCount { get; init; }
+    public int LastChunksHeldForCoverageSafetyCount { get; init; }
+    public long NormalDebugMismatchCount { get; init; }
+    public int LastNormalDebugMismatchCount { get; init; }
+    public long TangentGenerationCount { get; init; }
+    public int LastTangentGenerationCount { get; init; }
+    public long VertexTintEnabledFrameCount { get; init; }
+    public int LastVertexTintEnabledFrameCount { get; init; }
     public long PersistenceLoadCount { get; init; }
     public double PersistenceLoadMs { get; init; }
     public double LastPersistenceLoadMs { get; init; }
@@ -153,6 +171,7 @@ public sealed class TerrainWorldProfileSnapshot
     public int TrackedEditedReplaceCoarseCellCount { get; init; }
     public string TrackedRenderDirtyBoundsSummary { get; init; } = string.Empty;
     public string TrackedCollisionDirtyBoundsSummary { get; init; } = string.Empty;
+    public string TrackedCoverageStateSummary { get; init; } = string.Empty;
     public string LastSelectedChunkSummary { get; init; } = string.Empty;
     public string LastReleasedChunkSummary { get; init; } = string.Empty;
     public string LastChunkSourceSummary { get; init; } = string.Empty;

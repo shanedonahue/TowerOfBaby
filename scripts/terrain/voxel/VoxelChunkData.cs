@@ -336,6 +336,51 @@ public sealed class VoxelChunkData : IDisposable
 
     public float SampleDensityTrilinear(Vector3 worldPosition)
     {
+        if (TrySampleDetailDensity(worldPosition, out float detailDensity))
+        {
+            return detailDensity;
+        }
+
+        return SampleDensityTrilinearLocal(worldPosition);
+    }
+
+    public Vector3 SampleDensityGradient(Vector3 worldPosition)
+    {
+        float step = Mathf.Max(0.0005f, GetEffectiveVoxelSizeAt(worldPosition) * 0.5f);
+        float center = SampleDensityTrilinear(worldPosition);
+        return new Vector3(
+            SampleAxisGradient(worldPosition, Vector3.Right, step, center),
+            SampleAxisGradient(worldPosition, Vector3.Up, step, center),
+            SampleAxisGradient(worldPosition, Vector3.Back, step, center));
+    }
+
+    public Vector3 SampleSurfaceNormal(Vector3 worldPosition)
+    {
+        Vector3 gradient = SampleDensityGradient(worldPosition);
+        if (gradient.LengthSquared() <= 0.000001f)
+        {
+            return Vector3.Up;
+        }
+
+        return (-gradient).Normalized();
+    }
+
+    public VoxelMaterialId SampleMaterialNearest(Vector3 worldPosition)
+    {
+        if (TrySampleDetailMaterial(worldPosition, out VoxelMaterialId detailMaterial))
+        {
+            return detailMaterial;
+        }
+
+        Vector3 normalized = (worldPosition - Origin) / VoxelSize;
+        int x = Mathf.Clamp(Mathf.RoundToInt(normalized.X), 0, PointsPerAxis - 1);
+        int y = Mathf.Clamp(Mathf.RoundToInt(normalized.Y), 0, PointsPerAxis - 1);
+        int z = Mathf.Clamp(Mathf.RoundToInt(normalized.Z), 0, PointsPerAxis - 1);
+        return GetMaterial(x, y, z);
+    }
+
+    private float SampleDensityTrilinearLocal(Vector3 worldPosition)
+    {
         Vector3 normalized = (worldPosition - Origin) / VoxelSize;
         float sampleX = Mathf.Clamp(normalized.X, 0.0f, CellsPerAxis);
         float sampleY = Mathf.Clamp(normalized.Y, 0.0f, CellsPerAxis);
@@ -370,92 +415,28 @@ public sealed class VoxelChunkData : IDisposable
         return Mathf.Lerp(c0, c1, tz);
     }
 
-    public Vector3 SampleDensityGradient(Vector3 worldPosition)
+    private float SampleAxisGradient(Vector3 worldPosition, Vector3 axis, float step, float centerDensity)
     {
-        Vector3 normalized = (worldPosition - Origin) / VoxelSize;
-        float sampleX = Mathf.Clamp(normalized.X, 0.0f, CellsPerAxis);
-        float sampleY = Mathf.Clamp(normalized.Y, 0.0f, CellsPerAxis);
-        float sampleZ = Mathf.Clamp(normalized.Z, 0.0f, CellsPerAxis);
-
-        int x0 = Mathf.Clamp(Mathf.FloorToInt(sampleX), 0, PointsPerAxis - 1);
-        int y0 = Mathf.Clamp(Mathf.FloorToInt(sampleY), 0, PointsPerAxis - 1);
-        int z0 = Mathf.Clamp(Mathf.FloorToInt(sampleZ), 0, PointsPerAxis - 1);
-        int x1 = Mathf.Min(x0 + 1, PointsPerAxis - 1);
-        int y1 = Mathf.Min(y0 + 1, PointsPerAxis - 1);
-        int z1 = Mathf.Min(z0 + 1, PointsPerAxis - 1);
-
-        float tx = sampleX - x0;
-        float ty = sampleY - y0;
-        float tz = sampleZ - z0;
-
-        if (x0 == x1 && x0 > 0)
+        Vector3 negativeSample = worldPosition - (axis * step);
+        Vector3 positiveSample = worldPosition + (axis * step);
+        bool canSampleNegative = CanSampleWorldPosition(negativeSample);
+        bool canSamplePositive = CanSampleWorldPosition(positiveSample);
+        if (canSampleNegative && canSamplePositive)
         {
-            x0--;
-            tx = 1.0f;
+            return (SampleDensityTrilinear(positiveSample) - SampleDensityTrilinear(negativeSample)) / (step * 2.0f);
         }
 
-        if (y0 == y1 && y0 > 0)
+        if (canSamplePositive)
         {
-            y0--;
-            ty = 1.0f;
+            return (SampleDensityTrilinear(positiveSample) - centerDensity) / step;
         }
 
-        if (z0 == z1 && z0 > 0)
+        if (canSampleNegative)
         {
-            z0--;
-            tz = 1.0f;
+            return (centerDensity - SampleDensityTrilinear(negativeSample)) / step;
         }
 
-        x1 = Mathf.Min(x0 + 1, PointsPerAxis - 1);
-        y1 = Mathf.Min(y0 + 1, PointsPerAxis - 1);
-        z1 = Mathf.Min(z0 + 1, PointsPerAxis - 1);
-
-        float c000 = GetDensity(x0, y0, z0);
-        float c100 = GetDensity(x1, y0, z0);
-        float c010 = GetDensity(x0, y1, z0);
-        float c110 = GetDensity(x1, y1, z0);
-        float c001 = GetDensity(x0, y0, z1);
-        float c101 = GetDensity(x1, y0, z1);
-        float c011 = GetDensity(x0, y1, z1);
-        float c111 = GetDensity(x1, y1, z1);
-
-        float ddxCell = Mathf.Lerp(
-            Mathf.Lerp(c100 - c000, c110 - c010, ty),
-            Mathf.Lerp(c101 - c001, c111 - c011, ty),
-            tz);
-        float ddyCell = Mathf.Lerp(
-            Mathf.Lerp(c010 - c000, c110 - c100, tx),
-            Mathf.Lerp(c011 - c001, c111 - c101, tx),
-            tz);
-        float ddzCell = Mathf.Lerp(
-            Mathf.Lerp(c001 - c000, c101 - c100, tx),
-            Mathf.Lerp(c011 - c010, c111 - c110, tx),
-            ty);
-
-        float inverseVoxelSize = VoxelSize > 0.000001f
-            ? 1.0f / VoxelSize
-            : 0.0f;
-        return new Vector3(ddxCell, ddyCell, ddzCell) * inverseVoxelSize;
-    }
-
-    public Vector3 SampleSurfaceNormal(Vector3 worldPosition)
-    {
-        Vector3 gradient = SampleDensityGradient(worldPosition);
-        if (gradient.LengthSquared() <= 0.000001f)
-        {
-            return Vector3.Up;
-        }
-
-        return (-gradient).Normalized();
-    }
-
-    public VoxelMaterialId SampleMaterialNearest(Vector3 worldPosition)
-    {
-        Vector3 normalized = (worldPosition - Origin) / VoxelSize;
-        int x = Mathf.Clamp(Mathf.RoundToInt(normalized.X), 0, PointsPerAxis - 1);
-        int y = Mathf.Clamp(Mathf.RoundToInt(normalized.Y), 0, PointsPerAxis - 1);
-        int z = Mathf.Clamp(Mathf.RoundToInt(normalized.Z), 0, PointsPerAxis - 1);
-        return GetMaterial(x, y, z);
+        return 0.0f;
     }
 
     private int GetIndex(int x, int y, int z)
@@ -539,6 +520,53 @@ public sealed class VoxelChunkData : IDisposable
         }
 
         return -1;
+    }
+
+    private bool TrySampleDetailDensity(Vector3 worldPosition, out float density)
+    {
+        if (_detailBrick != null && _detailBrick.ContainsWorldPosition(worldPosition))
+        {
+            density = _detailBrick.Data.SampleDensityTrilinear(worldPosition);
+            return true;
+        }
+
+        density = 0.0f;
+        return false;
+    }
+
+    private bool TrySampleDetailMaterial(Vector3 worldPosition, out VoxelMaterialId material)
+    {
+        if (_detailBrick != null && _detailBrick.ContainsWorldPosition(worldPosition))
+        {
+            material = _detailBrick.Data.SampleMaterialNearest(worldPosition);
+            return true;
+        }
+
+        material = default;
+        return false;
+    }
+
+    private float GetEffectiveVoxelSizeAt(Vector3 worldPosition)
+    {
+        if (_detailBrick != null && _detailBrick.ContainsWorldPosition(worldPosition))
+        {
+            return _detailBrick.Data.VoxelSize;
+        }
+
+        return VoxelSize;
+    }
+
+    private bool CanSampleWorldPosition(Vector3 worldPosition)
+    {
+        const float epsilon = 0.0001f;
+        Vector3 max = Origin + (Vector3.One * ChunkSize);
+        return
+            worldPosition.X >= Origin.X - epsilon &&
+            worldPosition.Y >= Origin.Y - epsilon &&
+            worldPosition.Z >= Origin.Z - epsilon &&
+            worldPosition.X <= max.X + epsilon &&
+            worldPosition.Y <= max.Y + epsilon &&
+            worldPosition.Z <= max.Z + epsilon;
     }
 
     private bool TryComputeDetailCoverage(

@@ -3,6 +3,23 @@ using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
 
+public enum TerrainVisualDebugMode
+{
+    Lit = 0,
+    VertexTint = 1,
+    Normals = 2
+}
+
+public enum TerrainChunkCoverageState
+{
+    CoarsePending = 0,
+    CoarseReady = 1,
+    DetailPending = 2,
+    DetailReady = 3,
+    ReplacementPending = 4,
+    SafeToRelease = 5
+}
+
 internal enum DesiredSearchThrottleState
 {
     FrontierLimited,

@@ -26,11 +26,29 @@ public partial class TerrainChunk : Node3D
 
     private static readonly StandardMaterial3D SharedTerrainMaterial = new()
     {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
+        VertexColorUseAsAlbedo = false,
+        AlbedoColor = new Color(0.88f, 0.85f, 0.79f),
         Roughness = 0.97f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
+    };
+
+    private static readonly StandardMaterial3D SharedTerrainTintMaterial = new()
+    {
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = new Color(0.92f, 0.90f, 0.86f),
+        Roughness = 0.97f,
+        Metallic = 0.0f,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
+    };
+
+    private static readonly StandardMaterial3D SharedTerrainDebugVertexColorMaterial = new()
+    {
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = Colors.White,
+        Roughness = 1.0f,
+        Metallic = 0.0f,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
     };
 
     [Export] public int PointsPerAxis = 18;
@@ -70,6 +88,9 @@ public partial class TerrainChunk : Node3D
     public bool IsInitialVisualReady => HasData && HasCompletedInitialVisualBuild && !RenderDirty;
     public bool RenderDirty { get; private set; }
     public bool CollisionDirty { get; private set; }
+    public bool HeldForCoverageSafety { get; private set; }
+    public bool ReplacementCoveragePending { get; private set; }
+    public bool SafeToRelease { get; private set; }
     public double CollisionReadyAtSeconds { get; private set; }
     public double LastRenderBuildMs { get; private set; }
     public double LastCollisionBuildMs { get; private set; }
@@ -124,13 +145,47 @@ public partial class TerrainChunk : Node3D
                 $"{DetailPromotionState} reason {reason} next_f {nextFrame} next_t {nextTime} reactivate {reactivation} followup={DetailPromotionFollowupRequested}";
         }
     }
+    public TerrainChunkCoverageState CoverageState
+    {
+        get
+        {
+            if (ReplacementCoveragePending)
+            {
+                return TerrainChunkCoverageState.ReplacementPending;
+            }
+
+            if (!HasCompletedInitialVisualBuild)
+            {
+                return TerrainChunkCoverageState.CoarsePending;
+            }
+
+            if (RenderDirty && (HasDetailBrick || DetailRegionCount > 0))
+            {
+                return TerrainChunkCoverageState.DetailPending;
+            }
+
+            if (HasDetailBrick && !RenderDirty)
+            {
+                return TerrainChunkCoverageState.DetailReady;
+            }
+
+            return SafeToRelease
+                ? TerrainChunkCoverageState.SafeToRelease
+                : TerrainChunkCoverageState.CoarseReady;
+        }
+    }
+    public string CoverageStateSummary =>
+        $"{CoverageState} hold={HeldForCoverageSafety} replacement={ReplacementCoveragePending} safe={SafeToRelease}";
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
     private VoxelChunkData _data = null!;
     private ArrayMesh _mesh = null!;
     private StandardMaterial3D _biomeDebugMaterial = null!;
+    private bool _terrainVertexTintEnabled;
     private bool _biomeDebugTintEnabled;
+    private bool _biomeDebugTintRequested;
+    private TerrainVisualDebugMode _visualDebugMode = TerrainVisualDebugMode.Lit;
     private int _renderRevision;
 
     public override void _Ready()
@@ -161,13 +216,24 @@ public partial class TerrainChunk : Node3D
     public void SetBiomeSample(TerrainBiomeSample biomeSample, bool enableDebugTint)
     {
         BiomeSample = biomeSample;
-        _biomeDebugTintEnabled = enableDebugTint && OS.IsDebugBuild();
+        _biomeDebugTintRequested = enableDebugTint;
+        RefreshMaterialFlags();
         ApplySurfaceMaterialOverride();
     }
 
     public void SetStructureMetadata(TerrainChunkStructureMetadata structureMetadata)
     {
         StructureMetadata = structureMetadata ?? TerrainChunkStructureMetadata.Empty;
+    }
+
+    public void SetVisualConfiguration(bool enableVertexTint, TerrainVisualDebugMode visualDebugMode)
+    {
+        _terrainVertexTintEnabled = enableVertexTint;
+        _visualDebugMode = OS.IsDebugBuild()
+            ? visualDebugMode
+            : TerrainVisualDebugMode.Lit;
+        RefreshMaterialFlags();
+        ApplySurfaceMaterialOverride();
     }
 
     public bool RequestDetail(
@@ -223,6 +289,9 @@ public partial class TerrainChunk : Node3D
         LastUsedDetailBrick = false;
         LastUsedPersistentDetailEdits = false;
         _renderRevision = 0;
+        HeldForCoverageSafety = false;
+        ReplacementCoveragePending = false;
+        SafeToRelease = false;
         ResetDetailPromotionTracking();
         RenderDirtyBoundsTracker.Clear();
         CollisionDirtyBoundsTracker.Clear();
@@ -238,6 +307,21 @@ public partial class TerrainChunk : Node3D
         }
 
         SyncEditedDetailRegionRequest();
+        UpdateDebugName();
+    }
+
+    public void SetCoverageRetention(bool heldForCoverageSafety, bool replacementCoveragePending, bool safeToRelease)
+    {
+        if (HeldForCoverageSafety == heldForCoverageSafety &&
+            ReplacementCoveragePending == replacementCoveragePending &&
+            SafeToRelease == safeToRelease)
+        {
+            return;
+        }
+
+        HeldForCoverageSafety = heldForCoverageSafety;
+        ReplacementCoveragePending = replacementCoveragePending;
+        SafeToRelease = safeToRelease;
         UpdateDebugName();
     }
 
@@ -646,7 +730,13 @@ public partial class TerrainChunk : Node3D
         string suffix = HasEditedDetailBrick
             ? "_edit_hi"
             : (HasDetailBrick ? "_detail_hi" : string.Empty);
-        Name = $"Chunk_{ChunkKey.X}_{ChunkKey.Y}_{ChunkKey.Z}{suffix}";
+        string coverageSuffix = CoverageState switch
+        {
+            TerrainChunkCoverageState.ReplacementPending => "_hold",
+            TerrainChunkCoverageState.SafeToRelease => "_release",
+            _ => string.Empty
+        };
+        Name = $"Chunk_{ChunkKey.X}_{ChunkKey.Y}_{ChunkKey.Z}{suffix}{coverageSuffix}";
     }
 
     private void ResetDetailPromotionTracking()
@@ -684,15 +774,40 @@ public partial class TerrainChunk : Node3D
             return;
         }
 
-        if (!_biomeDebugTintEnabled)
+        StandardMaterial3D baseMaterial = ResolveBaseSurfaceMaterial();
+        if (!_biomeDebugTintEnabled || _visualDebugMode != TerrainVisualDebugMode.Lit)
         {
-            _meshInstance.SetSurfaceOverrideMaterial(0, SharedTerrainMaterial);
+            _meshInstance.SetSurfaceOverrideMaterial(0, baseMaterial);
             return;
         }
 
-        _biomeDebugMaterial ??= (StandardMaterial3D)SharedTerrainMaterial.Duplicate();
-        _biomeDebugMaterial.AlbedoColor = BiomeSample.DebugColor.Lerp(Colors.White, 0.35f);
+        _biomeDebugMaterial ??= (StandardMaterial3D)baseMaterial.Duplicate();
+        _biomeDebugMaterial.VertexColorUseAsAlbedo = baseMaterial.VertexColorUseAsAlbedo;
+        _biomeDebugMaterial.Roughness = baseMaterial.Roughness;
+        _biomeDebugMaterial.Metallic = baseMaterial.Metallic;
+        _biomeDebugMaterial.ShadingMode = baseMaterial.ShadingMode;
+        _biomeDebugMaterial.AlbedoColor = baseMaterial.AlbedoColor.Lerp(BiomeSample.DebugColor, 0.2f);
         _meshInstance.SetSurfaceOverrideMaterial(0, _biomeDebugMaterial);
+    }
+
+    private StandardMaterial3D ResolveBaseSurfaceMaterial()
+    {
+        if (_visualDebugMode is TerrainVisualDebugMode.VertexTint or TerrainVisualDebugMode.Normals)
+        {
+            return SharedTerrainDebugVertexColorMaterial;
+        }
+
+        return _terrainVertexTintEnabled
+            ? SharedTerrainTintMaterial
+            : SharedTerrainMaterial;
+    }
+
+    private void RefreshMaterialFlags()
+    {
+        _biomeDebugTintEnabled =
+            _biomeDebugTintRequested &&
+            OS.IsDebugBuild() &&
+            _visualDebugMode == TerrainVisualDebugMode.Lit;
     }
 
     private static VoxelEditStats CombineEditStats(VoxelEditStats a, VoxelEditStats b)

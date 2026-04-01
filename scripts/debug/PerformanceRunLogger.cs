@@ -50,6 +50,15 @@ public partial class PerformanceRunLogger : Node
     private int _sampleRequestsReactivatedByCooldownExpiry;
     private int _sampleRequestsReactivatedByPressureExit;
     private int _sampleCoalescedRebuildRequests;
+    private int _sampleHighPriorityEnqueueBudgetHits;
+    private int _sampleDeferredHighPriorityEnqueues;
+    private int _sampleSmoothedHighPriorityEnqueues;
+    private int _samplePreventedCoverageGapReleases;
+    private int _sampleReplacementCoverageWaits;
+    private int _sampleChunksHeldForCoverageSafety;
+    private int _sampleNormalDebugMismatches;
+    private int _sampleTangentGenerations;
+    private int _sampleVertexTintEnabledFrames;
     private double _sampleSearchMs;
     private double _samplePriorityEvalMs;
     private double _sampleVisibilityMs;
@@ -120,6 +129,15 @@ public partial class PerformanceRunLogger : Node
             _sampleRequestsReactivatedByCooldownExpiry += snapshot.LastRequestsReactivatedByCooldownExpiryCount;
             _sampleRequestsReactivatedByPressureExit += snapshot.LastRequestsReactivatedByPressureExitCount;
             _sampleCoalescedRebuildRequests += snapshot.LastCoalescedRebuildRequestCount;
+            _sampleHighPriorityEnqueueBudgetHits += snapshot.LastHighPriorityEnqueueBudgetHitCount;
+            _sampleDeferredHighPriorityEnqueues += snapshot.LastDeferredHighPriorityEnqueueCount;
+            _sampleSmoothedHighPriorityEnqueues += snapshot.LastSmoothedHighPriorityEnqueueCount;
+            _samplePreventedCoverageGapReleases += snapshot.LastPreventedCoverageGapReleaseCount;
+            _sampleReplacementCoverageWaits += snapshot.LastReplacementCoverageWaitCount;
+            _sampleChunksHeldForCoverageSafety += snapshot.LastChunksHeldForCoverageSafetyCount;
+            _sampleNormalDebugMismatches += snapshot.LastNormalDebugMismatchCount;
+            _sampleTangentGenerations += snapshot.LastTangentGenerationCount;
+            _sampleVertexTintEnabledFrames += snapshot.LastVertexTintEnabledFrameCount;
             _sampleSearchMs += snapshot.LastDesiredSearchMs;
             _samplePriorityEvalMs += snapshot.LastPriorityEvaluationMs;
             _sampleVisibilityMs += snapshot.LastVisibilityHeuristicMs;
@@ -197,6 +215,15 @@ public partial class PerformanceRunLogger : Node
             _sampleRequestsReactivatedByCooldownExpiry,
             _sampleRequestsReactivatedByPressureExit,
             _sampleCoalescedRebuildRequests,
+            _sampleHighPriorityEnqueueBudgetHits,
+            _sampleDeferredHighPriorityEnqueues,
+            _sampleSmoothedHighPriorityEnqueues,
+            _samplePreventedCoverageGapReleases,
+            _sampleReplacementCoverageWaits,
+            _sampleChunksHeldForCoverageSafety,
+            _sampleNormalDebugMismatches,
+            _sampleTangentGenerations,
+            _sampleVertexTintEnabledFrames,
             _sampleSearchMs,
             _samplePriorityEvalMs,
             _sampleVisibilityMs,
@@ -237,6 +264,15 @@ public partial class PerformanceRunLogger : Node
         _sampleRequestsReactivatedByCooldownExpiry = 0;
         _sampleRequestsReactivatedByPressureExit = 0;
         _sampleCoalescedRebuildRequests = 0;
+        _sampleHighPriorityEnqueueBudgetHits = 0;
+        _sampleDeferredHighPriorityEnqueues = 0;
+        _sampleSmoothedHighPriorityEnqueues = 0;
+        _samplePreventedCoverageGapReleases = 0;
+        _sampleReplacementCoverageWaits = 0;
+        _sampleChunksHeldForCoverageSafety = 0;
+        _sampleNormalDebugMismatches = 0;
+        _sampleTangentGenerations = 0;
+        _sampleVertexTintEnabledFrames = 0;
         _sampleSearchMs = 0.0;
         _samplePriorityEvalMs = 0.0;
         _sampleVisibilityMs = 0.0;
@@ -322,6 +358,15 @@ public partial class PerformanceRunLogger : Node
             int totalRequestsReactivatedByCooldownExpiry = 0;
             int totalRequestsReactivatedByPressureExit = 0;
             int totalCoalescedRebuildRequests = 0;
+            int totalHighPriorityEnqueueBudgetHits = 0;
+            int totalDeferredHighPriorityEnqueues = 0;
+            int totalSmoothedHighPriorityEnqueues = 0;
+            int totalPreventedCoverageGapReleases = 0;
+            int totalReplacementCoverageWaits = 0;
+            int totalChunksHeldForCoverageSafety = 0;
+            int totalNormalDebugMismatches = 0;
+            int totalTangentGenerations = 0;
+            int totalVertexTintEnabledFrames = 0;
             long totalSkippedLowPriorityMeshBuilds = 0;
             long totalSuppressedDuplicateMeshBuilds = 0;
             double totalStartupLoadMs = 0.0;
@@ -425,6 +470,15 @@ public partial class PerformanceRunLogger : Node
                 totalRequestsReactivatedByCooldownExpiry += sample.RequestsReactivatedByCooldownExpiry;
                 totalRequestsReactivatedByPressureExit += sample.RequestsReactivatedByPressureExit;
                 totalCoalescedRebuildRequests += sample.CoalescedRebuildRequests;
+                totalHighPriorityEnqueueBudgetHits += sample.HighPriorityEnqueueBudgetHits;
+                totalDeferredHighPriorityEnqueues += sample.DeferredHighPriorityEnqueues;
+                totalSmoothedHighPriorityEnqueues += sample.SmoothedHighPriorityEnqueues;
+                totalPreventedCoverageGapReleases += sample.PreventedCoverageGapReleases;
+                totalReplacementCoverageWaits += sample.ReplacementCoverageWaits;
+                totalChunksHeldForCoverageSafety += sample.ChunksHeldForCoverageSafety;
+                totalNormalDebugMismatches += sample.NormalDebugMismatches;
+                totalTangentGenerations += sample.TangentGenerations;
+                totalVertexTintEnabledFrames += sample.VertexTintEnabledFrames;
                 totalSkippedLowPriorityMeshBuilds = Math.Max(totalSkippedLowPriorityMeshBuilds, sample.Snapshot.SkippedLowPriorityMeshBuildCount);
                 totalSuppressedDuplicateMeshBuilds = Math.Max(totalSuppressedDuplicateMeshBuilds, sample.Snapshot.SuppressedDuplicateMeshBuildCount);
                 peakPressureModeActiveFrames = Math.Max(peakPressureModeActiveFrames, sample.Snapshot.PressureModeActiveFrameCount);
@@ -482,6 +536,15 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"RequestsReactivatedByCooldownExpiry: {totalRequestsReactivatedByCooldownExpiry}");
             builder.AppendLine($"RequestsReactivatedByPressureExit: {totalRequestsReactivatedByPressureExit}");
             builder.AppendLine($"CoalescedRebuildRequests: {totalCoalescedRebuildRequests}");
+            builder.AppendLine($"HighPriorityEnqueueBudgetHits: {totalHighPriorityEnqueueBudgetHits}");
+            builder.AppendLine($"DeferredHighPriorityEnqueues: {totalDeferredHighPriorityEnqueues}");
+            builder.AppendLine($"SmoothedHighPriorityEnqueues: {totalSmoothedHighPriorityEnqueues}");
+            builder.AppendLine($"PreventedCoverageGapReleases: {totalPreventedCoverageGapReleases}");
+            builder.AppendLine($"ReplacementCoverageWaits: {totalReplacementCoverageWaits}");
+            builder.AppendLine($"ChunksHeldForCoverageSafety: {totalChunksHeldForCoverageSafety}");
+            builder.AppendLine($"NormalDebugMismatches: {totalNormalDebugMismatches}");
+            builder.AppendLine($"TangentGenerationCount: {totalTangentGenerations}");
+            builder.AppendLine($"VertexTintEnabledFrames: {totalVertexTintEnabledFrames}");
             builder.AppendLine($"PressureModeActiveFrames: {peakPressureModeActiveFrames}");
             builder.AppendLine($"PressureModeActivations: {peakPressureModeActivationCount}");
             builder.AppendLine($"StartupPromotionWrites: {peakStartupPromotionWrites}");
@@ -517,7 +580,7 @@ public partial class PerformanceRunLogger : Node
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,high_priority_enqueue_budget_hits,deferred_high_priority_enqueues,smoothed_high_priority_enqueues,prevented_coverage_gap_releases,replacement_coverage_waits,chunks_held_for_coverage_safety,normal_debug_mismatches,tangent_generation_count,vertex_tint_enabled_frames,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
@@ -595,6 +658,15 @@ public partial class PerformanceRunLogger : Node
                 sample.RequestsReactivatedByCooldownExpiry.ToString(CultureInfo.InvariantCulture),
                 sample.RequestsReactivatedByPressureExit.ToString(CultureInfo.InvariantCulture),
                 sample.CoalescedRebuildRequests.ToString(CultureInfo.InvariantCulture),
+                sample.HighPriorityEnqueueBudgetHits.ToString(CultureInfo.InvariantCulture),
+                sample.DeferredHighPriorityEnqueues.ToString(CultureInfo.InvariantCulture),
+                sample.SmoothedHighPriorityEnqueues.ToString(CultureInfo.InvariantCulture),
+                sample.PreventedCoverageGapReleases.ToString(CultureInfo.InvariantCulture),
+                sample.ReplacementCoverageWaits.ToString(CultureInfo.InvariantCulture),
+                sample.ChunksHeldForCoverageSafety.ToString(CultureInfo.InvariantCulture),
+                sample.NormalDebugMismatches.ToString(CultureInfo.InvariantCulture),
+                sample.TangentGenerations.ToString(CultureInfo.InvariantCulture),
+                sample.VertexTintEnabledFrames.ToString(CultureInfo.InvariantCulture),
                 snapshot.MeshBackendName,
                 sample.SearchMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.PriorityEvalMs.ToString("0.00", CultureInfo.InvariantCulture),
@@ -719,6 +791,15 @@ public partial class PerformanceRunLogger : Node
         int RequestsReactivatedByCooldownExpiry,
         int RequestsReactivatedByPressureExit,
         int CoalescedRebuildRequests,
+        int HighPriorityEnqueueBudgetHits,
+        int DeferredHighPriorityEnqueues,
+        int SmoothedHighPriorityEnqueues,
+        int PreventedCoverageGapReleases,
+        int ReplacementCoverageWaits,
+        int ChunksHeldForCoverageSafety,
+        int NormalDebugMismatches,
+        int TangentGenerations,
+        int VertexTintEnabledFrames,
         double SearchMs,
         double PriorityEvalMs,
         double VisibilityMs,

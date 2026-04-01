@@ -17,6 +17,27 @@ public partial class TerrainWorld : Node3D
         string Reason,
         ulong NextEligibleFrame,
         double NextEligibleAtSeconds);
+    private readonly record struct StagedVisualEnqueueEntry(Vector3I Key, int Token);
+    private readonly record struct StagedVisualEnqueuePriority(int Lane, float NegativePriorityScore, int Token)
+        : IComparable<StagedVisualEnqueuePriority>
+    {
+        public int CompareTo(StagedVisualEnqueuePriority other)
+        {
+            int laneCompare = Lane.CompareTo(other.Lane);
+            if (laneCompare != 0)
+            {
+                return laneCompare;
+            }
+
+            int scoreCompare = NegativePriorityScore.CompareTo(other.NegativePriorityScore);
+            if (scoreCompare != 0)
+            {
+                return scoreCompare;
+            }
+
+            return Token.CompareTo(other.Token);
+        }
+    }
 
     [Export] public PackedScene ChunkScene = null!;
     [Export] public NodePath TrackedCharacterPath = new();
@@ -85,6 +106,11 @@ public partial class TerrainWorld : Node3D
     [Export] public float ChunkDetailWarmupSeconds = 0.10f;
     [Export] public float DetailRequestCooldownSeconds = 0.18f;
     [Export] public int MaxDetailPromotionsPerFrame = 1;
+    [Export] public int MaxHighPriorityMeshEnqueuesPerFrame = 4;
+    [Export] public int MaxNearCoarseMeshEnqueuesPerFrame = 3;
+    [Export] public int MaxDetailPromotionActivationsPerFrame = 1;
+    [Export] public int HighPriorityQueueSoftLimit = 18;
+    [Export] public int HighPriorityQueueHardLimit = 36;
 
     [ExportGroup("Persistence")]
     [Export] public bool EnableStartupStatePersistence = true;
@@ -119,7 +145,8 @@ public partial class TerrainWorld : Node3D
     [Export] public bool EnableTerrainInstrumentation = true;
     [Export] public bool EnableTerrainVertexTint = false;
     [Export] public bool EnableBiomeDebugTint = false;
-    [Export] public bool GenerateTerrainTangents = false;
+    [Export] public bool TerrainGenerateTangents = false;
+    [Export] public TerrainVisualDebugMode TerrainDebugView = TerrainVisualDebugMode.Lit;
     [Export] public bool UseExperimentalComputeMeshing = false;
 
     private readonly Dictionary<Vector3I, TerrainChunk> _residentChunks = new();
@@ -132,6 +159,8 @@ public partial class TerrainWorld : Node3D
     private readonly TerrainResidencyManager _residencyManager = new();
     private readonly TerrainLoadScheduler _loadScheduler = new();
     private readonly TerrainMeshBuildScheduler _meshBuildScheduler = new();
+    private readonly PriorityQueue<StagedVisualEnqueueEntry, StagedVisualEnqueuePriority> _stagedHighPriorityVisualEnqueues = new();
+    private readonly Dictionary<Vector3I, StagedVisualEnqueueState> _stagedHighPriorityVisualEnqueueStates = new();
     private readonly Dictionary<Vector2I, float> _visibilityHeuristicCache = new();
     private readonly PriorityQueue<TerrainVisualBuildCompletedJob, TerrainWorkPriority> _pendingMeshCommits = new();
     private readonly PriorityQueue<CollisionQueueEntry, TerrainWorkPriority> _collisionQueue = new();
@@ -188,6 +217,15 @@ public partial class TerrainWorld : Node3D
     private int _lastCoalescedRebuildRequestCount;
     private int _lastSkippedLowPriorityBuildCount;
     private int _lastSuppressedDuplicateBuildCount;
+    private int _lastHighPriorityEnqueueBudgetHitCount;
+    private int _lastDeferredHighPriorityEnqueueCount;
+    private int _lastSmoothedHighPriorityEnqueueCount;
+    private int _lastPreventedCoverageGapReleaseCount;
+    private int _lastReplacementCoverageWaitCount;
+    private int _lastChunksHeldForCoverageSafetyCount;
+    private int _lastNormalDebugMismatchCount;
+    private int _lastTangentGenerationCount;
+    private int _lastVertexTintEnabledFrameCount;
     private long _totalDeferredDetailPromotionCount;
     private long _totalDeferredPromotionReevaluationCount;
     private long _totalAvoidedDeferredReevaluationCount;
@@ -196,6 +234,15 @@ public partial class TerrainWorld : Node3D
     private long _requestsReactivatedByCooldownExpiryCount;
     private long _requestsReactivatedByPressureExitCount;
     private long _totalCoalescedRebuildRequestCount;
+    private long _totalHighPriorityEnqueueBudgetHitCount;
+    private long _totalDeferredHighPriorityEnqueueCount;
+    private long _totalSmoothedHighPriorityEnqueueCount;
+    private long _totalPreventedCoverageGapReleaseCount;
+    private long _totalReplacementCoverageWaitCount;
+    private long _totalChunksHeldForCoverageSafetyCount;
+    private long _totalNormalDebugMismatchCount;
+    private long _totalTangentGenerationCount;
+    private long _totalVertexTintEnabledFrameCount;
     private long _residentReuseHits;
     private bool _initialLoadComplete;
     private bool _useStartupSnapshot;
@@ -208,6 +255,9 @@ public partial class TerrainWorld : Node3D
     private string _lastChunkSourceSummary = "source: n/a";
     private SearchEvaluationContext _searchEvaluationContext;
     private int _rebuildPrioritySequence;
+    private int _stagedVisualEnqueueSequence;
+    private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
+    private bool _activeBiomeDebugTintEnabled;
 
     public bool InitialLoadComplete => _initialLoadComplete;
 
@@ -227,7 +277,9 @@ public partial class TerrainWorld : Node3D
         _chunkStore = new TerrainChunkStore(Seed);
         _cacheManager = new TerrainCacheManager(_chunkStore, _terrainStats);
         _trackedCharacter = GetNodeOrNull<Node3D>(TrackedCharacterPath) ?? GetTree().GetFirstNodeInGroup("terrain_tracker") as Node3D;
-        _meshBuildOptions = new VoxelMeshBuildOptions(GenerateTerrainTangents, EnableTerrainVertexTint);
+        _meshBuildOptions = BuildCurrentMeshBuildOptions(ResolveTerrainDebugView());
+        _activeTerrainDebugView = ResolveTerrainDebugView();
+        _activeBiomeDebugTintEnabled = EnableBiomeDebugTint;
         _meshBackend = CreateMeshBackend();
 
         if (EnableStartupStatePersistence)
@@ -243,6 +295,7 @@ public partial class TerrainWorld : Node3D
     public override void _Process(double delta)
     {
         ResetFrameStats();
+        RefreshMeshBuildOptionsIfNeeded();
         ProcessCompletedChunkLoads();
         RefreshStreamingState(forceInvalidate: false);
         ProcessPreparedChunkReleases();
@@ -251,6 +304,116 @@ public partial class TerrainWorld : Node3D
         EvaluateResidentDetailRequests();
         ProcessDirtyChunks();
         _cacheManager.MaintainCapacity(MaxLoadedChunks, _residentChunks.Count, _loadScheduler.PreparedCount);
+    }
+
+    private void RefreshMeshBuildOptionsIfNeeded()
+    {
+        TerrainVisualDebugMode debugView = ResolveTerrainDebugView();
+        VoxelMeshBuildOptions nextOptions = BuildCurrentMeshBuildOptions(debugView);
+        bool meshRebuildRequired = !_meshBuildOptions.Equals(nextOptions) || _activeTerrainDebugView != debugView;
+        bool biomeDebugTintChanged = _activeBiomeDebugTintEnabled != EnableBiomeDebugTint;
+        if (!meshRebuildRequired && !biomeDebugTintChanged)
+        {
+            if (nextOptions.ColorMode == VoxelMeshColorMode.MaterialTint)
+            {
+                _lastVertexTintEnabledFrameCount = 1;
+                _totalVertexTintEnabledFrameCount++;
+            }
+
+            return;
+        }
+
+        _meshBuildOptions = nextOptions;
+        _activeTerrainDebugView = debugView;
+        _activeBiomeDebugTintEnabled = EnableBiomeDebugTint;
+        if (nextOptions.ColorMode == VoxelMeshColorMode.MaterialTint)
+        {
+            _lastVertexTintEnabledFrameCount = 1;
+            _totalVertexTintEnabledFrameCount++;
+        }
+
+        foreach (TerrainChunk chunk in _residentChunks.Values)
+        {
+            if (!IsInstanceValid(chunk))
+            {
+                continue;
+            }
+
+            ApplyChunkVisualConfiguration(chunk);
+            chunk.SetBiomeSample(chunk.BiomeSample, EnableBiomeDebugTint);
+            if (!chunk.HasData)
+            {
+                continue;
+            }
+
+            if (!meshRebuildRequired)
+            {
+                continue;
+            }
+
+            chunk.MarkDirty(includeCollision: false, collisionDelaySeconds: 0.0);
+            _dirtyRenderChunks.Add(chunk);
+        }
+    }
+
+    private TerrainVisualDebugMode ResolveTerrainDebugView()
+    {
+        return OS.IsDebugBuild()
+            ? TerrainDebugView
+            : TerrainVisualDebugMode.Lit;
+    }
+
+    private VoxelMeshBuildOptions BuildCurrentMeshBuildOptions(TerrainVisualDebugMode debugView)
+    {
+        VoxelMeshColorMode colorMode = debugView switch
+        {
+            TerrainVisualDebugMode.VertexTint => VoxelMeshColorMode.MaterialTint,
+            TerrainVisualDebugMode.Normals => VoxelMeshColorMode.NormalDebug,
+            _ => EnableTerrainVertexTint
+                ? VoxelMeshColorMode.MaterialTint
+                : VoxelMeshColorMode.Neutral
+        };
+
+        bool generateTangents =
+            TerrainGenerateTangents &&
+            debugView == TerrainVisualDebugMode.Lit &&
+            TerrainMaterialRequiresTangents();
+        return new VoxelMeshBuildOptions(generateTangents, colorMode);
+    }
+
+    private static bool TerrainMaterialRequiresTangents()
+    {
+        // The gameplay terrain material on this branch does not bind a normal map,
+        // so tangents should stay disabled unless that changes.
+        return false;
+    }
+
+    private void ApplyChunkVisualConfiguration(TerrainChunk chunk)
+    {
+        if (chunk == null || !IsInstanceValid(chunk))
+        {
+            return;
+        }
+
+        chunk.SetVisualConfiguration(EnableTerrainVertexTint, _activeTerrainDebugView);
+    }
+
+    private sealed class StagedVisualEnqueueState
+    {
+        public StagedVisualEnqueueState(TerrainVisualBuildRequest request, int token)
+        {
+            Request = request;
+            Token = token;
+        }
+
+        public TerrainVisualBuildRequest Request { get; private set; }
+        public int Token { get; private set; }
+
+        public void Update(TerrainVisualBuildRequest request, int token)
+        {
+            Request = request;
+            Token = token;
+        }
     }
 
     public void ApplyBrush(Vector3 worldCenter, bool additive)
@@ -448,15 +611,16 @@ public partial class TerrainWorld : Node3D
             $"Loads: running {snapshot.RunningLoadCount} | queued {snapshot.PendingLoadCount} | prepared {snapshot.PreparedChunkCount} | activate {snapshot.PendingActivationCount} | last {snapshot.LastChunkLoadCount} ({snapshot.LastChunkLoadMs:0.00} ms)\n" +
             $"Load source: resident {_residentReuseHits} | ram {snapshot.LastRamCacheLoadCount} | startup {snapshot.LastStartupChunkLoadCount} | db {snapshot.LastPersistedChunkLoadCount} | gen {snapshot.LastGeneratedChunkLoadCount}\n" +
             $"Release: {snapshot.LastChunkReleaseCount} ({snapshot.LastChunkReleaseMs:0.00} ms) | worker {snapshot.LastMeshWorkerBuildCount} ({snapshot.LastMeshWorkerBuildMs:0.00} ms) | commit {snapshot.LastVisualRebuildCount} ({snapshot.LastVisualRebuildMs:0.00} ms) | collision {snapshot.LastCollisionRebuildCount} ({snapshot.LastCollisionRebuildMs:0.00} ms)\n" +
-            $"Rebuild queue: backend {snapshot.MeshBackendName} | build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount} q/defer/run | hi/lo depth {snapshot.HighPriorityMeshQueueDepth}/{snapshot.LowPriorityMeshQueueDepth} | commit {snapshot.PendingMeshCommitCount} pending | wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms last/avg/peak | low-pri defer {snapshot.LowPriorityDeferredMeshBuildCount} skip {snapshot.LastSkippedLowPriorityMeshBuildCount}/{snapshot.SkippedLowPriorityMeshBuildCount} | suppress {snapshot.LastSuppressedDuplicateMeshBuildCount}/{snapshot.SuppressedDuplicateMeshBuildCount} | pressure {(snapshot.PressureModeActive ? "on" : "off")} {snapshot.PressureModeActiveFrameCount}/{snapshot.PressureModeActivationCount} | detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount} reeval {snapshot.LastDeferredPromotionReevaluationCount}/{snapshot.DeferredPromotionReevaluationCount} avoid {snapshot.LastAvoidedDeferredReevaluationCount}/{snapshot.AvoidedDeferredReevaluationCount} log-suppress {snapshot.LastSuppressedDeferredLogRepeatCount}/{snapshot.SuppressedDeferredLogRepeatCount} | react mesh/cool/pressure {snapshot.LastRequestsReactivatedByMeshCompletionCount}/{snapshot.LastRequestsReactivatedByCooldownExpiryCount}/{snapshot.LastRequestsReactivatedByPressureExitCount} | coalesce {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}\n" +
+            $"Rebuild queue: backend {snapshot.MeshBackendName} | build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount} q/defer/run | hi/lo depth {snapshot.HighPriorityMeshQueueDepth}/{snapshot.LowPriorityMeshQueueDepth} | commit {snapshot.PendingMeshCommitCount} pending | wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms last/avg/peak | hi-enqueue budget/defer/smoothed {snapshot.LastHighPriorityEnqueueBudgetHitCount}/{snapshot.LastDeferredHighPriorityEnqueueCount}/{snapshot.LastSmoothedHighPriorityEnqueueCount} total {snapshot.HighPriorityEnqueueBudgetHitCount}/{snapshot.DeferredHighPriorityEnqueueCount}/{snapshot.SmoothedHighPriorityEnqueueCount} | low-pri defer {snapshot.LowPriorityDeferredMeshBuildCount} skip {snapshot.LastSkippedLowPriorityMeshBuildCount}/{snapshot.SkippedLowPriorityMeshBuildCount} | suppress {snapshot.LastSuppressedDuplicateMeshBuildCount}/{snapshot.SuppressedDuplicateMeshBuildCount} | pressure {(snapshot.PressureModeActive ? "on" : "off")} {snapshot.PressureModeActiveFrameCount}/{snapshot.PressureModeActivationCount} | detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount} reeval {snapshot.LastDeferredPromotionReevaluationCount}/{snapshot.DeferredPromotionReevaluationCount} avoid {snapshot.LastAvoidedDeferredReevaluationCount}/{snapshot.AvoidedDeferredReevaluationCount} log-suppress {snapshot.LastSuppressedDeferredLogRepeatCount}/{snapshot.SuppressedDeferredLogRepeatCount} | react mesh/cool/pressure {snapshot.LastRequestsReactivatedByMeshCompletionCount}/{snapshot.LastRequestsReactivatedByCooldownExpiryCount}/{snapshot.LastRequestsReactivatedByPressureExitCount} | coalesce {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}\n" +
             $"Biome: tracked {snapshot.TrackedBiomeId} | {snapshot.TrackedBiomeSummary}\n" +
             $"Structure: tracked {snapshot.TrackedStructureCount} {snapshot.TrackedStructureType} detail {(snapshot.TrackedStructureRequestsHigherDetail ? "high" : "normal")} | {snapshot.TrackedStructureSummary}\n" +
-            $"Detail: tracked {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount} | {snapshot.TrackedDetailSummary} | promo {snapshot.TrackedDetailPromotionStateSummary}\n" +
+            $"Detail: tracked {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount} | {snapshot.TrackedDetailSummary} | promo {snapshot.TrackedDetailPromotionStateSummary} | coverage {snapshot.TrackedCoverageStateSummary}\n" +
             $"Detail hi: tracked {(snapshot.TrackedDetailBrickActive ? "on" : "off")} tris {snapshot.TrackedDetailBrickTriangleCount} replace {snapshot.TrackedDetailBrickReplaceCoarseCellCount} | {snapshot.TrackedDetailBrickSummary}\n" +
             $"Edit hi: tracked {(snapshot.TrackedEditedDetailActive ? "on" : "off")} tris {snapshot.TrackedEditedDetailTriangleCount} replace {snapshot.TrackedEditedReplaceCoarseCellCount} | {snapshot.TrackedEditedDetailSummary}\n" +
             $"Dirty bounds: render {snapshot.TrackedRenderDirtyBoundsSummary} | collision {snapshot.TrackedCollisionDirtyBoundsSummary}\n" +
+            $"Coverage: hold {snapshot.LastChunksHeldForCoverageSafetyCount}/{snapshot.ChunksHeldForCoverageSafetyCount} wait {snapshot.LastReplacementCoverageWaitCount}/{snapshot.ReplacementCoverageWaitCount} prevent {snapshot.LastPreventedCoverageGapReleaseCount}/{snapshot.PreventedCoverageGapReleaseCount}\n" +
             $"Deform: ops {snapshot.DeformOperationCount} | last {snapshot.LastDeformKind} {snapshot.LastDeformMs:0.00} ms | chunks {snapshot.LastDeformEditedChunkCount}/{ComputeAverage(snapshot.TotalEditedChunkCount, snapshot.DeformOperationCount):0.0} avg | samples {snapshot.LastDeformEditedSampleCount}/{ComputeAverage(snapshot.TotalEditedSampleCount, snapshot.DeformOperationCount):0.0} avg | dirty {snapshot.LastDeformDirtyBoundsVolume:0.0}/{ComputeAverage(snapshot.TotalEditedDirtyBoundsVolume, snapshot.DeformOperationCount):0.0} avg | promotions {snapshot.LastDeformEditDetailPromotionCount}/{ComputeAverage(snapshot.EditDetailPromotionCount, snapshot.DeformOperationCount):0.0} avg\n" +
-            $"Terrain stats: worker {snapshot.MeshBuildWorkerCount} ({snapshot.MeshBuildWorkerMs:0.00} ms) | commit {snapshot.MeshRebuildCount} ({snapshot.MeshRebuildMs:0.00} ms) | collision {snapshot.CollisionRebuildCount} ({snapshot.CollisionRebuildMs:0.00} ms) | heap coarse/detail avg {snapshot.AverageCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.AverageDetailMeshWorkerHeapDeltaKiB:0.0} KiB max {snapshot.PeakCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.0} KiB | persist load {snapshot.PersistenceLoadCount} ({snapshot.PersistenceLoadMs:0.00} ms) | save {snapshot.PersistenceSaveCount} ({snapshot.PersistenceSaveMs:0.00} ms)\n" +
+            $"Terrain stats: worker {snapshot.MeshBuildWorkerCount} ({snapshot.MeshBuildWorkerMs:0.00} ms) | commit {snapshot.MeshRebuildCount} ({snapshot.MeshRebuildMs:0.00} ms) | collision {snapshot.CollisionRebuildCount} ({snapshot.CollisionRebuildMs:0.00} ms) | heap coarse/detail avg {snapshot.AverageCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.AverageDetailMeshWorkerHeapDeltaKiB:0.0} KiB max {snapshot.PeakCoarseMeshWorkerHeapDeltaKiB:0.0}/{snapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.0} KiB | normal mismatch {snapshot.LastNormalDebugMismatchCount}/{snapshot.NormalDebugMismatchCount} | tangents {snapshot.LastTangentGenerationCount}/{snapshot.TangentGenerationCount} | tint frames {snapshot.LastVertexTintEnabledFrameCount}/{snapshot.VertexTintEnabledFrameCount} | persist load {snapshot.PersistenceLoadCount} ({snapshot.PersistenceLoadMs:0.00} ms) | save {snapshot.PersistenceSaveCount} ({snapshot.PersistenceSaveMs:0.00} ms)\n" +
             $"Cache: ram {snapshot.RamCacheHits} | startup {snapshot.StartupSnapshotHits} | db {snapshot.DatabaseHits} | gen {snapshot.GenerationFallbacks} | evicted {snapshot.EvictedChunks} | writes {snapshot.DirtyPersistWrites} | startup->db {snapshot.StartupPromotionWrites}\n" +
             $"Selected: {snapshot.LastSelectedChunkSummary}\n" +
             $"Released: {snapshot.LastReleasedChunkSummary}\n" +
@@ -490,6 +654,7 @@ public partial class TerrainWorld : Node3D
         int trackedEditedReplaceCoarseCellCount = 0;
         string trackedRenderDirtyBoundsSummary = "none";
         string trackedCollisionDirtyBoundsSummary = "none";
+        string trackedCoverageStateSummary = "n/a";
         if (_residentChunks.TryGetValue(trackedChunkKey, out TerrainChunk trackedChunk))
         {
             trackedDetailRegionCount = trackedChunk.DetailRegionCount;
@@ -514,6 +679,7 @@ public partial class TerrainWorld : Node3D
                 : 0;
             trackedRenderDirtyBoundsSummary = trackedChunk.RenderDirtyBoundsSummary;
             trackedCollisionDirtyBoundsSummary = trackedChunk.CollisionDirtyBoundsSummary;
+            trackedCoverageStateSummary = trackedChunk.CoverageStateSummary;
         }
         else if (trackedStructure.IsInInfluenceZone)
         {
@@ -588,6 +754,12 @@ public partial class TerrainWorld : Node3D
             LastSkippedLowPriorityMeshBuildCount = _lastSkippedLowPriorityBuildCount,
             SuppressedDuplicateMeshBuildCount = _meshBuildScheduler.SuppressedDuplicateCount,
             LastSuppressedDuplicateMeshBuildCount = _lastSuppressedDuplicateBuildCount,
+            HighPriorityEnqueueBudgetHitCount = _totalHighPriorityEnqueueBudgetHitCount,
+            LastHighPriorityEnqueueBudgetHitCount = _lastHighPriorityEnqueueBudgetHitCount,
+            DeferredHighPriorityEnqueueCount = _totalDeferredHighPriorityEnqueueCount,
+            LastDeferredHighPriorityEnqueueCount = _lastDeferredHighPriorityEnqueueCount,
+            SmoothedHighPriorityEnqueueCount = _totalSmoothedHighPriorityEnqueueCount,
+            LastSmoothedHighPriorityEnqueueCount = _lastSmoothedHighPriorityEnqueueCount,
             PressureModeActive = _pressureModeActive,
             PressureModeActiveFrameCount = _pressureModeActiveFrameCount,
             PressureModeActivationCount = _pressureModeActivationCount,
@@ -643,6 +815,18 @@ public partial class TerrainWorld : Node3D
             RequestsReactivatedByCooldownExpiryCount = _requestsReactivatedByCooldownExpiryCount,
             RequestsReactivatedByPressureExitCount = _requestsReactivatedByPressureExitCount,
             CoalescedRebuildRequestCount = terrainInstrumentation.CoalescedRebuildRequestCount,
+            PreventedCoverageGapReleaseCount = _totalPreventedCoverageGapReleaseCount,
+            LastPreventedCoverageGapReleaseCount = _lastPreventedCoverageGapReleaseCount,
+            ReplacementCoverageWaitCount = _totalReplacementCoverageWaitCount,
+            LastReplacementCoverageWaitCount = _lastReplacementCoverageWaitCount,
+            ChunksHeldForCoverageSafetyCount = _totalChunksHeldForCoverageSafetyCount,
+            LastChunksHeldForCoverageSafetyCount = _lastChunksHeldForCoverageSafetyCount,
+            NormalDebugMismatchCount = _totalNormalDebugMismatchCount,
+            LastNormalDebugMismatchCount = _lastNormalDebugMismatchCount,
+            TangentGenerationCount = _totalTangentGenerationCount,
+            LastTangentGenerationCount = _lastTangentGenerationCount,
+            VertexTintEnabledFrameCount = _totalVertexTintEnabledFrameCount,
+            LastVertexTintEnabledFrameCount = _lastVertexTintEnabledFrameCount,
             PersistenceLoadCount = terrainInstrumentation.PersistenceLoadCount,
             PersistenceLoadMs = terrainInstrumentation.PersistenceLoadMs,
             LastPersistenceLoadMs = terrainInstrumentation.LastPersistenceLoadMs,
@@ -691,6 +875,7 @@ public partial class TerrainWorld : Node3D
             TrackedEditedReplaceCoarseCellCount = trackedEditedReplaceCoarseCellCount,
             TrackedRenderDirtyBoundsSummary = trackedRenderDirtyBoundsSummary,
             TrackedCollisionDirtyBoundsSummary = trackedCollisionDirtyBoundsSummary,
+            TrackedCoverageStateSummary = trackedCoverageStateSummary,
             LastSelectedChunkSummary = _lastSelectedChunkSummary,
             LastReleasedChunkSummary = _lastReleasedChunkSummary,
             LastChunkSourceSummary = _lastChunkSourceSummary,
@@ -998,12 +1183,124 @@ public partial class TerrainWorld : Node3D
 
     private void UpdateResidentVisibility()
     {
+        bool anyPendingDesiredCoverage = HasAnyPendingDesiredCoverage();
         foreach (KeyValuePair<Vector3I, TerrainChunk> entry in _residentChunks)
         {
+            TerrainChunk chunk = entry.Value;
             bool desired = _desiredChunks.Contains(entry.Key);
-            entry.Value.Visible = desired;
-            entry.Value.ProcessMode = desired ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
+            bool replacementCoveragePending = false;
+            bool heldForCoverageSafety = !desired && ShouldHoldChunkForCoverage(chunk, anyPendingDesiredCoverage, out replacementCoveragePending);
+            bool visible = desired || heldForCoverageSafety;
+            chunk.SetCoverageRetention(
+                heldForCoverageSafety,
+                replacementCoveragePending,
+                safeToRelease: !desired && !heldForCoverageSafety);
+            chunk.Visible = visible;
+            chunk.ProcessMode = visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
+            if (heldForCoverageSafety)
+            {
+                _lastChunksHeldForCoverageSafetyCount++;
+                _totalChunksHeldForCoverageSafetyCount++;
+                if (replacementCoveragePending)
+                {
+                    _lastReplacementCoverageWaitCount++;
+                    _totalReplacementCoverageWaitCount++;
+                }
+            }
         }
+    }
+
+    private bool ShouldHoldChunkForCoverage(TerrainChunk chunk, bool anyPendingDesiredCoverage, out bool replacementCoveragePending)
+    {
+        replacementCoveragePending = false;
+        if (chunk == null ||
+            !IsInstanceValid(chunk) ||
+            !chunk.HasCompletedInitialVisualBuild ||
+            !chunk.HasSurface)
+        {
+            return false;
+        }
+
+        if (!IsChunkCoverageRelevant(chunk))
+        {
+            return false;
+        }
+
+        replacementCoveragePending = HasPendingDesiredCoverageNeighbors(chunk.ChunkKey);
+        if (replacementCoveragePending)
+        {
+            return true;
+        }
+
+        return anyPendingDesiredCoverage && IsChunkNearCoverageFrontier(chunk.ChunkKey);
+    }
+
+    private bool HasPendingDesiredCoverageNeighbors(Vector3I key)
+    {
+        for (int z = -1; z <= 1; z++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                Vector3I neighborKey = new(key.X + x, key.Y, key.Z + z);
+                if (!_desiredChunks.Contains(neighborKey))
+                {
+                    continue;
+                }
+
+                if (!_residentChunks.TryGetValue(neighborKey, out TerrainChunk neighborChunk) ||
+                    !neighborChunk.HasCompletedInitialVisualBuild)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool HasAnyPendingDesiredCoverage()
+    {
+        foreach (Vector3I key in _desiredChunks)
+        {
+            if (!_residentChunks.TryGetValue(key, out TerrainChunk chunk) || !chunk.HasCompletedInitialVisualBuild)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsChunkNearCoverageFrontier(Vector3I key)
+    {
+        Vector2 offset = new(
+            key.X - _searchEvaluationContext.CenterChunk.X,
+            key.Z - _searchEvaluationContext.CenterChunk.Y);
+        return offset.Length() <= _searchEvaluationContext.SearchRadius + 1.25f;
+    }
+
+    private bool IsChunkCoverageRelevant(TerrainChunk chunk)
+    {
+        Vector2 offset = new(
+            chunk.ChunkKey.X - _searchEvaluationContext.CenterChunk.X,
+            chunk.ChunkKey.Z - _searchEvaluationContext.CenterChunk.Y);
+        float distance = offset.Length();
+        if (distance <= GuaranteedColumnRadius + 1.5f)
+        {
+            return true;
+        }
+
+        float forwardAlignment = 0.0f;
+        if (_searchEvaluationContext.StreamForward != Vector2.Zero && offset.LengthSquared() > 0.0001f)
+        {
+            forwardAlignment = offset.Normalized().Dot(_searchEvaluationContext.StreamForward);
+        }
+
+        float visibility = MeasureVisibilityHeuristic(new Vector2I(chunk.ChunkKey.X, chunk.ChunkKey.Z));
+        return
+            distance <= _searchEvaluationContext.SearchRadius + 1.25f &&
+            visibility > OccludedPriorityScale &&
+            forwardAlignment > -0.55f;
     }
 
     private void UpdateColumnRetention(Vector2I centerChunk)
@@ -1103,6 +1400,13 @@ public partial class TerrainWorld : Node3D
                 continue;
             }
 
+            if (!chunk.SafeToRelease)
+            {
+                _lastPreventedCoverageGapReleaseCount++;
+                _totalPreventedCoverageGapReleaseCount++;
+                continue;
+            }
+
             ulong start = Time.GetTicksUsec();
             _cacheManager.ReleaseResidentChunk(release.Key, chunk);
             if (chunk.IsDetailPromotionDeferred)
@@ -1163,6 +1467,7 @@ public partial class TerrainWorld : Node3D
             TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
             AddChild(chunk);
             chunk.Initialize(prepared.Key, _settings);
+            ApplyChunkVisualConfiguration(chunk);
             chunk.SetBiomeSample(GetBiomeForChunk(prepared.Key), EnableBiomeDebugTint);
             chunk.SetStructureMetadata(GetStructureInfluenceForChunk(prepared.Key));
             chunk.SetData(prepared.Data, prepared.Source);
@@ -1802,6 +2107,7 @@ public partial class TerrainWorld : Node3D
         DrainCompletedMeshBuilds();
         ProcessPendingMeshCommits();
         EnsureDirtyChunksHaveQueuedBuilds();
+        FlushStagedHighPriorityVisualEnqueues();
         RefreshCollisionCoverage();
         ProcessQueuedCollisionRebuilds();
         StartVisualMeshBuildWorkers();
@@ -1834,7 +2140,7 @@ public partial class TerrainWorld : Node3D
             _dirtyRenderChunks.Add(chunk);
             RefreshVisualMeshSchedulerState();
             TerrainVisualBuildQueueClass queueClass = ClassifyVisualBuildQueue(chunk, requestKind);
-            TerrainMeshQueueResult enqueueResult = _meshBuildScheduler.Queue(
+            TerrainMeshQueueResult enqueueResult = QueueVisualBuildRequest(
                 new TerrainVisualBuildRequest(
                     chunk,
                     chunk.ChunkKey,
@@ -1874,12 +2180,275 @@ public partial class TerrainWorld : Node3D
         }
     }
 
+    private TerrainMeshQueueResult QueueVisualBuildRequest(TerrainVisualBuildRequest request)
+    {
+        if (_stagedHighPriorityVisualEnqueueStates.TryGetValue(request.Key, out StagedVisualEnqueueState stagedState))
+        {
+            TerrainVisualBuildRequest merged = MergeVisualBuildRequests(stagedState.Request, request);
+            if (!ShouldRefreshVisualBuildRequest(stagedState.Request, merged))
+            {
+                return new TerrainMeshQueueResult(Enqueued: false, Coalesced: true, Deferred: true, Suppressed: true);
+            }
+
+            int token = NextStagedVisualEnqueueToken();
+            stagedState.Update(merged, token);
+            _stagedHighPriorityVisualEnqueues.Enqueue(
+                new StagedVisualEnqueueEntry(request.Key, token),
+                ComposeStagedVisualEnqueuePriority(merged, token));
+            return new TerrainMeshQueueResult(Enqueued: true, Coalesced: true, Deferred: true);
+        }
+
+        if (_meshBuildScheduler.HasPendingWork(request.Key))
+        {
+            return _meshBuildScheduler.Queue(request);
+        }
+
+        if (request.QueueClass != TerrainVisualBuildQueueClass.Background)
+        {
+            return StageHighPriorityVisualEnqueue(request);
+        }
+
+        return _meshBuildScheduler.Queue(request);
+    }
+
+    private TerrainMeshQueueResult StageHighPriorityVisualEnqueue(TerrainVisualBuildRequest request)
+    {
+        int token = NextStagedVisualEnqueueToken();
+        _stagedHighPriorityVisualEnqueueStates[request.Key] = new StagedVisualEnqueueState(request, token);
+        _stagedHighPriorityVisualEnqueues.Enqueue(
+            new StagedVisualEnqueueEntry(request.Key, token),
+            ComposeStagedVisualEnqueuePriority(request, token));
+        _lastDeferredHighPriorityEnqueueCount++;
+        _totalDeferredHighPriorityEnqueueCount++;
+        return new TerrainMeshQueueResult(Enqueued: true, Coalesced: false, Deferred: true);
+    }
+
+    private void FlushStagedHighPriorityVisualEnqueues()
+    {
+        if (_stagedHighPriorityVisualEnqueueStates.Count == 0)
+        {
+            return;
+        }
+
+        int remainingHighPriority = Mathf.Max(0, MaxHighPriorityMeshEnqueuesPerFrame);
+        int remainingNearCoarse = Mathf.Clamp(MaxNearCoarseMeshEnqueuesPerFrame, 0, Mathf.Max(0, remainingHighPriority));
+        int remainingDetailPromotions = Mathf.Max(0, MaxDetailPromotionActivationsPerFrame);
+        bool budgetHitRecorded = false;
+        while (TryPeekNextStagedHighPriorityRequest(out TerrainVisualBuildRequest request))
+        {
+            string blockReason = GetStagedHighPriorityDeferralReason(
+                request,
+                remainingHighPriority,
+                remainingNearCoarse,
+                remainingDetailPromotions);
+            if (!string.IsNullOrEmpty(blockReason))
+            {
+                if (!budgetHitRecorded && blockReason.StartsWith("budget", StringComparison.Ordinal))
+                {
+                    _lastHighPriorityEnqueueBudgetHitCount++;
+                    _totalHighPriorityEnqueueBudgetHitCount++;
+                    budgetHitRecorded = true;
+                }
+
+                break;
+            }
+
+            if (!TryTakeNextStagedHighPriorityRequest(out StagedVisualEnqueueState stagedState))
+            {
+                continue;
+            }
+
+            TerrainMeshQueueResult enqueueResult = _meshBuildScheduler.Queue(stagedState.Request);
+            if (enqueueResult.Coalesced)
+            {
+                RecordCoalescedRebuildRequest(stagedState.Request.Key, "visual", stagedState.Request.Reason);
+            }
+
+            if (enqueueResult.Suppressed)
+            {
+                RecordSuppressedDuplicateBuild(stagedState.Request.Key, "visual", stagedState.Request.Reason);
+            }
+
+            _lastSmoothedHighPriorityEnqueueCount++;
+            _totalSmoothedHighPriorityEnqueueCount++;
+            remainingHighPriority = Mathf.Max(0, remainingHighPriority - 1);
+            if (stagedState.Request.Kind == TerrainVisualBuildRequestKind.InitialCoarse)
+            {
+                remainingNearCoarse = Mathf.Max(0, remainingNearCoarse - 1);
+            }
+
+            if (stagedState.Request.Kind == TerrainVisualBuildRequestKind.DetailPromotion)
+            {
+                remainingDetailPromotions = Mathf.Max(0, remainingDetailPromotions - 1);
+            }
+        }
+    }
+
+    private bool TryPeekNextStagedHighPriorityRequest(out TerrainVisualBuildRequest request)
+    {
+        while (_stagedHighPriorityVisualEnqueues.Count > 0)
+        {
+            StagedVisualEnqueueEntry entry = _stagedHighPriorityVisualEnqueues.Peek();
+            if (!_stagedHighPriorityVisualEnqueueStates.TryGetValue(entry.Key, out StagedVisualEnqueueState state) ||
+                state.Token != entry.Token)
+            {
+                _stagedHighPriorityVisualEnqueues.Dequeue();
+                continue;
+            }
+
+            request = state.Request;
+            return true;
+        }
+
+        request = default;
+        return false;
+    }
+
+    private bool TryTakeNextStagedHighPriorityRequest(out StagedVisualEnqueueState state)
+    {
+        while (_stagedHighPriorityVisualEnqueues.Count > 0)
+        {
+            StagedVisualEnqueueEntry entry = _stagedHighPriorityVisualEnqueues.Dequeue();
+            if (!_stagedHighPriorityVisualEnqueueStates.TryGetValue(entry.Key, out StagedVisualEnqueueState queuedState) ||
+                queuedState.Token != entry.Token)
+            {
+                continue;
+            }
+
+            _stagedHighPriorityVisualEnqueueStates.Remove(entry.Key);
+            state = queuedState;
+            return true;
+        }
+
+        state = null!;
+        return false;
+    }
+
+    private string GetStagedHighPriorityDeferralReason(
+        TerrainVisualBuildRequest request,
+        int remainingHighPriority,
+        int remainingNearCoarse,
+        int remainingDetailPromotions)
+    {
+        if (remainingHighPriority <= 0)
+        {
+            return "budget_high_priority";
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.InitialCoarse && remainingNearCoarse <= 0)
+        {
+            return "budget_near_coarse";
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.DetailPromotion && remainingDetailPromotions <= 0)
+        {
+            return "budget_detail_promotion";
+        }
+
+        int pressureDepth = GetHighPriorityPressureDepth();
+        int softLimit = Mathf.Max(1, HighPriorityQueueSoftLimit);
+        int hardLimit = Mathf.Max(softLimit, HighPriorityQueueHardLimit);
+        if (request.Kind == TerrainVisualBuildRequestKind.DetailPromotion)
+        {
+            if (pressureDepth >= hardLimit)
+            {
+                return "pressure_hard_limit";
+            }
+
+            if (pressureDepth >= softLimit)
+            {
+                return "pressure_soft_limit";
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private int GetHighPriorityPressureDepth()
+    {
+        return
+            _meshBuildScheduler.HighPriorityQueueDepth +
+            _meshBuildScheduler.HighPriorityRunningCount +
+            _stagedHighPriorityVisualEnqueueStates.Count;
+    }
+
+    private int NextStagedVisualEnqueueToken()
+    {
+        return ++_stagedVisualEnqueueSequence;
+    }
+
+    private static TerrainVisualBuildRequest MergeVisualBuildRequests(TerrainVisualBuildRequest current, TerrainVisualBuildRequest next)
+    {
+        TerrainVisualBuildRequestKind kind = GetVisualBuildKindPriorityLane(next.Kind) < GetVisualBuildKindPriorityLane(current.Kind)
+            ? next.Kind
+            : current.Kind;
+        TerrainVisualBuildQueueClass queueClass = GetVisualBuildQueueClassPriorityLane(next.QueueClass) < GetVisualBuildQueueClassPriorityLane(current.QueueClass)
+            ? next.QueueClass
+            : current.QueueClass;
+        float priorityScore = Mathf.Max(current.PriorityScore, next.PriorityScore);
+        TerrainMeshDetailMode detailMode = (TerrainMeshDetailMode)Mathf.Max((int)current.DetailMode, (int)next.DetailMode);
+        bool bypassBackpressure = current.BypassBackpressure || next.BypassBackpressure;
+        string reason = string.IsNullOrWhiteSpace(next.Reason)
+            ? current.Reason
+            : next.Reason;
+        return new TerrainVisualBuildRequest(current.Chunk, current.Key, kind, queueClass, priorityScore, detailMode, bypassBackpressure, reason);
+    }
+
+    private static bool ShouldRefreshVisualBuildRequest(TerrainVisualBuildRequest current, TerrainVisualBuildRequest merged)
+    {
+        return
+            GetVisualBuildQueueClassPriorityLane(merged.QueueClass) < GetVisualBuildQueueClassPriorityLane(current.QueueClass) ||
+            GetVisualBuildKindPriorityLane(merged.Kind) < GetVisualBuildKindPriorityLane(current.Kind) ||
+            merged.DetailMode > current.DetailMode ||
+            (merged.BypassBackpressure && !current.BypassBackpressure) ||
+            merged.PriorityScore > (current.PriorityScore + 4.0f);
+    }
+
+    private static int GetVisualBuildKindPriorityLane(TerrainVisualBuildRequestKind kind)
+    {
+        return kind switch
+        {
+            TerrainVisualBuildRequestKind.Edit => 0,
+            TerrainVisualBuildRequestKind.InitialCoarse => 1,
+            _ => 2
+        };
+    }
+
+    private static int GetVisualBuildQueueClassPriorityLane(TerrainVisualBuildQueueClass queueClass)
+    {
+        return queueClass switch
+        {
+            TerrainVisualBuildQueueClass.Critical => 0,
+            TerrainVisualBuildQueueClass.NearCoarse => 1,
+            _ => 2
+        };
+    }
+
+    private static StagedVisualEnqueuePriority ComposeStagedVisualEnqueuePriority(TerrainVisualBuildRequest request, int token)
+    {
+        int lane = request.Kind switch
+        {
+            TerrainVisualBuildRequestKind.Edit => 0,
+            TerrainVisualBuildRequestKind.InitialCoarse => 1,
+            _ => 2
+        };
+        return new StagedVisualEnqueuePriority(lane, -request.PriorityScore, token);
+    }
+
     private void DrainCompletedMeshBuilds()
     {
         foreach (TerrainVisualBuildCompletedJob completedJob in _meshBuildScheduler.DrainCompletedJobs())
         {
             _lastMeshWorkerBuildCount++;
             _lastMeshWorkerBuildMs += completedJob.WorkerBuildMs;
+            _lastNormalDebugMismatchCount += completedJob.ExecutionResult.MeshResult.NormalDebugMismatchCount;
+            _totalNormalDebugMismatchCount += completedJob.ExecutionResult.MeshResult.NormalDebugMismatchCount;
+            if (completedJob.ExecutionResult.MeshResult.HasTangents)
+            {
+                _lastTangentGenerationCount++;
+                _totalTangentGenerationCount++;
+            }
+
             _terrainStats.RecordMeshBuildWorker(
                 completedJob.Job.Key,
                 completedJob.WorkerBuildMs,
@@ -2544,8 +3113,13 @@ public partial class TerrainWorld : Node3D
 
     private bool IsVisualMeshPressureActive()
     {
-        int queueDepth = _meshBuildScheduler.QueuedCount + _meshBuildScheduler.HighPriorityRunningCount;
+        int queueDepth =
+            _meshBuildScheduler.QueuedCount +
+            _meshBuildScheduler.HighPriorityRunningCount +
+            _stagedHighPriorityVisualEnqueueStates.Count;
+        int highPriorityPressureDepth = GetHighPriorityPressureDepth();
         return
+            highPriorityPressureDepth >= Mathf.Max(1, HighPriorityQueueSoftLimit) ||
             queueDepth >= Mathf.Max(1, QueueDepthPressureThreshold) ||
             (queueDepth > 0 && _meshBuildScheduler.LastQueueWaitMs >= Math.Max(0.0, QueueWaitPressureMs));
     }
@@ -2606,7 +3180,7 @@ public partial class TerrainWorld : Node3D
             return true;
         }
 
-        if (_meshBuildScheduler.HasForegroundCoarseDemand)
+        if (_meshBuildScheduler.HasForegroundCoarseDemand || HasStagedForegroundCoarseDemand())
         {
             return true;
         }
@@ -2625,7 +3199,7 @@ public partial class TerrainWorld : Node3D
             return true;
         }
 
-        if (IsVisualMeshPressureActive() || _meshBuildScheduler.HasHighPriorityDemand)
+        if (IsVisualMeshPressureActive() || _meshBuildScheduler.HasHighPriorityDemand || _stagedHighPriorityVisualEnqueueStates.Count > 0)
         {
             return false;
         }
@@ -2635,7 +3209,9 @@ public partial class TerrainWorld : Node3D
 
     private void TrimStaleLowPriorityMeshRequests()
     {
-        if (!IsVisualMeshPressureActive() && !_meshBuildScheduler.HasHighPriorityDemand)
+        if (!IsVisualMeshPressureActive() &&
+            !_meshBuildScheduler.HasHighPriorityDemand &&
+            _stagedHighPriorityVisualEnqueueStates.Count == 0)
         {
             return;
         }
@@ -2724,6 +3300,7 @@ public partial class TerrainWorld : Node3D
         TerrainChunk chunk = ChunkScene.Instantiate<TerrainChunk>();
         AddChild(chunk);
         chunk.Initialize(key, _settings);
+        ApplyChunkVisualConfiguration(chunk);
         chunk.SetBiomeSample(GetBiomeForChunk(key), EnableBiomeDebugTint);
         chunk.SetStructureMetadata(GetStructureInfluenceForChunk(key));
         chunk.SetData(acquired.Data, acquired.Source);
@@ -3157,6 +3734,15 @@ public partial class TerrainWorld : Node3D
         _lastCoalescedRebuildRequestCount = 0;
         _lastSkippedLowPriorityBuildCount = 0;
         _lastSuppressedDuplicateBuildCount = 0;
+        _lastHighPriorityEnqueueBudgetHitCount = 0;
+        _lastDeferredHighPriorityEnqueueCount = 0;
+        _lastSmoothedHighPriorityEnqueueCount = 0;
+        _lastPreventedCoverageGapReleaseCount = 0;
+        _lastReplacementCoverageWaitCount = 0;
+        _lastChunksHeldForCoverageSafetyCount = 0;
+        _lastNormalDebugMismatchCount = 0;
+        _lastTangentGenerationCount = 0;
+        _lastVertexTintEnabledFrameCount = 0;
     }
 
     private void LoadStartupState()
@@ -3271,7 +3857,9 @@ public partial class TerrainWorld : Node3D
 
     private int GetCurrentBackgroundVisualMeshWorkerBudget()
     {
-        if (IsVisualMeshPressureActive() || _meshBuildScheduler.HasHighPriorityDemand)
+        if (IsVisualMeshPressureActive() ||
+            _meshBuildScheduler.HasHighPriorityDemand ||
+            _stagedHighPriorityVisualEnqueueStates.Count > 0)
         {
             return 0;
         }
@@ -3281,7 +3869,9 @@ public partial class TerrainWorld : Node3D
 
     private int GetCurrentLowPriorityActiveMeshQueueBudget()
     {
-        if (IsVisualMeshPressureActive() || _meshBuildScheduler.HasHighPriorityDemand)
+        if (IsVisualMeshPressureActive() ||
+            _meshBuildScheduler.HasHighPriorityDemand ||
+            _stagedHighPriorityVisualEnqueueStates.Count > 0)
         {
             return 0;
         }
@@ -3296,12 +3886,40 @@ public partial class TerrainWorld : Node3D
 
     private int GetReservedCriticalDetailWorkerBudget(int totalBudget)
     {
-        if (totalBudget <= 1 || !_meshBuildScheduler.HasCriticalDetailDemand)
+        if (totalBudget <= 1 ||
+            (!_meshBuildScheduler.HasCriticalDetailDemand && !HasStagedCriticalDetailDemand()))
         {
             return 0;
         }
 
         return 1;
+    }
+
+    private bool HasStagedForegroundCoarseDemand()
+    {
+        foreach (StagedVisualEnqueueState state in _stagedHighPriorityVisualEnqueueStates.Values)
+        {
+            if (state.Request.Kind == TerrainVisualBuildRequestKind.InitialCoarse)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool HasStagedCriticalDetailDemand()
+    {
+        foreach (StagedVisualEnqueueState state in _stagedHighPriorityVisualEnqueueStates.Values)
+        {
+            if (state.Request.Kind == TerrainVisualBuildRequestKind.DetailPromotion &&
+                state.Request.QueueClass == TerrainVisualBuildQueueClass.Critical)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private int GetCurrentVisualRebuildBudget()
@@ -3360,7 +3978,7 @@ public partial class TerrainWorld : Node3D
         int estimatedResidentChunks = Mathf.Max(MaxActiveColumns, 1) * Mathf.Max(VerticalChunkCount, 1);
         int estimatedRamBudget = Mathf.Max(0, MaxLoadedChunks - estimatedResidentChunks);
         GD.Print(
-            $"Terrain streaming tuning | desired cols {MaxActiveColumns} | est resident chunks {estimatedResidentChunks} | loaded cap {MaxLoadedChunks} | est ram cache {estimatedRamBudget} | mesh worker total {MaxVisualMeshWorkerJobs}/{StartupVisualMeshWorkerJobs} edit/coarse/detail/bg {MaxEditVisualMeshWorkerJobs}/{MaxCoarseVisualMeshWorkerJobs}/{MaxDetailVisualMeshWorkerJobs}/{MaxBackgroundVisualMeshWorkerJobs} startup_coarse {StartupCoarseVisualMeshWorkerJobs} | backpressure {GetCurrentVisualMeshBackpressureBudget()} depth pressure {QueueDepthPressureThreshold} wait pressure {QueueWaitPressureMs:0}ms low-pri defer {MaxDeferredLowPriorityBuilds} | mesh commit {MaxVisualChunkRebuildsPerFrame}/{StartupVisualChunkRebuildsPerFrame} | detail warmup {ChunkDetailWarmupFrames}f/{ChunkDetailWarmupSeconds:0.00}s cooldown {DetailRequestCooldownSeconds:0.00}s promos {MaxDetailPromotionsPerFrame} | tint {(EnableTerrainVertexTint ? "on" : "off")} | retain {RetentionPriorityWeight:0.0}/{RetentionDecayFactor:0.00} | shoulder {ShoulderHalfAngleDegrees:0.#}deg {ShoulderDistanceMultiplier:0.00}x {ShoulderPriorityMultiplier:0.00}x");
+            $"Terrain streaming tuning | desired cols {MaxActiveColumns} | est resident chunks {estimatedResidentChunks} | loaded cap {MaxLoadedChunks} | est ram cache {estimatedRamBudget} | mesh worker total {MaxVisualMeshWorkerJobs}/{StartupVisualMeshWorkerJobs} edit/coarse/detail/bg {MaxEditVisualMeshWorkerJobs}/{MaxCoarseVisualMeshWorkerJobs}/{MaxDetailVisualMeshWorkerJobs}/{MaxBackgroundVisualMeshWorkerJobs} startup_coarse {StartupCoarseVisualMeshWorkerJobs} | backpressure {GetCurrentVisualMeshBackpressureBudget()} depth pressure {QueueDepthPressureThreshold} wait pressure {QueueWaitPressureMs:0}ms hi-enqueue {MaxHighPriorityMeshEnqueuesPerFrame}/{MaxNearCoarseMeshEnqueuesPerFrame}/{MaxDetailPromotionActivationsPerFrame} hi-soft/hard {HighPriorityQueueSoftLimit}/{HighPriorityQueueHardLimit} low-pri defer {MaxDeferredLowPriorityBuilds} | mesh commit {MaxVisualChunkRebuildsPerFrame}/{StartupVisualChunkRebuildsPerFrame} | detail warmup {ChunkDetailWarmupFrames}f/{ChunkDetailWarmupSeconds:0.00}s cooldown {DetailRequestCooldownSeconds:0.00}s promos {MaxDetailPromotionsPerFrame} | tint {(EnableTerrainVertexTint ? "on" : "off")} debug {ResolveTerrainDebugView()} tangents {(TerrainGenerateTangents ? "requested" : "off")} | retain {RetentionPriorityWeight:0.0}/{RetentionDecayFactor:0.00} | shoulder {ShoulderHalfAngleDegrees:0.#}deg {ShoulderDistanceMultiplier:0.00}x {ShoulderPriorityMultiplier:0.00}x");
     }
 
     private static float DeltaAngleDegrees(float current, float previous)
