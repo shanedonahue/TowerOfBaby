@@ -136,6 +136,13 @@ public sealed class VoxelDetailBrickData
             z < ReplaceCellMaxExclusive.Z;
     }
 
+    public VoxelDetailBrickData CreateMeshSnapshot()
+    {
+        VoxelChunkData dataSnapshot = new(Data.PointsPerAxis, Data.VoxelSize, Data.Origin, Data.IsoLevel);
+        dataSnapshot.LoadFromBuffers(Data.CopyDensities(), Data.CopyMaterials());
+        return new VoxelDetailBrickData(CoarseCellMin, CoarseCellCount, DetailScale, dataSnapshot, HasPersistentEdits);
+    }
+
     public byte[] Serialize()
     {
         using MemoryStream stream = new();

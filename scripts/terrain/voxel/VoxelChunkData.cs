@@ -170,6 +170,18 @@ public sealed class VoxelChunkData
         return (byte[])_materials.Clone();
     }
 
+    public VoxelChunkData CreateMeshSnapshot(bool includeTransientDetailBrick)
+    {
+        VoxelChunkData snapshot = new(PointsPerAxis, VoxelSize, Origin, IsoLevel);
+        snapshot.LoadFromBuffers(CopyDensities(), CopyMaterials());
+        if (_detailBrick != null && (includeTransientDetailBrick || _detailBrick.HasPersistentEdits))
+        {
+            snapshot._detailBrick = _detailBrick.CreateMeshSnapshot();
+        }
+
+        return snapshot;
+    }
+
     public void LoadFromBuffers(float[] densities, byte[] materials)
     {
         if (densities.Length != _densities.Length || materials.Length != _materials.Length)

@@ -19,12 +19,17 @@ internal readonly record struct TerrainInstrumentationSnapshot(
     int LastDeformEditDetailPromotionCount,
     double LastDeformMs,
     string LastDeformKind,
+    long MeshBuildWorkerCount,
+    double MeshBuildWorkerMs,
+    double LastMeshBuildWorkerMs,
     long MeshRebuildCount,
     double MeshRebuildMs,
     double LastMeshRebuildMs,
     long CollisionRebuildCount,
     double CollisionRebuildMs,
     double LastCollisionRebuildMs,
+    long DeferredDetailPromotionCount,
+    long CoalescedRebuildRequestCount,
     long PersistenceLoadCount,
     double PersistenceLoadMs,
     double LastPersistenceLoadMs,
@@ -48,12 +53,17 @@ internal readonly record struct TerrainInstrumentationSnapshot(
             LastDeformEditDetailPromotionCount: 0,
             LastDeformMs: 0.0,
             LastDeformKind: "n/a",
+            MeshBuildWorkerCount: 0,
+            MeshBuildWorkerMs: 0.0,
+            LastMeshBuildWorkerMs: 0.0,
             MeshRebuildCount: 0,
             MeshRebuildMs: 0.0,
             LastMeshRebuildMs: 0.0,
             CollisionRebuildCount: 0,
             CollisionRebuildMs: 0.0,
             LastCollisionRebuildMs: 0.0,
+            DeferredDetailPromotionCount: 0,
+            CoalescedRebuildRequestCount: 0,
             PersistenceLoadCount: 0,
             PersistenceLoadMs: 0.0,
             LastPersistenceLoadMs: 0.0,
@@ -110,9 +120,16 @@ internal sealed class TerrainStatsTracker
     private double _meshRebuildMs;
     private double _lastMeshRebuildMs;
 
+    private long _meshBuildWorkerCount;
+    private double _meshBuildWorkerMs;
+    private double _lastMeshBuildWorkerMs;
+
     private long _collisionRebuildCount;
     private double _collisionRebuildMs;
     private double _lastCollisionRebuildMs;
+
+    private long _deferredDetailPromotionCount;
+    private long _coalescedRebuildRequestCount;
 
     private long _persistenceLoadCount;
     private double _persistenceLoadMs;
@@ -144,12 +161,17 @@ internal sealed class TerrainStatsTracker
             _lastDeformEditDetailPromotionCount,
             _lastDeformMs,
             _lastDeformKind,
+            _meshBuildWorkerCount,
+            _meshBuildWorkerMs,
+            _lastMeshBuildWorkerMs,
             _meshRebuildCount,
             _meshRebuildMs,
             _lastMeshRebuildMs,
             _collisionRebuildCount,
             _collisionRebuildMs,
             _lastCollisionRebuildMs,
+            _deferredDetailPromotionCount,
+            _coalescedRebuildRequestCount,
             _persistenceLoadCount,
             _persistenceLoadMs,
             _lastPersistenceLoadMs,
@@ -211,7 +233,29 @@ internal sealed class TerrainStatsTracker
             $"{Prefix} event=chunk_remesh_begin chunk={FormatVector(key)} phase={phase} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)}");
     }
 
-    public void RecordMeshRebuild(
+    public void RecordMeshBuildWorker(
+        Vector3I key,
+        double ms,
+        TerrainChunkDirtyBoundsSnapshot dirtyBounds,
+        bool usedDetailBrick,
+        bool usedPersistentEdits,
+        int detailTriangleCount,
+        int replacedCoarseCellCount,
+        int totalTriangleCount)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        _meshBuildWorkerCount++;
+        _meshBuildWorkerMs += ms;
+        _lastMeshBuildWorkerMs = ms;
+        WriteLine(
+            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker ms={ms:0.000} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+    }
+
+    public void RecordMeshCommit(
         Vector3I key,
         double ms,
         TerrainChunkDirtyBoundsSnapshot dirtyBounds,
@@ -230,7 +274,7 @@ internal sealed class TerrainStatsTracker
         _meshRebuildMs += ms;
         _lastMeshRebuildMs = ms;
         WriteLine(
-            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=render ms={ms:0.000} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_commit ms={ms:0.000} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
     }
 
     public void RecordCollisionRebuild(
@@ -365,6 +409,28 @@ internal sealed class TerrainStatsTracker
 
         WriteLine(
             $"{Prefix} event=chunk_dirty_bounds chunk={FormatVector(key)} source={source} requested={FormatAabb(requestedBounds)} merged={FormatDirtyBounds(mergedBounds)} merged_volume={mergedBounds.Volume:0.000} merged_coverage={mergedBounds.Coverage:0.000} detail_promoted={detailPromoted}");
+    }
+
+    public void RecordDeferredDetailPromotion(Vector3I key, string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        _deferredDetailPromotionCount++;
+        WriteLine($"{Prefix} event=detail_promotion_deferred chunk={FormatVector(key)} reason={Sanitize(reason)}");
+    }
+
+    public void RecordCoalescedRebuildRequest(Vector3I key, string queue, string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        _coalescedRebuildRequestCount++;
+        WriteLine($"{Prefix} event=rebuild_request_coalesced chunk={FormatVector(key)} queue={queue} reason={Sanitize(reason)}");
     }
 
     public void Close()

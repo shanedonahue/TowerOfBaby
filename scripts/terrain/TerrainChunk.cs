@@ -1,4 +1,5 @@
 using Godot;
+using GodotArray = Godot.Collections.Array;
 using System;
 using TowerOfBaby.Terrain.Voxel;
 
@@ -50,12 +51,16 @@ public partial class TerrainChunk : Node3D
     public VoxelChunkData Data => _data;
     public bool HasCollision => _collision?.Shape != null;
     public bool HasSurface => _mesh != null && _mesh.GetSurfaceCount() > 0;
-    public bool IsInitialLoadReady => HasData && !RenderDirty && !CollisionDirty && (!HasSurface || HasCollision);
+    public bool HasCompletedInitialVisualBuild { get; private set; }
+    public bool IsInitialVisualReady => HasData && HasCompletedInitialVisualBuild && !RenderDirty;
     public bool RenderDirty { get; private set; }
     public bool CollisionDirty { get; private set; }
     public double CollisionReadyAtSeconds { get; private set; }
     public double LastRenderBuildMs { get; private set; }
     public double LastCollisionBuildMs { get; private set; }
+    public double LastVisualCommitAtSeconds { get; private set; }
+    public double ActivatedAtSeconds { get; private set; }
+    public ulong ActivatedFrame { get; private set; }
     public int LastTotalTriangleCount { get; private set; }
     public int LastDetailTriangleCount { get; private set; }
     public int LastReplacedCoarseCellCount { get; private set; }
@@ -64,6 +69,7 @@ public partial class TerrainChunk : Node3D
     public bool LastUsedPersistentDetailEdits { get; private set; }
     public bool PersistenceDirty { get; private set; }
     public TerrainChunkLoadSource LoadSource { get; private set; } = TerrainChunkLoadSource.ProceduralGeneration;
+    public int RenderRevision => _renderRevision;
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
@@ -71,6 +77,7 @@ public partial class TerrainChunk : Node3D
     private ArrayMesh _mesh = null!;
     private StandardMaterial3D _biomeDebugMaterial = null!;
     private bool _biomeDebugTintEnabled;
+    private int _renderRevision;
 
     public override void _Ready()
     {
@@ -141,14 +148,48 @@ public partial class TerrainChunk : Node3D
         DetailRegionManager.ClearDirtyFlags();
     }
 
-    public void SetData(VoxelChunkData data, TerrainChunkLoadSource source, double collisionDelaySeconds)
+    public void SetData(VoxelChunkData data, TerrainChunkLoadSource source)
     {
         _data = data;
         LoadSource = source;
         PersistenceDirty = false;
+        RenderDirty = false;
+        CollisionDirty = false;
+        CollisionReadyAtSeconds = 0.0;
+        HasCompletedInitialVisualBuild = false;
+        LastRenderBuildMs = 0.0;
+        LastCollisionBuildMs = 0.0;
+        LastVisualCommitAtSeconds = double.NegativeInfinity;
+        ActivatedAtSeconds = double.NegativeInfinity;
+        ActivatedFrame = ulong.MaxValue;
+        LastTotalTriangleCount = 0;
+        LastDetailTriangleCount = 0;
+        LastReplacedCoarseCellCount = 0;
+        LastDetailCellCount = 0;
+        LastUsedDetailBrick = false;
+        LastUsedPersistentDetailEdits = false;
+        _renderRevision = 0;
+        RenderDirtyBoundsTracker.Clear();
+        CollisionDirtyBoundsTracker.Clear();
+        _mesh = null;
+        if (_meshInstance != null)
+        {
+            _meshInstance.Mesh = null;
+        }
+
+        if (_collision != null)
+        {
+            _collision.Shape = null;
+        }
+
         SyncEditedDetailRegionRequest();
         UpdateDebugName();
-        MarkDirty(includeCollision: true, collisionDelaySeconds);
+    }
+
+    public void NotifyActivated(ulong frame, double nowSeconds)
+    {
+        ActivatedFrame = frame;
+        ActivatedAtSeconds = nowSeconds;
     }
 
     public bool EnsureDetailBrick(
@@ -237,26 +278,75 @@ public partial class TerrainChunk : Node3D
     {
         RenderDirty = true;
         RenderDirtyBoundsTracker.Include(localBounds);
+        _renderRevision++;
         if (includeCollision)
         {
-            CollisionDirty = true;
-            CollisionDirtyBoundsTracker.Include(localBounds);
-            CollisionReadyAtSeconds = Time.GetTicksMsec() / 1000.0 + collisionDelaySeconds;
+            MarkCollisionDirtyBounds(localBounds, collisionDelaySeconds);
         }
     }
 
-    public void RebuildRenderMesh()
+    public void MarkCollisionDirty(double collisionDelaySeconds)
     {
-        if (_data == null)
+        MarkCollisionDirtyBounds(new Aabb(Vector3.Zero, Vector3.One * ChunkSize), collisionDelaySeconds);
+    }
+
+    public void MarkCollisionDirtyBounds(Aabb localBounds, double collisionDelaySeconds)
+    {
+        CollisionDirty = true;
+        CollisionDirtyBoundsTracker.Include(localBounds);
+        CollisionReadyAtSeconds = Time.GetTicksMsec() / 1000.0 + collisionDelaySeconds;
+    }
+
+    internal TerrainVisualBuildJob? TryCreateVisualBuildJob(TerrainVisualBuildRequest request)
+    {
+        if (_data == null || !RenderDirty)
         {
-            return;
+            return null;
+        }
+
+        bool includeTransientDetail = request.DetailMode == TerrainMeshDetailMode.IncludeTransientDetail;
+        return new TerrainVisualBuildJob(
+            this,
+            ChunkKey,
+            _renderRevision,
+            request.Kind,
+            request.PriorityScore,
+            request.DetailMode,
+            request.Reason,
+            RenderDirtyBounds,
+            _data.CreateMeshSnapshot(includeTransientDetail));
+    }
+
+    public bool TryCommitRenderMesh(VoxelMeshBuildResult meshBuild, int revision)
+    {
+        if (_data == null || !RenderDirty || revision != _renderRevision)
+        {
+            return false;
         }
 
         ulong start = Time.GetTicksUsec();
-        VoxelMeshBuildResult meshBuild = VoxelMesher.BuildMesh(_data);
-        _mesh = meshBuild.Mesh;
+        ArrayMesh mesh = new();
+        if (meshBuild.HasGeometry)
+        {
+            GodotArray arrays = new();
+            arrays.Resize((int)Mesh.ArrayType.Max);
+            arrays[(int)Mesh.ArrayType.Vertex] = meshBuild.Vertices;
+            arrays[(int)Mesh.ArrayType.Normal] = meshBuild.Normals;
+            arrays[(int)Mesh.ArrayType.TexUV] = meshBuild.Uvs;
+            arrays[(int)Mesh.ArrayType.Color] = meshBuild.Colors;
+            if (meshBuild.HasTangents)
+            {
+                arrays[(int)Mesh.ArrayType.Tangent] = meshBuild.Tangents;
+            }
+
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        }
+
+        _mesh = mesh;
         _meshInstance.Mesh = _mesh;
-        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
+        _meshInstance.CastShadow = _mesh.GetSurfaceCount() > 0
+            ? GeometryInstance3D.ShadowCastingSetting.On
+            : GeometryInstance3D.ShadowCastingSetting.Off;
         LastTotalTriangleCount = meshBuild.TotalTriangleCount;
         LastDetailTriangleCount = meshBuild.DetailTriangleCount;
         LastReplacedCoarseCellCount = meshBuild.ReplacedCoarseCellCount;
@@ -268,11 +358,15 @@ public partial class TerrainChunk : Node3D
         {
             ApplySurfaceMaterialOverride();
         }
+
         LastRenderBuildMs = (Time.GetTicksUsec() - start) / 1000.0;
+        LastVisualCommitAtSeconds = Time.GetTicksMsec() / 1000.0;
+        HasCompletedInitialVisualBuild = true;
         RenderDirty = false;
         RenderDirtyBoundsTracker.Clear();
         ClearDetailRegionDirtyFlags();
         UpdateDebugName();
+        return true;
     }
 
     public bool TryRebuildCollision(double nowSeconds)

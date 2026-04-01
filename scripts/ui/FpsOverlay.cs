@@ -314,7 +314,7 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Timing search {snapshot.LastDesiredSearchMs:0.00} ms  priority {snapshot.LastPriorityEvaluationMs:0.00} ms  visibility {snapshot.LastVisibilityHeuristicMs:0.00} ms");
             _detailBuilder.AppendLine(
-                $"Ops load {snapshot.LastChunkLoadCount}/{snapshot.LastChunkLoadMs:0.00} ms  release {snapshot.LastChunkReleaseCount}/{snapshot.LastChunkReleaseMs:0.00} ms  render {snapshot.LastVisualRebuildCount}/{snapshot.LastVisualRebuildMs:0.00} ms");
+                $"Ops load {snapshot.LastChunkLoadCount}/{snapshot.LastChunkLoadMs:0.00} ms  release {snapshot.LastChunkReleaseCount}/{snapshot.LastChunkReleaseMs:0.00} ms  worker {snapshot.LastMeshWorkerBuildCount}/{snapshot.LastMeshWorkerBuildMs:0.00} ms  commit {snapshot.LastVisualRebuildCount}/{snapshot.LastVisualRebuildMs:0.00} ms");
             if (snapshot.TerrainStatsEnabled)
             {
                 _detailBuilder.AppendLine(
@@ -322,7 +322,9 @@ public partial class FpsOverlay : CanvasLayer
                 _detailBuilder.AppendLine(
                     $"Edit detail dirty {snapshot.LastDeformDirtyBoundsVolume:0.0}/{ComputeAverage(snapshot.TotalEditedDirtyBoundsVolume, snapshot.DeformOperationCount):0.0} avg  promotions {snapshot.LastDeformEditDetailPromotionCount}/{ComputeAverage(snapshot.EditDetailPromotionCount, snapshot.DeformOperationCount):0.0} avg");
                 _detailBuilder.AppendLine(
-                    $"Terrain prof mesh {snapshot.MeshRebuildCount}/{snapshot.MeshRebuildMs:0.00} ms  collision {snapshot.CollisionRebuildCount}/{snapshot.CollisionRebuildMs:0.00} ms  load {snapshot.PersistenceLoadCount}/{snapshot.PersistenceLoadMs:0.00} ms  save {snapshot.PersistenceSaveCount}/{snapshot.PersistenceSaveMs:0.00} ms");
+                    $"Terrain prof {snapshot.MeshBackendName}  worker {snapshot.MeshBuildWorkerCount}/{snapshot.MeshBuildWorkerMs:0.00} ms  commit {snapshot.MeshRebuildCount}/{snapshot.MeshRebuildMs:0.00} ms  collision {snapshot.CollisionRebuildCount}/{snapshot.CollisionRebuildMs:0.00} ms");
+                _detailBuilder.AppendLine(
+                    $"Mesh queue build {snapshot.PendingMeshBuildCount}/{snapshot.RunningMeshBuildCount}  commit {snapshot.PendingMeshCommitCount}  deferred {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount}  coalesced {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}");
             }
             else
             {

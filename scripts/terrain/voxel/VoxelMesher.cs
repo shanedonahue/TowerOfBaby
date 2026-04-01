@@ -1,15 +1,44 @@
 using Godot;
+using System;
+using System.Collections.Generic;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
 public readonly record struct VoxelMeshBuildResult(
-    ArrayMesh Mesh,
+    Vector3[] Vertices,
+    Vector3[] Normals,
+    Vector2[] Uvs,
+    Color[] Colors,
+    float[] Tangents,
     int TotalTriangleCount,
     bool UsedDetailBrick,
     bool UsedPersistentDetailEdits,
     int DetailTriangleCount,
     int ReplacedCoarseCellCount,
-    int DetailCellCount);
+    int DetailCellCount)
+{
+    public static VoxelMeshBuildResult Empty =>
+        new(
+            Array.Empty<Vector3>(),
+            Array.Empty<Vector3>(),
+            Array.Empty<Vector2>(),
+            Array.Empty<Color>(),
+            Array.Empty<float>(),
+            TotalTriangleCount: 0,
+            UsedDetailBrick: false,
+            UsedPersistentDetailEdits: false,
+            DetailTriangleCount: 0,
+            ReplacedCoarseCellCount: 0,
+            DetailCellCount: 0);
+
+    public bool HasGeometry => Vertices.Length > 0;
+    public bool HasTangents => Tangents.Length > 0;
+}
+
+public readonly record struct VoxelMeshBuildOptions(bool GenerateTangents)
+{
+    public static VoxelMeshBuildOptions Default => new(false);
+}
 
 public static class VoxelMesher
 {
@@ -25,10 +54,15 @@ public static class VoxelMesher
         new(0, 1, 1)
     };
 
-    public static VoxelMeshBuildResult BuildMesh(VoxelChunkData data)
+    public static VoxelMeshBuildResult BuildMesh(VoxelChunkData data, VoxelMeshBuildOptions options)
     {
-        SurfaceTool surfaceTool = new();
-        surfaceTool.Begin(Mesh.PrimitiveType.Triangles);
+        List<Vector3> vertices = new();
+        List<Vector3> normals = new();
+        List<Vector2> uvs = new();
+        List<Color> colors = new();
+        List<float> tangents = options.GenerateTangents
+            ? new List<float>()
+            : null;
         int vertexCount = 0;
         int replacedCoarseCellCount = 0;
         int detailCellCount = 0;
@@ -47,7 +81,7 @@ public static class VoxelMesher
                         continue;
                     }
 
-                    PolygonizeCube(surfaceTool, data, data.Origin, x, y, z, ref vertexCount);
+                    PolygonizeCube(vertices, normals, uvs, colors, tangents, data, data.Origin, x, y, z, options.GenerateTangents, ref vertexCount);
                 }
             }
         }
@@ -62,7 +96,7 @@ public static class VoxelMesher
                 {
                     for (int x = 0; x < detailCells; x++)
                     {
-                        PolygonizeCube(surfaceTool, detailBrick.Data, data.Origin, x, y, z, ref vertexCount);
+                        PolygonizeCube(vertices, normals, uvs, colors, tangents, detailBrick.Data, data.Origin, x, y, z, options.GenerateTangents, ref vertexCount);
                         detailCellCount++;
                     }
                 }
@@ -72,7 +106,11 @@ public static class VoxelMesher
         if (vertexCount == 0)
         {
             return new VoxelMeshBuildResult(
-                new ArrayMesh(),
+                Array.Empty<Vector3>(),
+                Array.Empty<Vector3>(),
+                Array.Empty<Vector2>(),
+                Array.Empty<Color>(),
+                Array.Empty<float>(),
                 TotalTriangleCount: 0,
                 UsedDetailBrick: detailBrick != null,
                 UsedPersistentDetailEdits: detailBrick?.HasPersistentEdits == true,
@@ -81,11 +119,12 @@ public static class VoxelMesher
                 DetailCellCount: detailCellCount);
         }
 
-        surfaceTool.GenerateNormals();
-        surfaceTool.GenerateTangents();
-        ArrayMesh mesh = surfaceTool.Commit();
         return new VoxelMeshBuildResult(
-            mesh,
+            vertices.ToArray(),
+            normals.ToArray(),
+            uvs.ToArray(),
+            colors.ToArray(),
+            tangents?.ToArray() ?? Array.Empty<float>(),
             TotalTriangleCount: vertexCount / 3,
             UsedDetailBrick: detailBrick != null,
             UsedPersistentDetailEdits: detailBrick?.HasPersistentEdits == true,
@@ -95,17 +134,22 @@ public static class VoxelMesher
     }
 
     private static void PolygonizeCube(
-        SurfaceTool surfaceTool,
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<Color> colors,
+        List<float> tangents,
         VoxelChunkData data,
         Vector3 meshOrigin,
         int x,
         int y,
         int z,
+        bool generateTangents,
         ref int vertexCount)
     {
-        Vector3[] positions = new Vector3[8];
-        float[] densities = new float[8];
-        VoxelMaterialId[] materials = new VoxelMaterialId[8];
+        Span<Vector3> positions = stackalloc Vector3[8];
+        Span<float> densities = stackalloc float[8];
+        Span<VoxelMaterialId> materials = stackalloc VoxelMaterialId[8];
         int cubeIndex = 0;
 
         for (int corner = 0; corner < 8; corner++)
@@ -126,8 +170,8 @@ public static class VoxelMesher
             return;
         }
 
-        Vector3[] edgeVertices = new Vector3[12];
-        Color[] edgeColors = new Color[12];
+        Span<Vector3> edgeVertices = stackalloc Vector3[12];
+        Span<Color> edgeColors = stackalloc Color[12];
         for (int edge = 0; edge < 12; edge++)
         {
             if ((edgeMask & (1 << edge)) == 0)
@@ -153,9 +197,28 @@ public static class VoxelMesher
             int edgeB = MarchingCubesTables.TriangleTable[cubeIndex, index + 1];
             int edgeC = MarchingCubesTables.TriangleTable[cubeIndex, index + 2];
 
-            AddVertex(surfaceTool, edgeVertices[edgeA], edgeColors[edgeA]);
-            AddVertex(surfaceTool, edgeVertices[edgeB], edgeColors[edgeB]);
-            AddVertex(surfaceTool, edgeVertices[edgeC], edgeColors[edgeC]);
+            Vector3 vertexA = edgeVertices[edgeA];
+            Vector3 vertexB = edgeVertices[edgeB];
+            Vector3 vertexC = edgeVertices[edgeC];
+            Vector2 uvA = ComputeUv(vertexA);
+            Vector2 uvB = ComputeUv(vertexB);
+            Vector2 uvC = ComputeUv(vertexC);
+            Vector3 normal = ComputeTriangleNormal(vertexA, vertexB, vertexC);
+
+            if (generateTangents)
+            {
+                ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, normal, out float tx, out float ty, out float tz, out float tw);
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexA, normal, uvA, edgeColors[edgeA], tx, ty, tz, tw);
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexB, normal, uvB, edgeColors[edgeB], tx, ty, tz, tw);
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexC, normal, uvC, edgeColors[edgeC], tx, ty, tz, tw);
+            }
+            else
+            {
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexA, normal, uvA, edgeColors[edgeA]);
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexB, normal, uvB, edgeColors[edgeB]);
+                AddVertex(vertices, normals, uvs, colors, tangents, vertexC, normal, uvC, edgeColors[edgeC]);
+            }
+
             vertexCount += 3;
         }
     }
@@ -173,11 +236,102 @@ public static class VoxelMesher
         return p0.Lerp(p1, t);
     }
 
-    private static void AddVertex(SurfaceTool surfaceTool, Vector3 position, Color color)
+    private static Vector2 ComputeUv(Vector3 position)
     {
-        surfaceTool.SetColor(color);
-        surfaceTool.SetUV(new Vector2(position.X, position.Z) * 0.09f);
-        surfaceTool.AddVertex(position);
+        return new Vector2(position.X, position.Z) * 0.09f;
+    }
+
+    private static Vector3 ComputeTriangleNormal(Vector3 a, Vector3 b, Vector3 c)
+    {
+        Vector3 normal = (b - a).Cross(c - a);
+        if (normal.LengthSquared() <= 0.000001f)
+        {
+            return Vector3.Up;
+        }
+
+        return normal.Normalized();
+    }
+
+    private static void ComputeTriangleTangent(
+        Vector3 vertexA,
+        Vector3 vertexB,
+        Vector3 vertexC,
+        Vector2 uvA,
+        Vector2 uvB,
+        Vector2 uvC,
+        Vector3 normal,
+        out float tangentX,
+        out float tangentY,
+        out float tangentZ,
+        out float tangentW)
+    {
+        Vector3 edge1 = vertexB - vertexA;
+        Vector3 edge2 = vertexC - vertexA;
+        Vector2 deltaUv1 = uvB - uvA;
+        Vector2 deltaUv2 = uvC - uvA;
+        float determinant = (deltaUv1.X * deltaUv2.Y) - (deltaUv2.X * deltaUv1.Y);
+        if (Mathf.Abs(determinant) <= 0.000001f)
+        {
+            Vector3 fallbackAxis = Mathf.Abs(normal.Dot(Vector3.Right)) > 0.95f
+                ? Vector3.Forward
+                : Vector3.Right;
+            Vector3 fallbackTangent = (fallbackAxis - (normal * fallbackAxis.Dot(normal))).Normalized();
+            tangentX = fallbackTangent.X;
+            tangentY = fallbackTangent.Y;
+            tangentZ = fallbackTangent.Z;
+            tangentW = 1.0f;
+            return;
+        }
+
+        float inverseDeterminant = 1.0f / determinant;
+        Vector3 tangent = ((edge1 * deltaUv2.Y) - (edge2 * deltaUv1.Y)) * inverseDeterminant;
+        Vector3 bitangent = ((edge2 * deltaUv1.X) - (edge1 * deltaUv2.X)) * inverseDeterminant;
+        tangent = (tangent - (normal * tangent.Dot(normal))).Normalized();
+        if (tangent.LengthSquared() <= 0.000001f)
+        {
+            tangent = Mathf.Abs(normal.Dot(Vector3.Right)) > 0.95f
+                ? Vector3.Forward
+                : Vector3.Right;
+            tangent = (tangent - (normal * tangent.Dot(normal))).Normalized();
+        }
+
+        tangentX = tangent.X;
+        tangentY = tangent.Y;
+        tangentZ = tangent.Z;
+        tangentW = normal.Cross(tangent).Dot(bitangent) < 0.0f
+            ? -1.0f
+            : 1.0f;
+    }
+
+    private static void AddVertex(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<Color> colors,
+        List<float> tangents,
+        Vector3 position,
+        Vector3 normal,
+        Vector2 uv,
+        Color color,
+        float tangentX = 0.0f,
+        float tangentY = 0.0f,
+        float tangentZ = 0.0f,
+        float tangentW = 1.0f)
+    {
+        vertices.Add(position);
+        normals.Add(normal);
+        uvs.Add(uv);
+        colors.Add(color);
+
+        if (tangents == null)
+        {
+            return;
+        }
+
+        tangents.Add(tangentX);
+        tangents.Add(tangentY);
+        tangents.Add(tangentZ);
+        tangents.Add(tangentW);
     }
 
     private static Color MaterialColor(VoxelMaterialId materialId)

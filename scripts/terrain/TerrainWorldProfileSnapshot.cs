@@ -25,11 +25,19 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastChunkReleaseCount { get; init; }
     public int LastVisualRebuildCount { get; init; }
     public int LastCollisionRebuildCount { get; init; }
+    public int PendingMeshBuildCount { get; init; }
+    public int RunningMeshBuildCount { get; init; }
+    public int PendingMeshCommitCount { get; init; }
     public double LastChunkLoadMs { get; init; }
     public double LastChunkActivationMs { get; init; }
     public double LastChunkReleaseMs { get; init; }
     public double LastVisualRebuildMs { get; init; }
     public double LastCollisionRebuildMs { get; init; }
+    public int LastMeshWorkerBuildCount { get; init; }
+    public double LastMeshWorkerBuildMs { get; init; }
+    public int LastDeferredDetailPromotionCount { get; init; }
+    public int LastCoalescedRebuildRequestCount { get; init; }
+    public string MeshBackendName { get; init; } = string.Empty;
     public double LastDesiredSearchMs { get; init; }
     public double LastPriorityEvaluationMs { get; init; }
     public double LastVisibilityHeuristicMs { get; init; }
@@ -52,12 +60,17 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastDeformEditDetailPromotionCount { get; init; }
     public double LastDeformMs { get; init; }
     public string LastDeformKind { get; init; } = string.Empty;
+    public long MeshBuildWorkerCount { get; init; }
+    public double MeshBuildWorkerMs { get; init; }
+    public double LastMeshBuildWorkerMs { get; init; }
     public long MeshRebuildCount { get; init; }
     public double MeshRebuildMs { get; init; }
     public double LastMeshRebuildMs { get; init; }
     public long CollisionRebuildCount { get; init; }
     public double CollisionRebuildMs { get; init; }
     public double LastCollisionChunkRebuildMs { get; init; }
+    public long DeferredDetailPromotionCount { get; init; }
+    public long CoalescedRebuildRequestCount { get; init; }
     public long PersistenceLoadCount { get; init; }
     public double PersistenceLoadMs { get; init; }
     public double LastPersistenceLoadMs { get; init; }
