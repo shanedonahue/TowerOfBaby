@@ -51,6 +51,12 @@ public sealed class TerrainWorldProfileSnapshot
     public long PressureModeActiveFrameCount { get; init; }
     public int PressureModeActivationCount { get; init; }
     public int LastDeferredDetailPromotionCount { get; init; }
+    public int LastDeferredPromotionReevaluationCount { get; init; }
+    public int LastAvoidedDeferredReevaluationCount { get; init; }
+    public int LastSuppressedDeferredLogRepeatCount { get; init; }
+    public int LastRequestsReactivatedByMeshCompletionCount { get; init; }
+    public int LastRequestsReactivatedByCooldownExpiryCount { get; init; }
+    public int LastRequestsReactivatedByPressureExitCount { get; init; }
     public int LastCoalescedRebuildRequestCount { get; init; }
     public string MeshBackendName { get; init; } = string.Empty;
     public double LastDesiredSearchMs { get; init; }
@@ -89,6 +95,12 @@ public sealed class TerrainWorldProfileSnapshot
     public double CollisionRebuildMs { get; init; }
     public double LastCollisionChunkRebuildMs { get; init; }
     public long DeferredDetailPromotionCount { get; init; }
+    public long DeferredPromotionReevaluationCount { get; init; }
+    public long AvoidedDeferredReevaluationCount { get; init; }
+    public long SuppressedDeferredLogRepeatCount { get; init; }
+    public long RequestsReactivatedByMeshCompletionCount { get; init; }
+    public long RequestsReactivatedByCooldownExpiryCount { get; init; }
+    public long RequestsReactivatedByPressureExitCount { get; init; }
     public long CoalescedRebuildRequestCount { get; init; }
     public long PersistenceLoadCount { get; init; }
     public double PersistenceLoadMs { get; init; }
@@ -130,6 +142,7 @@ public sealed class TerrainWorldProfileSnapshot
     public int TrackedMaxDetailLevel { get; init; }
     public string TrackedDetailSourceSummary { get; init; } = string.Empty;
     public string TrackedDetailSummary { get; init; } = string.Empty;
+    public string TrackedDetailPromotionStateSummary { get; init; } = string.Empty;
     public bool TrackedDetailBrickActive { get; init; }
     public string TrackedDetailBrickSummary { get; init; } = string.Empty;
     public int TrackedDetailBrickTriangleCount { get; init; }

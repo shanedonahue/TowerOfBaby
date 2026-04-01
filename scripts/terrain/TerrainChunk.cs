@@ -5,6 +5,20 @@ using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
 
+public enum TerrainDetailPromotionState
+{
+    Eligible = 0,
+    DeferredPendingMesh = 1,
+    DeferredCooldown = 2,
+    DeferredWarmup = 3,
+    DeferredPressure = 4,
+    DeferredPromotionBudget = 5,
+    DeferredStartupPriority = 6,
+    Queued = 7,
+    Running = 8,
+    Applied = 9
+}
+
 public partial class TerrainChunk : Node3D
 {
     public const string EditedDetailRegionRequestId = "__edited_detail_payload";
@@ -71,6 +85,45 @@ public partial class TerrainChunk : Node3D
     public bool PersistenceDirty { get; private set; }
     public TerrainChunkLoadSource LoadSource { get; private set; } = TerrainChunkLoadSource.ProceduralGeneration;
     public int RenderRevision => _renderRevision;
+    public TerrainDetailPromotionState DetailPromotionState { get; private set; } = TerrainDetailPromotionState.Eligible;
+    public string DetailPromotionDeferReason { get; private set; } = string.Empty;
+    public ulong DetailPromotionNextEligibleFrame { get; private set; }
+    public double DetailPromotionNextEligibleAtSeconds { get; private set; } = double.NegativeInfinity;
+    public bool DetailPromotionReevaluationPending { get; private set; }
+    public bool DetailPromotionFollowupRequested { get; private set; }
+    public string DetailPromotionReactivationReason { get; private set; } = string.Empty;
+    public bool IsDetailPromotionDeferred =>
+        DetailPromotionState is TerrainDetailPromotionState.DeferredPendingMesh or
+            TerrainDetailPromotionState.DeferredCooldown or
+            TerrainDetailPromotionState.DeferredWarmup or
+            TerrainDetailPromotionState.DeferredPressure or
+            TerrainDetailPromotionState.DeferredPromotionBudget or
+            TerrainDetailPromotionState.DeferredStartupPriority;
+    public bool IsDetailPromotionMeshBlocked =>
+        DetailPromotionState is TerrainDetailPromotionState.DeferredPendingMesh or
+            TerrainDetailPromotionState.Queued or
+            TerrainDetailPromotionState.Running;
+    public string DetailPromotionStateSummary
+    {
+        get
+        {
+            string reason = string.IsNullOrWhiteSpace(DetailPromotionDeferReason)
+                ? "-"
+                : DetailPromotionDeferReason;
+            string nextFrame = DetailPromotionNextEligibleFrame > 0
+                ? DetailPromotionNextEligibleFrame.ToString()
+                : "-";
+            string nextTime = DetailPromotionNextEligibleAtSeconds > double.NegativeInfinity
+                ? DetailPromotionNextEligibleAtSeconds.ToString("0.000")
+                : "-";
+            string reactivation = DetailPromotionReevaluationPending &&
+                                  !string.IsNullOrWhiteSpace(DetailPromotionReactivationReason)
+                ? DetailPromotionReactivationReason
+                : "-";
+            return
+                $"{DetailPromotionState} reason {reason} next_f {nextFrame} next_t {nextTime} reactivate {reactivation} followup={DetailPromotionFollowupRequested}";
+        }
+    }
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
@@ -170,6 +223,7 @@ public partial class TerrainChunk : Node3D
         LastUsedDetailBrick = false;
         LastUsedPersistentDetailEdits = false;
         _renderRevision = 0;
+        ResetDetailPromotionTracking();
         RenderDirtyBoundsTracker.Clear();
         CollisionDirtyBoundsTracker.Clear();
         _mesh = null;
@@ -191,6 +245,93 @@ public partial class TerrainChunk : Node3D
     {
         ActivatedFrame = frame;
         ActivatedAtSeconds = nowSeconds;
+    }
+
+    public void DeferDetailPromotion(
+        TerrainDetailPromotionState state,
+        string reason,
+        ulong nextEligibleFrame,
+        double nextEligibleAtSeconds)
+    {
+        DetailPromotionState = state;
+        DetailPromotionDeferReason = reason?.Trim() ?? string.Empty;
+        DetailPromotionNextEligibleFrame = nextEligibleFrame;
+        DetailPromotionNextEligibleAtSeconds = nextEligibleAtSeconds;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+        DetailPromotionFollowupRequested = false;
+    }
+
+    public void ReactivateDetailPromotion(string reason)
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Eligible;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = true;
+        DetailPromotionReactivationReason = reason?.Trim() ?? string.Empty;
+        DetailPromotionFollowupRequested = false;
+    }
+
+    public void SetDetailPromotionEligible()
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Eligible;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+        DetailPromotionFollowupRequested = false;
+    }
+
+    public void MarkDetailPromotionQueued()
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Queued;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+    }
+
+    public void MarkDetailPromotionRunning()
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Running;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+    }
+
+    public void MarkDetailPromotionApplied()
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Applied;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+        DetailPromotionFollowupRequested = false;
+    }
+
+    public void RequestDetailPromotionFollowup()
+    {
+        DetailPromotionFollowupRequested = true;
+    }
+
+    public bool ConsumeDetailPromotionReevaluationPending(out string reason)
+    {
+        if (!DetailPromotionReevaluationPending)
+        {
+            reason = string.Empty;
+            return false;
+        }
+
+        reason = DetailPromotionReactivationReason;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionReactivationReason = string.Empty;
+        return true;
     }
 
     public bool EnsureDetailBrick(
@@ -506,6 +647,17 @@ public partial class TerrainChunk : Node3D
             ? "_edit_hi"
             : (HasDetailBrick ? "_detail_hi" : string.Empty);
         Name = $"Chunk_{ChunkKey.X}_{ChunkKey.Y}_{ChunkKey.Z}{suffix}";
+    }
+
+    private void ResetDetailPromotionTracking()
+    {
+        DetailPromotionState = TerrainDetailPromotionState.Eligible;
+        DetailPromotionDeferReason = string.Empty;
+        DetailPromotionNextEligibleFrame = 0;
+        DetailPromotionNextEligibleAtSeconds = double.NegativeInfinity;
+        DetailPromotionReevaluationPending = false;
+        DetailPromotionFollowupRequested = false;
+        DetailPromotionReactivationReason = string.Empty;
     }
 
     private static int GetDetailScaleForLevel(int detailLevel)

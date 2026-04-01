@@ -12,6 +12,11 @@ public partial class TerrainWorld : Node3D
     private const string PlayerDetailRequestId = "__player_proximity";
     private const string BiomeDetailRequestId = "__biome_policy";
     private static readonly int RecommendedVisualMeshWorkerJobs = Math.Max(1, Math.Min(System.Environment.ProcessorCount / 2, 2));
+    private readonly record struct TerrainDetailPromotionDeferDecision(
+        TerrainDetailPromotionState State,
+        string Reason,
+        ulong NextEligibleFrame,
+        double NextEligibleAtSeconds);
 
     [Export] public PackedScene ChunkScene = null!;
     [Export] public NodePath TrackedCharacterPath = new();
@@ -174,15 +179,28 @@ public partial class TerrainWorld : Node3D
     private int _lastMeshWorkerBuildCount;
     private double _lastMeshWorkerBuildMs;
     private int _lastDeferredDetailPromotionCount;
+    private int _lastDeferredPromotionReevaluationCount;
+    private int _lastAvoidedDeferredReevaluationCount;
+    private int _lastSuppressedDeferredLogRepeatCount;
+    private int _lastRequestsReactivatedByMeshCompletionCount;
+    private int _lastRequestsReactivatedByCooldownExpiryCount;
+    private int _lastRequestsReactivatedByPressureExitCount;
     private int _lastCoalescedRebuildRequestCount;
     private int _lastSkippedLowPriorityBuildCount;
     private int _lastSuppressedDuplicateBuildCount;
     private long _totalDeferredDetailPromotionCount;
+    private long _totalDeferredPromotionReevaluationCount;
+    private long _totalAvoidedDeferredReevaluationCount;
+    private long _totalSuppressedDeferredLogRepeatCount;
+    private long _requestsReactivatedByMeshCompletionCount;
+    private long _requestsReactivatedByCooldownExpiryCount;
+    private long _requestsReactivatedByPressureExitCount;
     private long _totalCoalescedRebuildRequestCount;
     private long _residentReuseHits;
     private bool _initialLoadComplete;
     private bool _useStartupSnapshot;
     private bool _pressureModeActive;
+    private bool _startupPriorityDetailDeferralActive;
     private long _pressureModeActiveFrameCount;
     private int _pressureModeActivationCount;
     private string _lastSelectedChunkSummary = "selected: n/a";
@@ -430,10 +448,10 @@ public partial class TerrainWorld : Node3D
             $"Loads: running {snapshot.RunningLoadCount} | queued {snapshot.PendingLoadCount} | prepared {snapshot.PreparedChunkCount} | activate {snapshot.PendingActivationCount} | last {snapshot.LastChunkLoadCount} ({snapshot.LastChunkLoadMs:0.00} ms)\n" +
             $"Load source: resident {_residentReuseHits} | ram {snapshot.LastRamCacheLoadCount} | startup {snapshot.LastStartupChunkLoadCount} | db {snapshot.LastPersistedChunkLoadCount} | gen {snapshot.LastGeneratedChunkLoadCount}\n" +
             $"Release: {snapshot.LastChunkReleaseCount} ({snapshot.LastChunkReleaseMs:0.00} ms) | worker {snapshot.LastMeshWorkerBuildCount} ({snapshot.LastMeshWorkerBuildMs:0.00} ms) | commit {snapshot.LastVisualRebuildCount} ({snapshot.LastVisualRebuildMs:0.00} ms) | collision {snapshot.LastCollisionRebuildCount} ({snapshot.LastCollisionRebuildMs:0.00} ms)\n" +
-            $"Rebuild queue: backend {snapshot.MeshBackendName} | build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount} q/defer/run | hi/lo depth {snapshot.HighPriorityMeshQueueDepth}/{snapshot.LowPriorityMeshQueueDepth} | commit {snapshot.PendingMeshCommitCount} pending | wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms last/avg/peak | low-pri defer {snapshot.LowPriorityDeferredMeshBuildCount} skip {snapshot.LastSkippedLowPriorityMeshBuildCount}/{snapshot.SkippedLowPriorityMeshBuildCount} | suppress {snapshot.LastSuppressedDuplicateMeshBuildCount}/{snapshot.SuppressedDuplicateMeshBuildCount} | pressure {(snapshot.PressureModeActive ? "on" : "off")} {snapshot.PressureModeActiveFrameCount}/{snapshot.PressureModeActivationCount} | detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount} | coalesce {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}\n" +
+            $"Rebuild queue: backend {snapshot.MeshBackendName} | build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount} q/defer/run | hi/lo depth {snapshot.HighPriorityMeshQueueDepth}/{snapshot.LowPriorityMeshQueueDepth} | commit {snapshot.PendingMeshCommitCount} pending | wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms last/avg/peak | low-pri defer {snapshot.LowPriorityDeferredMeshBuildCount} skip {snapshot.LastSkippedLowPriorityMeshBuildCount}/{snapshot.SkippedLowPriorityMeshBuildCount} | suppress {snapshot.LastSuppressedDuplicateMeshBuildCount}/{snapshot.SuppressedDuplicateMeshBuildCount} | pressure {(snapshot.PressureModeActive ? "on" : "off")} {snapshot.PressureModeActiveFrameCount}/{snapshot.PressureModeActivationCount} | detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount} reeval {snapshot.LastDeferredPromotionReevaluationCount}/{snapshot.DeferredPromotionReevaluationCount} avoid {snapshot.LastAvoidedDeferredReevaluationCount}/{snapshot.AvoidedDeferredReevaluationCount} log-suppress {snapshot.LastSuppressedDeferredLogRepeatCount}/{snapshot.SuppressedDeferredLogRepeatCount} | react mesh/cool/pressure {snapshot.LastRequestsReactivatedByMeshCompletionCount}/{snapshot.LastRequestsReactivatedByCooldownExpiryCount}/{snapshot.LastRequestsReactivatedByPressureExitCount} | coalesce {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}\n" +
             $"Biome: tracked {snapshot.TrackedBiomeId} | {snapshot.TrackedBiomeSummary}\n" +
             $"Structure: tracked {snapshot.TrackedStructureCount} {snapshot.TrackedStructureType} detail {(snapshot.TrackedStructureRequestsHigherDetail ? "high" : "normal")} | {snapshot.TrackedStructureSummary}\n" +
-            $"Detail: tracked {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount} | {snapshot.TrackedDetailSummary}\n" +
+            $"Detail: tracked {snapshot.TrackedDetailRegionCount} max {snapshot.TrackedMaxDetailLevel} dirty {snapshot.TrackedDirtyDetailRegionCount} | {snapshot.TrackedDetailSummary} | promo {snapshot.TrackedDetailPromotionStateSummary}\n" +
             $"Detail hi: tracked {(snapshot.TrackedDetailBrickActive ? "on" : "off")} tris {snapshot.TrackedDetailBrickTriangleCount} replace {snapshot.TrackedDetailBrickReplaceCoarseCellCount} | {snapshot.TrackedDetailBrickSummary}\n" +
             $"Edit hi: tracked {(snapshot.TrackedEditedDetailActive ? "on" : "off")} tris {snapshot.TrackedEditedDetailTriangleCount} replace {snapshot.TrackedEditedReplaceCoarseCellCount} | {snapshot.TrackedEditedDetailSummary}\n" +
             $"Dirty bounds: render {snapshot.TrackedRenderDirtyBoundsSummary} | collision {snapshot.TrackedCollisionDirtyBoundsSummary}\n" +
@@ -461,6 +479,7 @@ public partial class TerrainWorld : Node3D
         int trackedMaxDetailLevel = 0;
         string trackedDetailSourceSummary = "none";
         string trackedDetailSummary = "none";
+        string trackedDetailPromotionStateSummary = "n/a";
         bool trackedDetailBrickActive = false;
         string trackedDetailBrickSummary = "none";
         int trackedDetailBrickTriangleCount = 0;
@@ -478,6 +497,7 @@ public partial class TerrainWorld : Node3D
             trackedMaxDetailLevel = trackedChunk.MaxRequestedDetailLevel;
             trackedDetailSourceSummary = trackedChunk.DetailRegionSourceSummary;
             trackedDetailSummary = trackedChunk.DetailRegionSummary;
+            trackedDetailPromotionStateSummary = trackedChunk.DetailPromotionStateSummary;
             trackedDetailBrickActive = trackedChunk.HasDetailBrick;
             trackedDetailBrickSummary = trackedChunk.DetailBrickSummary;
             trackedDetailBrickTriangleCount = trackedChunk.LastDetailTriangleCount;
@@ -502,6 +522,7 @@ public partial class TerrainWorld : Node3D
             trackedDetailSourceSummary = TerrainDetailRegionSource.Structure.ToString();
             trackedDetailSummary =
                 $"{trackedDetailRegionCount} regions max {trackedMaxDetailLevel} dirty 0 src {trackedDetailSourceSummary} preview {trackedStructure.DominantStructureId}";
+            trackedDetailPromotionStateSummary = "structure_preview";
         }
 
         int activeCount = 0;
@@ -571,6 +592,12 @@ public partial class TerrainWorld : Node3D
             PressureModeActiveFrameCount = _pressureModeActiveFrameCount,
             PressureModeActivationCount = _pressureModeActivationCount,
             LastDeferredDetailPromotionCount = _lastDeferredDetailPromotionCount,
+            LastDeferredPromotionReevaluationCount = _lastDeferredPromotionReevaluationCount,
+            LastAvoidedDeferredReevaluationCount = _lastAvoidedDeferredReevaluationCount,
+            LastSuppressedDeferredLogRepeatCount = _lastSuppressedDeferredLogRepeatCount,
+            LastRequestsReactivatedByMeshCompletionCount = _lastRequestsReactivatedByMeshCompletionCount,
+            LastRequestsReactivatedByCooldownExpiryCount = _lastRequestsReactivatedByCooldownExpiryCount,
+            LastRequestsReactivatedByPressureExitCount = _lastRequestsReactivatedByPressureExitCount,
             LastCoalescedRebuildRequestCount = _lastCoalescedRebuildRequestCount,
             MeshBackendName = _meshBackend?.BackendName ?? "n/a",
             LastDesiredSearchMs = _desiredSetBuilder.LastSearchMs,
@@ -608,7 +635,13 @@ public partial class TerrainWorld : Node3D
             CollisionRebuildCount = terrainInstrumentation.CollisionRebuildCount,
             CollisionRebuildMs = terrainInstrumentation.CollisionRebuildMs,
             LastCollisionChunkRebuildMs = terrainInstrumentation.LastCollisionRebuildMs,
-            DeferredDetailPromotionCount = terrainInstrumentation.DeferredDetailPromotionCount,
+            DeferredDetailPromotionCount = _totalDeferredDetailPromotionCount,
+            DeferredPromotionReevaluationCount = _totalDeferredPromotionReevaluationCount,
+            AvoidedDeferredReevaluationCount = _totalAvoidedDeferredReevaluationCount,
+            SuppressedDeferredLogRepeatCount = _totalSuppressedDeferredLogRepeatCount,
+            RequestsReactivatedByMeshCompletionCount = _requestsReactivatedByMeshCompletionCount,
+            RequestsReactivatedByCooldownExpiryCount = _requestsReactivatedByCooldownExpiryCount,
+            RequestsReactivatedByPressureExitCount = _requestsReactivatedByPressureExitCount,
             CoalescedRebuildRequestCount = terrainInstrumentation.CoalescedRebuildRequestCount,
             PersistenceLoadCount = terrainInstrumentation.PersistenceLoadCount,
             PersistenceLoadMs = terrainInstrumentation.PersistenceLoadMs,
@@ -647,6 +680,7 @@ public partial class TerrainWorld : Node3D
             TrackedMaxDetailLevel = trackedMaxDetailLevel,
             TrackedDetailSourceSummary = trackedDetailSourceSummary,
             TrackedDetailSummary = trackedDetailSummary,
+            TrackedDetailPromotionStateSummary = trackedDetailPromotionStateSummary,
             TrackedDetailBrickActive = trackedDetailBrickActive,
             TrackedDetailBrickSummary = trackedDetailBrickSummary,
             TrackedDetailBrickTriangleCount = trackedDetailBrickTriangleCount,
@@ -1071,6 +1105,10 @@ public partial class TerrainWorld : Node3D
 
             ulong start = Time.GetTicksUsec();
             _cacheManager.ReleaseResidentChunk(release.Key, chunk);
+            if (chunk.IsDetailPromotionDeferred)
+            {
+                _terrainStats.RecordDetailPromotionEligible(release.Key, "chunk_released");
+            }
             _dirtyRenderChunks.Remove(chunk);
             _dirtyCollisionChunks.Remove(chunk);
             _collisionQueueStates.Remove(release.Key);
@@ -1161,6 +1199,10 @@ public partial class TerrainWorld : Node3D
             : Vector3.Zero;
         double nowSeconds = GetNowSeconds();
         ulong currentFrame = Engine.GetProcessFrames();
+        bool pressureModeActive = IsVisualMeshPressureActive();
+        bool startupCoarsePriorityActive = ShouldPrioritizeStartupCoarseShell();
+        ReactivateDeferredPressureDetailPromotionsOnExit(pressureModeActive);
+        ReactivateDeferredStartupPriorityDetailPromotionsOnExit(startupCoarsePriorityActive);
         int remainingPromotions = Mathf.Max(MaxDetailPromotionsPerFrame, 0);
         List<TerrainChunk> chunks = new(_residentChunks.Values);
         foreach (TerrainChunk chunk in chunks)
@@ -1171,21 +1213,63 @@ public partial class TerrainWorld : Node3D
             }
 
             bool requestChanged = RefreshChunkDetailRequests(chunk, trackedPosition, hasTrackedCharacter);
+            HandleAutomaticDetailRequestChange(chunk, requestChanged);
             bool hasDetailAggregate = TryBuildDetailAggregate(chunk, out Aabb localBounds, out int detailLevel);
             bool automaticPromotionCandidate = hasDetailAggregate && IsAutomaticDetailPromotionCandidate(chunk, requestChanged);
-            if (automaticPromotionCandidate &&
-                ShouldDeferAutomaticDetailPromotion(chunk, currentFrame, nowSeconds, out string deferReason))
+            if (!automaticPromotionCandidate)
             {
-                RecordDeferredDetailPromotion(chunk, deferReason);
+                if (!chunk.IsDetailPromotionMeshBlocked)
+                {
+                    if (chunk.IsDetailPromotionDeferred)
+                    {
+                        ClearDeferredDetailPromotionState(chunk, "request_cleared");
+                    }
+
+                    if (chunk.DetailPromotionState != TerrainDetailPromotionState.Applied)
+                    {
+                        chunk.MarkDetailPromotionApplied();
+                    }
+                }
+
                 continue;
             }
 
-            if (automaticPromotionCandidate && remainingPromotions <= 0)
+            if (TrySkipBlockedDetailPromotionEvaluation(
+                    chunk,
+                    currentFrame,
+                    nowSeconds,
+                    pressureModeActive,
+                    startupCoarsePriorityActive))
             {
-                RecordDeferredDetailPromotion(chunk, "promotion_budget");
                 continue;
             }
 
+            if (chunk.ConsumeDetailPromotionReevaluationPending(out _))
+            {
+                RecordDeferredPromotionReevaluation();
+            }
+
+            if (ShouldDeferAutomaticDetailPromotion(
+                    chunk,
+                    currentFrame,
+                    nowSeconds,
+                    pressureModeActive,
+                    startupCoarsePriorityActive,
+                    out TerrainDetailPromotionDeferDecision deferDecision))
+            {
+                ApplyDeferredDetailPromotion(chunk, deferDecision);
+                continue;
+            }
+
+            if (remainingPromotions <= 0)
+            {
+                ApplyDeferredDetailPromotion(
+                    chunk,
+                    BuildPromotionBudgetDeferDecision(chunk, currentFrame, pressureModeActive));
+                continue;
+            }
+
+            chunk.SetDetailPromotionEligible();
             TerrainDetailReconcileResult detailResult = ReconcileChunkDetailBrick(chunk, hasDetailAggregate, localBounds, detailLevel);
             if (detailResult.Changed)
             {
@@ -1195,6 +1279,7 @@ public partial class TerrainWorld : Node3D
                 }
 
                 chunk.MarkDirty(includeCollision: false, CollisionRebuildDelaySeconds);
+                chunk.MarkDetailPromotionQueued();
                 QueueChunkForRebuild(
                     chunk,
                     TerrainVisualBuildRequestKind.DetailPromotion,
@@ -1207,7 +1292,14 @@ public partial class TerrainWorld : Node3D
             {
                 chunk.ClearDetailRegionDirtyFlags();
             }
+
+            if (!chunk.RenderDirty)
+            {
+                chunk.MarkDetailPromotionApplied();
+            }
         }
+
+        _startupPriorityDetailDeferralActive = startupCoarsePriorityActive;
     }
 
     private void ClearAutomaticResidentDetailRequests()
@@ -1237,6 +1329,7 @@ public partial class TerrainWorld : Node3D
             if (detailResult.Changed)
             {
                 chunk.MarkDirty(includeCollision: false, CollisionRebuildDelaySeconds);
+                chunk.MarkDetailPromotionQueued();
                 QueueChunkForRebuild(chunk, TerrainVisualBuildRequestKind.DetailPromotion, TerrainMeshDetailMode.IncludeTransientDetail, "detail_disable");
                 continue;
             }
@@ -1245,7 +1338,254 @@ public partial class TerrainWorld : Node3D
             {
                 chunk.ClearDetailRegionDirtyFlags();
             }
+
+            if (!chunk.RenderDirty)
+            {
+                if (chunk.IsDetailPromotionDeferred)
+                {
+                    ClearDeferredDetailPromotionState(chunk, "detail_requests_disabled");
+                }
+
+                chunk.MarkDetailPromotionApplied();
+            }
         }
+    }
+
+    private void HandleAutomaticDetailRequestChange(TerrainChunk chunk, bool requestChanged)
+    {
+        if (!requestChanged)
+        {
+            return;
+        }
+
+        switch (chunk.DetailPromotionState)
+        {
+            case TerrainDetailPromotionState.DeferredPendingMesh:
+            case TerrainDetailPromotionState.Queued:
+            case TerrainDetailPromotionState.Running:
+                chunk.RequestDetailPromotionFollowup();
+                break;
+
+            case TerrainDetailPromotionState.DeferredCooldown:
+            case TerrainDetailPromotionState.DeferredWarmup:
+            case TerrainDetailPromotionState.DeferredPressure:
+            case TerrainDetailPromotionState.DeferredPromotionBudget:
+            case TerrainDetailPromotionState.DeferredStartupPriority:
+                ReactivateDetailPromotion(chunk, "request_changed");
+                break;
+
+            case TerrainDetailPromotionState.Applied:
+                chunk.SetDetailPromotionEligible();
+                break;
+        }
+    }
+
+    private void ReactivateDeferredPressureDetailPromotionsOnExit(bool pressureModeActive)
+    {
+        if (!_pressureModeActive || pressureModeActive)
+        {
+            return;
+        }
+
+        foreach (TerrainChunk chunk in _residentChunks.Values)
+        {
+            if (!IsInstanceValid(chunk) || chunk.DetailPromotionState != TerrainDetailPromotionState.DeferredPressure)
+            {
+                continue;
+            }
+
+            ReactivateDetailPromotion(chunk, "pressure_exit", reactivatedByPressureExit: true);
+        }
+    }
+
+    private void ReactivateDeferredStartupPriorityDetailPromotionsOnExit(bool startupCoarsePriorityActive)
+    {
+        if (!_startupPriorityDetailDeferralActive || startupCoarsePriorityActive)
+        {
+            return;
+        }
+
+        foreach (TerrainChunk chunk in _residentChunks.Values)
+        {
+            if (!IsInstanceValid(chunk) || chunk.DetailPromotionState != TerrainDetailPromotionState.DeferredStartupPriority)
+            {
+                continue;
+            }
+
+            ReactivateDetailPromotion(chunk, "startup_priority_clear");
+        }
+    }
+
+    private bool TrySkipBlockedDetailPromotionEvaluation(
+        TerrainChunk chunk,
+        ulong currentFrame,
+        double nowSeconds,
+        bool pressureModeActive,
+        bool startupCoarsePriorityActive)
+    {
+        switch (chunk.DetailPromotionState)
+        {
+            case TerrainDetailPromotionState.Queued:
+            case TerrainDetailPromotionState.Running:
+                RecordAvoidedDeferredReevaluation();
+                return true;
+
+            case TerrainDetailPromotionState.DeferredPendingMesh:
+                if (_meshBuildScheduler.HasPendingWork(chunk.ChunkKey) || chunk.RenderDirty || !chunk.HasCompletedInitialVisualBuild)
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(chunk, "mesh_completion", reactivatedByMeshCompletion: true);
+                return false;
+
+            case TerrainDetailPromotionState.DeferredWarmup:
+                bool frameReady = chunk.DetailPromotionNextEligibleFrame == 0 ||
+                                  currentFrame >= chunk.DetailPromotionNextEligibleFrame;
+                bool timeReady = chunk.DetailPromotionNextEligibleAtSeconds <= double.NegativeInfinity ||
+                                 nowSeconds >= chunk.DetailPromotionNextEligibleAtSeconds;
+                if (!frameReady || !timeReady)
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(chunk, "warmup_expiry");
+                return false;
+
+            case TerrainDetailPromotionState.DeferredCooldown:
+                if (chunk.DetailPromotionNextEligibleAtSeconds > double.NegativeInfinity &&
+                    nowSeconds < chunk.DetailPromotionNextEligibleAtSeconds)
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(chunk, "cooldown_expiry", reactivatedByCooldownExpiry: true);
+                return false;
+
+            case TerrainDetailPromotionState.DeferredPressure:
+                if (pressureModeActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(
+                    chunk,
+                    pressureModeActive ? "pressure_priority_upgrade" : "pressure_exit",
+                    reactivatedByPressureExit: !pressureModeActive);
+                return false;
+
+            case TerrainDetailPromotionState.DeferredStartupPriority:
+                if (startupCoarsePriorityActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(chunk, "startup_priority_clear");
+                return false;
+
+            case TerrainDetailPromotionState.DeferredPromotionBudget:
+                if (chunk.DetailPromotionNextEligibleFrame > 0 &&
+                    currentFrame < chunk.DetailPromotionNextEligibleFrame)
+                {
+                    RecordAvoidedDeferredReevaluation();
+                    return true;
+                }
+
+                ReactivateDetailPromotion(chunk, "promotion_budget_expiry");
+                return false;
+        }
+
+        return false;
+    }
+
+    private void ApplyDeferredDetailPromotion(TerrainChunk chunk, TerrainDetailPromotionDeferDecision decision)
+    {
+        chunk.DeferDetailPromotion(
+            decision.State,
+            decision.Reason,
+            decision.NextEligibleFrame,
+            decision.NextEligibleAtSeconds);
+        RecordDeferredDetailPromotion(chunk, decision.Reason);
+    }
+
+    private void ClearDeferredDetailPromotionState(TerrainChunk chunk, string trigger)
+    {
+        if (chunk.IsDetailPromotionDeferred)
+        {
+            _terrainStats.RecordDetailPromotionEligible(chunk.ChunkKey, trigger);
+        }
+
+        chunk.SetDetailPromotionEligible();
+    }
+
+    private void ReactivateDetailPromotion(
+        TerrainChunk chunk,
+        string trigger,
+        bool reactivatedByMeshCompletion = false,
+        bool reactivatedByCooldownExpiry = false,
+        bool reactivatedByPressureExit = false)
+    {
+        if (!IsInstanceValid(chunk))
+        {
+            return;
+        }
+
+        if (chunk.IsDetailPromotionDeferred)
+        {
+            _terrainStats.RecordDetailPromotionEligible(chunk.ChunkKey, trigger);
+        }
+
+        chunk.ReactivateDetailPromotion(trigger);
+        if (reactivatedByMeshCompletion)
+        {
+            RecordRequestReactivatedByMeshCompletion();
+        }
+
+        if (reactivatedByCooldownExpiry)
+        {
+            RecordRequestReactivatedByCooldownExpiry();
+        }
+
+        if (reactivatedByPressureExit)
+        {
+            RecordRequestReactivatedByPressureExit();
+        }
+    }
+
+    private bool ShouldPrioritizeAutomaticDetailDuringPressure(TerrainChunk chunk)
+    {
+        if (chunk == null)
+        {
+            return false;
+        }
+
+        if (HasStickyDetailDemand(chunk) || chunk.DetailPromotionReevaluationPending || chunk.DetailPromotionFollowupRequested)
+        {
+            return true;
+        }
+
+        float veryNearRange = Mathf.Max(PlayerDetailRequestRadius * 0.45f, _settings.ChunkSize * 0.75f);
+        return ComputeTrackedChunkDistance(chunk) <= veryNearRange;
+    }
+
+    private TerrainDetailPromotionDeferDecision BuildPromotionBudgetDeferDecision(
+        TerrainChunk chunk,
+        ulong currentFrame,
+        bool pressureModeActive)
+    {
+        ulong backoffFrames = ShouldPrioritizeAutomaticDetailDuringPressure(chunk)
+            ? 1UL
+            : (pressureModeActive ? 4UL : 2UL);
+        return new TerrainDetailPromotionDeferDecision(
+            TerrainDetailPromotionState.DeferredPromotionBudget,
+            "promotion_budget",
+            currentFrame + backoffFrames,
+            double.NegativeInfinity);
     }
 
     private bool RefreshChunkDetailRequests(TerrainChunk chunk, Vector3 trackedPosition, bool hasTrackedCharacter)
@@ -1579,8 +1919,10 @@ public partial class TerrainWorld : Node3D
             }
 
             _terrainStats.LogChunkRemeshBegin(job.Key, "mesh_commit", job.DirtyBounds);
-            if (!residentChunk.TryCommitRenderMesh(completedJob.ExecutionResult.MeshResult, job.Revision))
+            bool committed = residentChunk.TryCommitRenderMesh(completedJob.ExecutionResult.MeshResult, job.Revision);
+            if (!committed)
             {
+                HandleDetailPromotionAfterVisualCommit(residentChunk, job, committed: false);
                 if (!residentChunk.RenderDirty)
                 {
                     _dirtyRenderChunks.Remove(residentChunk);
@@ -1588,6 +1930,8 @@ public partial class TerrainWorld : Node3D
 
                 continue;
             }
+
+            HandleDetailPromotionAfterVisualCommit(residentChunk, job, committed: true);
 
             _lastVisualRebuildCount++;
             _lastVisualRebuildMs += residentChunk.LastRenderBuildMs;
@@ -1634,6 +1978,64 @@ public partial class TerrainWorld : Node3D
                 {
                     RecordCoalescedRebuildRequest(residentChunk.ChunkKey, "collision", "collision_bootstrap");
                 }
+            }
+        }
+    }
+
+    private void HandleDetailPromotionAfterVisualCommit(
+        TerrainChunk chunk,
+        TerrainVisualBuildJob job,
+        bool committed)
+    {
+        if (!IsInstanceValid(chunk))
+        {
+            return;
+        }
+
+        if (!committed)
+        {
+            if (chunk.DetailPromotionState == TerrainDetailPromotionState.Running)
+            {
+                if (_meshBuildScheduler.HasPendingWork(chunk.ChunkKey) || chunk.RenderDirty)
+                {
+                    chunk.MarkDetailPromotionQueued();
+                }
+                else if (chunk.DetailPromotionFollowupRequested)
+                {
+                    ReactivateDetailPromotion(chunk, "mesh_completion", reactivatedByMeshCompletion: true);
+                }
+                else
+                {
+                    chunk.SetDetailPromotionEligible();
+                }
+            }
+
+            if (chunk.DetailPromotionState == TerrainDetailPromotionState.DeferredPendingMesh &&
+                !_meshBuildScheduler.HasPendingWork(chunk.ChunkKey) &&
+                !chunk.RenderDirty)
+            {
+                ReactivateDetailPromotion(chunk, "mesh_completion", reactivatedByMeshCompletion: true);
+            }
+
+            return;
+        }
+
+        if (chunk.DetailPromotionState == TerrainDetailPromotionState.DeferredPendingMesh ||
+            chunk.DetailPromotionFollowupRequested)
+        {
+            ReactivateDetailPromotion(chunk, "mesh_completion", reactivatedByMeshCompletion: true);
+            return;
+        }
+
+        if (chunk.DetailPromotionState is TerrainDetailPromotionState.Queued or TerrainDetailPromotionState.Running)
+        {
+            if (job.DetailMode == TerrainMeshDetailMode.IncludeTransientDetail)
+            {
+                chunk.MarkDetailPromotionApplied();
+            }
+            else
+            {
+                ReactivateDetailPromotion(chunk, "mesh_completion", reactivatedByMeshCompletion: true);
             }
         }
     }
@@ -1702,6 +2104,12 @@ public partial class TerrainWorld : Node3D
         TerrainVisualBuildJob? preparedJob = residentChunk.TryCreateVisualBuildJob(request);
         if (preparedJob.HasValue)
         {
+            if (residentChunk.DetailPromotionState == TerrainDetailPromotionState.Queued &&
+                request.DetailMode == TerrainMeshDetailMode.IncludeTransientDetail)
+            {
+                residentChunk.MarkDetailPromotionRunning();
+            }
+
             _terrainStats.LogChunkRemeshBegin(request.Key, "mesh_worker", preparedJob.Value.DirtyBounds);
         }
 
@@ -1977,51 +2385,47 @@ public partial class TerrainWorld : Node3D
         TerrainChunk chunk,
         ulong currentFrame,
         double nowSeconds,
-        out string reason)
+        bool pressureModeActive,
+        bool startupCoarsePriorityActive,
+        out TerrainDetailPromotionDeferDecision decision)
     {
+        ulong warmupFrame = 0;
         if (chunk.ActivatedFrame != ulong.MaxValue && currentFrame == chunk.ActivatedFrame)
         {
-            reason = "activated_this_frame";
-            return true;
+            warmupFrame = currentFrame + 1;
         }
-
-        if (chunk.ActivatedFrame != ulong.MaxValue &&
-            currentFrame > chunk.ActivatedFrame &&
-            (currentFrame - chunk.ActivatedFrame) <= (ulong)Mathf.Max(ChunkDetailWarmupFrames, 0))
+        else if (chunk.ActivatedFrame != ulong.MaxValue &&
+                 currentFrame > chunk.ActivatedFrame &&
+                 (currentFrame - chunk.ActivatedFrame) <= (ulong)Mathf.Max(ChunkDetailWarmupFrames, 0))
         {
-            reason = "activation_warmup_frames";
-            return true;
+            warmupFrame = chunk.ActivatedFrame + (ulong)Mathf.Max(ChunkDetailWarmupFrames, 0) + 1UL;
         }
 
+        double warmupTime = double.NegativeInfinity;
         if (ChunkDetailWarmupSeconds > 0.0f &&
             chunk.ActivatedAtSeconds > double.NegativeInfinity &&
             (nowSeconds - chunk.ActivatedAtSeconds) < ChunkDetailWarmupSeconds)
         {
-            reason = "activation_warmup_seconds";
+            warmupTime = chunk.ActivatedAtSeconds + ChunkDetailWarmupSeconds;
+        }
+
+        if (warmupFrame > 0 || warmupTime > double.NegativeInfinity)
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredWarmup,
+                "activation_warmup",
+                warmupFrame,
+                warmupTime);
             return true;
         }
 
-        if (ShouldPrioritizeStartupCoarseShell() && !HasStickyDetailDemand(chunk))
+        if (_meshBuildScheduler.HasPendingWork(chunk.ChunkKey) || chunk.RenderDirty || !chunk.HasCompletedInitialVisualBuild)
         {
-            reason = "startup_coarse_priority";
-            return true;
-        }
-
-        if (IsVisualMeshPressureActive() && !HasStickyDetailDemand(chunk))
-        {
-            reason = "pressure_mode";
-            return true;
-        }
-
-        if (_meshBuildScheduler.HasPendingWork(chunk.ChunkKey) || chunk.RenderDirty)
-        {
-            reason = "pending_mesh_build";
-            return true;
-        }
-
-        if (!chunk.HasCompletedInitialVisualBuild)
-        {
-            reason = "initial_coarse_not_ready";
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPendingMesh,
+                "pending_mesh_build",
+                0,
+                double.NegativeInfinity);
             return true;
         }
 
@@ -2029,11 +2433,35 @@ public partial class TerrainWorld : Node3D
             chunk.LastVisualCommitAtSeconds > double.NegativeInfinity &&
             (nowSeconds - chunk.LastVisualCommitAtSeconds) < DetailRequestCooldownSeconds)
         {
-            reason = "detail_request_cooldown";
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredCooldown,
+                "cooldown",
+                0,
+                chunk.LastVisualCommitAtSeconds + DetailRequestCooldownSeconds);
             return true;
         }
 
-        reason = string.Empty;
+        if (startupCoarsePriorityActive && !HasStickyDetailDemand(chunk))
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredStartupPriority,
+                "startup_coarse_priority",
+                0,
+                double.NegativeInfinity);
+            return true;
+        }
+
+        if (pressureModeActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPressure,
+                "pressure_mode",
+                0,
+                double.NegativeInfinity);
+            return true;
+        }
+
+        decision = default;
         return false;
     }
 
@@ -2046,7 +2474,41 @@ public partial class TerrainWorld : Node3D
     {
         _lastDeferredDetailPromotionCount++;
         _totalDeferredDetailPromotionCount++;
-        _terrainStats.RecordDeferredDetailPromotion(chunk.ChunkKey, reason);
+        if (_terrainStats.RecordDeferredDetailPromotion(chunk.ChunkKey, reason))
+        {
+            _lastSuppressedDeferredLogRepeatCount++;
+            _totalSuppressedDeferredLogRepeatCount++;
+        }
+    }
+
+    private void RecordDeferredPromotionReevaluation()
+    {
+        _lastDeferredPromotionReevaluationCount++;
+        _totalDeferredPromotionReevaluationCount++;
+    }
+
+    private void RecordAvoidedDeferredReevaluation()
+    {
+        _lastAvoidedDeferredReevaluationCount++;
+        _totalAvoidedDeferredReevaluationCount++;
+    }
+
+    private void RecordRequestReactivatedByMeshCompletion()
+    {
+        _lastRequestsReactivatedByMeshCompletionCount++;
+        _requestsReactivatedByMeshCompletionCount++;
+    }
+
+    private void RecordRequestReactivatedByCooldownExpiry()
+    {
+        _lastRequestsReactivatedByCooldownExpiryCount++;
+        _requestsReactivatedByCooldownExpiryCount++;
+    }
+
+    private void RecordRequestReactivatedByPressureExit()
+    {
+        _lastRequestsReactivatedByPressureExitCount++;
+        _requestsReactivatedByPressureExitCount++;
     }
 
     private void RecordCoalescedRebuildRequest(Vector3I key, string queue, string reason)
@@ -2676,6 +3138,12 @@ public partial class TerrainWorld : Node3D
         _lastMeshWorkerBuildCount = 0;
         _lastMeshWorkerBuildMs = 0.0;
         _lastDeferredDetailPromotionCount = 0;
+        _lastDeferredPromotionReevaluationCount = 0;
+        _lastAvoidedDeferredReevaluationCount = 0;
+        _lastSuppressedDeferredLogRepeatCount = 0;
+        _lastRequestsReactivatedByMeshCompletionCount = 0;
+        _lastRequestsReactivatedByCooldownExpiryCount = 0;
+        _lastRequestsReactivatedByPressureExitCount = 0;
         _lastCoalescedRebuildRequestCount = 0;
         _lastSkippedLowPriorityBuildCount = 0;
         _lastSuppressedDuplicateBuildCount = 0;

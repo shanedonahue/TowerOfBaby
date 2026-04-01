@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -86,8 +87,10 @@ internal sealed class TerrainStatsTracker
 {
     private const string Prefix = "[TerrainStats]";
     private const string LogRelativePath = "user://profiling/terrain_stats_latest.log";
+    private const int DeferredDetailSuppressionFlushThreshold = 32;
     private readonly object _logLock = new();
     private readonly StreamWriter _logWriter;
+    private readonly Dictionary<Vector3I, DeferredDetailLogState> _deferredDetailLogStates = new();
 
     public TerrainStatsTracker(bool enabled)
     {
@@ -451,15 +454,50 @@ internal sealed class TerrainStatsTracker
             $"{Prefix} event=chunk_dirty_bounds chunk={FormatVector(key)} source={source} requested={FormatAabb(requestedBounds)} merged={FormatDirtyBounds(mergedBounds)} merged_volume={mergedBounds.Volume:0.000} merged_coverage={mergedBounds.Coverage:0.000} detail_promoted={detailPromoted}");
     }
 
-    public void RecordDeferredDetailPromotion(Vector3I key, string reason)
+    public bool RecordDeferredDetailPromotion(Vector3I key, string reason)
     {
         if (!Enabled)
+        {
+            return false;
+        }
+
+        _deferredDetailPromotionCount++;
+        string sanitizedReason = Sanitize(reason);
+        if (_deferredDetailLogStates.TryGetValue(key, out DeferredDetailLogState state))
+        {
+            if (string.Equals(state.Reason, sanitizedReason, StringComparison.Ordinal))
+            {
+                state.SuppressedRepeats++;
+                if (state.SuppressedRepeats >= DeferredDetailSuppressionFlushThreshold)
+                {
+                    FlushSuppressedDeferredDetailPromotion(key, state);
+                }
+
+                return true;
+            }
+
+            FlushSuppressedDeferredDetailPromotion(key, state);
+            state.Reason = sanitizedReason;
+            WriteLine($"{Prefix} event=detail_promotion_deferred chunk={FormatVector(key)} reason={sanitizedReason}");
+            return false;
+        }
+
+        _deferredDetailLogStates[key] = new DeferredDetailLogState(sanitizedReason);
+        WriteLine($"{Prefix} event=detail_promotion_deferred chunk={FormatVector(key)} reason={sanitizedReason}");
+        return false;
+    }
+
+    public void RecordDetailPromotionEligible(Vector3I key, string trigger)
+    {
+        if (!Enabled || !_deferredDetailLogStates.TryGetValue(key, out DeferredDetailLogState state))
         {
             return;
         }
 
-        _deferredDetailPromotionCount++;
-        WriteLine($"{Prefix} event=detail_promotion_deferred chunk={FormatVector(key)} reason={Sanitize(reason)}");
+        FlushSuppressedDeferredDetailPromotion(key, state);
+        WriteLine(
+            $"{Prefix} event=detail_promotion_eligible chunk={FormatVector(key)} previous_reason={state.Reason} trigger={Sanitize(trigger)}");
+        _deferredDetailLogStates.Remove(key);
     }
 
     public void RecordCoalescedRebuildRequest(Vector3I key, string queue, string reason)
@@ -500,6 +538,11 @@ internal sealed class TerrainStatsTracker
             return;
         }
 
+        foreach ((Vector3I key, DeferredDetailLogState state) in _deferredDetailLogStates)
+        {
+            FlushSuppressedDeferredDetailPromotion(key, state);
+        }
+
         lock (_logLock)
         {
             _logWriter.WriteLine(
@@ -519,6 +562,18 @@ internal sealed class TerrainStatsTracker
         {
             _logWriter.WriteLine(line);
         }
+    }
+
+    private void FlushSuppressedDeferredDetailPromotion(Vector3I key, DeferredDetailLogState state)
+    {
+        if (!Enabled || state == null || state.SuppressedRepeats <= 0)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=detail_promotion_deferred_suppressed chunk={FormatVector(key)} reason={state.Reason} repeats={state.SuppressedRepeats}");
+        state.SuppressedRepeats = 0;
     }
 
     private static string FormatVector(Vector3 value)
@@ -551,5 +606,16 @@ internal sealed class TerrainStatsTracker
     private static string Sanitize(string value)
     {
         return (value ?? string.Empty).Replace('"', '\'');
+    }
+
+    private sealed class DeferredDetailLogState
+    {
+        public DeferredDetailLogState(string reason)
+        {
+            Reason = reason;
+        }
+
+        public string Reason { get; set; }
+        public int SuppressedRepeats { get; set; }
     }
 }

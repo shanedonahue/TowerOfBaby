@@ -43,6 +43,12 @@ public partial class PerformanceRunLogger : Node
     private int _sampleReleaseCount;
     private double _sampleReleaseMs;
     private int _sampleDeferredDetailPromotions;
+    private int _sampleDeferredPromotionReevaluations;
+    private int _sampleAvoidedDeferredReevaluations;
+    private int _sampleSuppressedDeferredLogRepeats;
+    private int _sampleRequestsReactivatedByMeshCompletion;
+    private int _sampleRequestsReactivatedByCooldownExpiry;
+    private int _sampleRequestsReactivatedByPressureExit;
     private int _sampleCoalescedRebuildRequests;
     private double _sampleSearchMs;
     private double _samplePriorityEvalMs;
@@ -107,6 +113,12 @@ public partial class PerformanceRunLogger : Node
             _sampleCollisionCount += snapshot.LastCollisionRebuildCount;
             _sampleCollisionMs += snapshot.LastCollisionRebuildMs;
             _sampleDeferredDetailPromotions += snapshot.LastDeferredDetailPromotionCount;
+            _sampleDeferredPromotionReevaluations += snapshot.LastDeferredPromotionReevaluationCount;
+            _sampleAvoidedDeferredReevaluations += snapshot.LastAvoidedDeferredReevaluationCount;
+            _sampleSuppressedDeferredLogRepeats += snapshot.LastSuppressedDeferredLogRepeatCount;
+            _sampleRequestsReactivatedByMeshCompletion += snapshot.LastRequestsReactivatedByMeshCompletionCount;
+            _sampleRequestsReactivatedByCooldownExpiry += snapshot.LastRequestsReactivatedByCooldownExpiryCount;
+            _sampleRequestsReactivatedByPressureExit += snapshot.LastRequestsReactivatedByPressureExitCount;
             _sampleCoalescedRebuildRequests += snapshot.LastCoalescedRebuildRequestCount;
             _sampleSearchMs += snapshot.LastDesiredSearchMs;
             _samplePriorityEvalMs += snapshot.LastPriorityEvaluationMs;
@@ -178,6 +190,12 @@ public partial class PerformanceRunLogger : Node
             _sampleCollisionCount,
             _sampleCollisionMs,
             _sampleDeferredDetailPromotions,
+            _sampleDeferredPromotionReevaluations,
+            _sampleAvoidedDeferredReevaluations,
+            _sampleSuppressedDeferredLogRepeats,
+            _sampleRequestsReactivatedByMeshCompletion,
+            _sampleRequestsReactivatedByCooldownExpiry,
+            _sampleRequestsReactivatedByPressureExit,
             _sampleCoalescedRebuildRequests,
             _sampleSearchMs,
             _samplePriorityEvalMs,
@@ -212,6 +230,12 @@ public partial class PerformanceRunLogger : Node
         _sampleCollisionCount = 0;
         _sampleCollisionMs = 0.0;
         _sampleDeferredDetailPromotions = 0;
+        _sampleDeferredPromotionReevaluations = 0;
+        _sampleAvoidedDeferredReevaluations = 0;
+        _sampleSuppressedDeferredLogRepeats = 0;
+        _sampleRequestsReactivatedByMeshCompletion = 0;
+        _sampleRequestsReactivatedByCooldownExpiry = 0;
+        _sampleRequestsReactivatedByPressureExit = 0;
         _sampleCoalescedRebuildRequests = 0;
         _sampleSearchMs = 0.0;
         _samplePriorityEvalMs = 0.0;
@@ -291,6 +315,12 @@ public partial class PerformanceRunLogger : Node
             int totalMeshWorkerBuilds = 0;
             long totalLowPriorityDeferredMeshBuilds = 0;
             int totalDeferredDetailPromotions = 0;
+            int totalDeferredPromotionReevaluations = 0;
+            int totalAvoidedDeferredReevaluations = 0;
+            int totalSuppressedDeferredLogRepeats = 0;
+            int totalRequestsReactivatedByMeshCompletion = 0;
+            int totalRequestsReactivatedByCooldownExpiry = 0;
+            int totalRequestsReactivatedByPressureExit = 0;
             int totalCoalescedRebuildRequests = 0;
             long totalSkippedLowPriorityMeshBuilds = 0;
             long totalSuppressedDuplicateMeshBuilds = 0;
@@ -388,6 +418,12 @@ public partial class PerformanceRunLogger : Node
                 totalCollisionMs += sample.CollisionMs;
                 totalLowPriorityDeferredMeshBuilds += sample.LowPriorityDeferredMeshBuildsDelta;
                 totalDeferredDetailPromotions += sample.DeferredDetailPromotions;
+                totalDeferredPromotionReevaluations += sample.DeferredPromotionReevaluations;
+                totalAvoidedDeferredReevaluations += sample.AvoidedDeferredReevaluations;
+                totalSuppressedDeferredLogRepeats += sample.SuppressedDeferredLogRepeats;
+                totalRequestsReactivatedByMeshCompletion += sample.RequestsReactivatedByMeshCompletion;
+                totalRequestsReactivatedByCooldownExpiry += sample.RequestsReactivatedByCooldownExpiry;
+                totalRequestsReactivatedByPressureExit += sample.RequestsReactivatedByPressureExit;
                 totalCoalescedRebuildRequests += sample.CoalescedRebuildRequests;
                 totalSkippedLowPriorityMeshBuilds = Math.Max(totalSkippedLowPriorityMeshBuilds, sample.Snapshot.SkippedLowPriorityMeshBuildCount);
                 totalSuppressedDuplicateMeshBuilds = Math.Max(totalSuppressedDuplicateMeshBuilds, sample.Snapshot.SuppressedDuplicateMeshBuildCount);
@@ -439,6 +475,12 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"SkippedLowPriorityMeshBuilds: {totalSkippedLowPriorityMeshBuilds}");
             builder.AppendLine($"SuppressedDuplicateMeshBuilds: {totalSuppressedDuplicateMeshBuilds}");
             builder.AppendLine($"DeferredDetailPromotions: {totalDeferredDetailPromotions}");
+            builder.AppendLine($"DeferredPromotionReevaluations: {totalDeferredPromotionReevaluations}");
+            builder.AppendLine($"AvoidedDeferredReevaluations: {totalAvoidedDeferredReevaluations}");
+            builder.AppendLine($"SuppressedDeferredLogRepeats: {totalSuppressedDeferredLogRepeats}");
+            builder.AppendLine($"RequestsReactivatedByMeshCompletion: {totalRequestsReactivatedByMeshCompletion}");
+            builder.AppendLine($"RequestsReactivatedByCooldownExpiry: {totalRequestsReactivatedByCooldownExpiry}");
+            builder.AppendLine($"RequestsReactivatedByPressureExit: {totalRequestsReactivatedByPressureExit}");
             builder.AppendLine($"CoalescedRebuildRequests: {totalCoalescedRebuildRequests}");
             builder.AppendLine($"PressureModeActiveFrames: {peakPressureModeActiveFrames}");
             builder.AppendLine($"PressureModeActivations: {peakPressureModeActivationCount}");
@@ -475,7 +517,7 @@ public partial class PerformanceRunLogger : Node
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,coalesced_rebuild_requests,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
@@ -483,7 +525,7 @@ public partial class PerformanceRunLogger : Node
             if (snapshot == null)
             {
                 builder.AppendLine(
-                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
+                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
                     $",{LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)}");
                 continue;
             }
@@ -546,6 +588,12 @@ public partial class PerformanceRunLogger : Node
                 snapshot.PeakMeshWorkerQueueWaitMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.LowPriorityDeferredMeshBuildsDelta.ToString(CultureInfo.InvariantCulture),
                 sample.DeferredDetailPromotions.ToString(CultureInfo.InvariantCulture),
+                sample.DeferredPromotionReevaluations.ToString(CultureInfo.InvariantCulture),
+                sample.AvoidedDeferredReevaluations.ToString(CultureInfo.InvariantCulture),
+                sample.SuppressedDeferredLogRepeats.ToString(CultureInfo.InvariantCulture),
+                sample.RequestsReactivatedByMeshCompletion.ToString(CultureInfo.InvariantCulture),
+                sample.RequestsReactivatedByCooldownExpiry.ToString(CultureInfo.InvariantCulture),
+                sample.RequestsReactivatedByPressureExit.ToString(CultureInfo.InvariantCulture),
                 sample.CoalescedRebuildRequests.ToString(CultureInfo.InvariantCulture),
                 snapshot.MeshBackendName,
                 sample.SearchMs.ToString("0.00", CultureInfo.InvariantCulture),
@@ -664,6 +712,12 @@ public partial class PerformanceRunLogger : Node
         int CollisionCount,
         double CollisionMs,
         int DeferredDetailPromotions,
+        int DeferredPromotionReevaluations,
+        int AvoidedDeferredReevaluations,
+        int SuppressedDeferredLogRepeats,
+        int RequestsReactivatedByMeshCompletion,
+        int RequestsReactivatedByCooldownExpiry,
+        int RequestsReactivatedByPressureExit,
         int CoalescedRebuildRequests,
         double SearchMs,
         double PriorityEvalMs,
