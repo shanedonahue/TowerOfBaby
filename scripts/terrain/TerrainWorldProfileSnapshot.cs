@@ -26,6 +26,7 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastVisualRebuildCount { get; init; }
     public int LastCollisionRebuildCount { get; init; }
     public int PendingMeshBuildCount { get; init; }
+    public int DeferredMeshBuildCount { get; init; }
     public int RunningMeshBuildCount { get; init; }
     public int PendingMeshCommitCount { get; init; }
     public double LastChunkLoadMs { get; init; }
@@ -35,6 +36,11 @@ public sealed class TerrainWorldProfileSnapshot
     public double LastCollisionRebuildMs { get; init; }
     public int LastMeshWorkerBuildCount { get; init; }
     public double LastMeshWorkerBuildMs { get; init; }
+    public double MeshWorkerQueueWaitMs { get; init; }
+    public double LastMeshWorkerQueueWaitMs { get; init; }
+    public double AverageMeshWorkerQueueWaitMs { get; init; }
+    public double PeakMeshWorkerQueueWaitMs { get; init; }
+    public long LowPriorityDeferredMeshBuildCount { get; init; }
     public int LastDeferredDetailPromotionCount { get; init; }
     public int LastCoalescedRebuildRequestCount { get; init; }
     public string MeshBackendName { get; init; } = string.Empty;

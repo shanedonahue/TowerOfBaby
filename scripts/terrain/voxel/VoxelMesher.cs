@@ -1,6 +1,8 @@
 using Godot;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
@@ -42,6 +44,8 @@ public readonly record struct VoxelMeshBuildOptions(bool GenerateTangents)
 
 public static class VoxelMesher
 {
+    [ThreadStatic] private static MeshBuildScratch _threadScratch;
+
     private static readonly Vector3I[] CornerOffsets =
     {
         new(0, 0, 0),
@@ -56,14 +60,13 @@ public static class VoxelMesher
 
     public static VoxelMeshBuildResult BuildMesh(VoxelChunkData data, VoxelMeshBuildOptions options)
     {
-        List<Vector3> vertices = new();
-        List<Vector3> normals = new();
-        List<Vector2> uvs = new();
-        List<Color> colors = new();
-        List<float> tangents = options.GenerateTangents
-            ? new List<float>()
-            : null;
-        int vertexCount = 0;
+        MeshBuildScratch scratch = GetScratch();
+        scratch.Reset();
+        if (options.GenerateTangents)
+        {
+            scratch.EnableTangents();
+        }
+
         int replacedCoarseCellCount = 0;
         int detailCellCount = 0;
         VoxelDetailBrickData detailBrick = data.DetailBrick;
@@ -81,12 +84,12 @@ public static class VoxelMesher
                         continue;
                     }
 
-                    PolygonizeCube(vertices, normals, uvs, colors, tangents, data, data.Origin, x, y, z, options.GenerateTangents, ref vertexCount);
+                    PolygonizeCube(scratch, data, data.Origin, x, y, z, options.GenerateTangents);
                 }
             }
         }
 
-        int detailVertexStart = vertexCount;
+        int detailVertexStart = scratch.VertexCount;
         if (detailBrick != null)
         {
             int detailCells = detailBrick.Data.CellsPerAxis;
@@ -96,13 +99,14 @@ public static class VoxelMesher
                 {
                     for (int x = 0; x < detailCells; x++)
                     {
-                        PolygonizeCube(vertices, normals, uvs, colors, tangents, detailBrick.Data, data.Origin, x, y, z, options.GenerateTangents, ref vertexCount);
+                        PolygonizeCube(scratch, detailBrick.Data, data.Origin, x, y, z, options.GenerateTangents);
                         detailCellCount++;
                     }
                 }
             }
         }
 
+        int vertexCount = scratch.VertexCount;
         if (vertexCount == 0)
         {
             return new VoxelMeshBuildResult(
@@ -120,11 +124,13 @@ public static class VoxelMesher
         }
 
         return new VoxelMeshBuildResult(
-            vertices.ToArray(),
-            normals.ToArray(),
-            uvs.ToArray(),
-            colors.ToArray(),
-            tangents?.ToArray() ?? Array.Empty<float>(),
+            scratch.Vertices.ToArray(),
+            scratch.Normals.ToArray(),
+            scratch.Uvs.ToArray(),
+            scratch.Colors.ToArray(),
+            options.GenerateTangents
+                ? scratch.Tangents.ToArray()
+                : Array.Empty<float>(),
             TotalTriangleCount: vertexCount / 3,
             UsedDetailBrick: detailBrick != null,
             UsedPersistentDetailEdits: detailBrick?.HasPersistentEdits == true,
@@ -134,18 +140,13 @@ public static class VoxelMesher
     }
 
     private static void PolygonizeCube(
-        List<Vector3> vertices,
-        List<Vector3> normals,
-        List<Vector2> uvs,
-        List<Color> colors,
-        List<float> tangents,
+        MeshBuildScratch scratch,
         VoxelChunkData data,
         Vector3 meshOrigin,
         int x,
         int y,
         int z,
-        bool generateTangents,
-        ref int vertexCount)
+        bool generateTangents)
     {
         Span<Vector3> positions = stackalloc Vector3[8];
         Span<float> densities = stackalloc float[8];
@@ -171,6 +172,7 @@ public static class VoxelMesher
         }
 
         Span<Vector3> edgeVertices = stackalloc Vector3[12];
+        Span<Vector3> edgeNormals = stackalloc Vector3[12];
         Span<Color> edgeColors = stackalloc Color[12];
         for (int edge = 0; edge < 12; edge++)
         {
@@ -184,6 +186,8 @@ public static class VoxelMesher
             float t;
             edgeVertices[edge] = Interpolate(positions[a], positions[b], densities[a], densities[b], data.IsoLevel, out t);
             edgeColors[edge] = MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t);
+            Vector3 worldPosition = edgeVertices[edge] + meshOrigin;
+            edgeNormals[edge] = data.SampleSurfaceNormal(worldPosition);
         }
 
         for (int index = 0; index < 16; index += 3)
@@ -203,23 +207,30 @@ public static class VoxelMesher
             Vector2 uvA = ComputeUv(vertexA);
             Vector2 uvB = ComputeUv(vertexB);
             Vector2 uvC = ComputeUv(vertexC);
-            Vector3 normal = ComputeTriangleNormal(vertexA, vertexB, vertexC);
+            Vector3 faceNormal = ComputeTriangleNormal(vertexA, vertexB, vertexC);
+            Vector3 normalA = AlignSmoothNormal(edgeNormals[edgeA], faceNormal);
+            Vector3 normalB = AlignSmoothNormal(edgeNormals[edgeB], faceNormal);
+            Vector3 normalC = AlignSmoothNormal(edgeNormals[edgeC], faceNormal);
 
             if (generateTangents)
             {
-                ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, normal, out float tx, out float ty, out float tz, out float tw);
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexA, normal, uvA, edgeColors[edgeA], tx, ty, tz, tw);
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexB, normal, uvB, edgeColors[edgeB], tx, ty, tz, tw);
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexC, normal, uvC, edgeColors[edgeC], tx, ty, tz, tw);
+                Vector3 tangentNormal = (normalA + normalB + normalC).Normalized();
+                if (tangentNormal.LengthSquared() <= 0.000001f)
+                {
+                    tangentNormal = faceNormal;
+                }
+
+                ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, tangentNormal, out float tx, out float ty, out float tz, out float tw);
+                AddVertex(scratch, vertexA, normalA, uvA, edgeColors[edgeA], tx, ty, tz, tw);
+                AddVertex(scratch, vertexB, normalB, uvB, edgeColors[edgeB], tx, ty, tz, tw);
+                AddVertex(scratch, vertexC, normalC, uvC, edgeColors[edgeC], tx, ty, tz, tw);
             }
             else
             {
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexA, normal, uvA, edgeColors[edgeA]);
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexB, normal, uvB, edgeColors[edgeB]);
-                AddVertex(vertices, normals, uvs, colors, tangents, vertexC, normal, uvC, edgeColors[edgeC]);
+                AddVertex(scratch, vertexA, normalA, uvA, edgeColors[edgeA]);
+                AddVertex(scratch, vertexB, normalB, uvB, edgeColors[edgeB]);
+                AddVertex(scratch, vertexC, normalC, uvC, edgeColors[edgeC]);
             }
-
-            vertexCount += 3;
         }
     }
 
@@ -239,6 +250,18 @@ public static class VoxelMesher
     private static Vector2 ComputeUv(Vector3 position)
     {
         return new Vector2(position.X, position.Z) * 0.09f;
+    }
+
+    private static Vector3 AlignSmoothNormal(Vector3 smoothNormal, Vector3 faceNormal)
+    {
+        if (smoothNormal.LengthSquared() <= 0.000001f)
+        {
+            return faceNormal;
+        }
+
+        return smoothNormal.Dot(faceNormal) < 0.0f
+            ? -smoothNormal
+            : smoothNormal;
     }
 
     private static Vector3 ComputeTriangleNormal(Vector3 a, Vector3 b, Vector3 c)
@@ -304,11 +327,7 @@ public static class VoxelMesher
     }
 
     private static void AddVertex(
-        List<Vector3> vertices,
-        List<Vector3> normals,
-        List<Vector2> uvs,
-        List<Color> colors,
-        List<float> tangents,
+        MeshBuildScratch scratch,
         Vector3 position,
         Vector3 normal,
         Vector2 uv,
@@ -318,20 +337,20 @@ public static class VoxelMesher
         float tangentZ = 0.0f,
         float tangentW = 1.0f)
     {
-        vertices.Add(position);
-        normals.Add(normal);
-        uvs.Add(uv);
-        colors.Add(color);
+        scratch.Vertices.Add(position);
+        scratch.Normals.Add(normal);
+        scratch.Uvs.Add(uv);
+        scratch.Colors.Add(color);
 
-        if (tangents == null)
+        if (!scratch.IncludeTangents)
         {
             return;
         }
 
-        tangents.Add(tangentX);
-        tangents.Add(tangentY);
-        tangents.Add(tangentZ);
-        tangents.Add(tangentW);
+        scratch.Tangents.Add(tangentX);
+        scratch.Tangents.Add(tangentY);
+        scratch.Tangents.Add(tangentZ);
+        scratch.Tangents.Add(tangentW);
     }
 
     private static Color MaterialColor(VoxelMaterialId materialId)
@@ -345,5 +364,96 @@ public static class VoxelMesher
             VoxelMaterialId.Scorched => new Color(0.11f, 0.1f, 0.1f),
             _ => new Color(0.39f, 0.3f, 0.18f)
         };
+    }
+
+    private static MeshBuildScratch GetScratch()
+    {
+        return _threadScratch ??= new MeshBuildScratch();
+    }
+
+    private sealed class MeshBuildScratch
+    {
+        public readonly PooledBuffer<Vector3> Vertices = new();
+        public readonly PooledBuffer<Vector3> Normals = new();
+        public readonly PooledBuffer<Vector2> Uvs = new();
+        public readonly PooledBuffer<Color> Colors = new();
+        public readonly PooledBuffer<float> Tangents = new();
+
+        public bool IncludeTangents { get; private set; }
+        public int VertexCount => Vertices.Count;
+
+        public void Reset()
+        {
+            Vertices.Reset();
+            Normals.Reset();
+            Uvs.Reset();
+            Colors.Reset();
+            Tangents.Reset();
+            IncludeTangents = false;
+        }
+
+        public void EnableTangents()
+        {
+            IncludeTangents = true;
+        }
+    }
+
+    private sealed class PooledBuffer<T>
+    {
+        private T[] _buffer = Array.Empty<T>();
+
+        public int Count { get; private set; }
+
+        public void Reset()
+        {
+            Count = 0;
+        }
+
+        public void Add(T value)
+        {
+            EnsureCapacity(Count + 1);
+            _buffer[Count++] = value;
+        }
+
+        public T[] ToArray()
+        {
+            if (Count == 0)
+            {
+                return Array.Empty<T>();
+            }
+
+            T[] result = new T[Count];
+            Array.Copy(_buffer, result, Count);
+            return result;
+        }
+
+        private void EnsureCapacity(int capacity)
+        {
+            if (_buffer.Length >= capacity)
+            {
+                return;
+            }
+
+            int nextCapacity = _buffer.Length == 0
+                ? 256
+                : _buffer.Length * 2;
+            while (nextCapacity < capacity)
+            {
+                nextCapacity *= 2;
+            }
+
+            T[] nextBuffer = ArrayPool<T>.Shared.Rent(nextCapacity);
+            if (Count > 0)
+            {
+                Array.Copy(_buffer, nextBuffer, Count);
+            }
+
+            if (_buffer.Length > 0)
+            {
+                ArrayPool<T>.Shared.Return(_buffer, RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+            }
+
+            _buffer = nextBuffer;
+        }
     }
 }

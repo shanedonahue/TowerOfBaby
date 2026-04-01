@@ -236,7 +236,13 @@ internal sealed class TerrainStatsTracker
     public void RecordMeshBuildWorker(
         Vector3I key,
         double ms,
+        double queueWaitMs,
+        int queueDepth,
         TerrainChunkDirtyBoundsSnapshot dirtyBounds,
+        long managedHeapDeltaBytes,
+        int gen0Collections,
+        int gen1Collections,
+        int gen2Collections,
         bool usedDetailBrick,
         bool usedPersistentEdits,
         int detailTriangleCount,
@@ -252,7 +258,7 @@ internal sealed class TerrainStatsTracker
         _meshBuildWorkerMs += ms;
         _lastMeshBuildWorkerMs = ms;
         WriteLine(
-            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker ms={ms:0.000} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+            $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker ms={ms:0.000} queue_wait_ms={queueWaitMs:0.000} queue_depth={queueDepth} heap_delta_kib={managedHeapDeltaBytes / 1024.0:0.0} gc0={gen0Collections} gc1={gen1Collections} gc2={gen2Collections} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
     }
 
     public void RecordMeshCommit(

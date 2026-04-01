@@ -324,7 +324,7 @@ public partial class FpsOverlay : CanvasLayer
                 _detailBuilder.AppendLine(
                     $"Terrain prof {snapshot.MeshBackendName}  worker {snapshot.MeshBuildWorkerCount}/{snapshot.MeshBuildWorkerMs:0.00} ms  commit {snapshot.MeshRebuildCount}/{snapshot.MeshRebuildMs:0.00} ms  collision {snapshot.CollisionRebuildCount}/{snapshot.CollisionRebuildMs:0.00} ms");
                 _detailBuilder.AppendLine(
-                    $"Mesh queue build {snapshot.PendingMeshBuildCount}/{snapshot.RunningMeshBuildCount}  commit {snapshot.PendingMeshCommitCount}  deferred {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount}  coalesced {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}");
+                    $"Mesh queue build {snapshot.PendingMeshBuildCount}/{snapshot.DeferredMeshBuildCount}/{snapshot.RunningMeshBuildCount}  wait {snapshot.LastMeshWorkerQueueWaitMs:0.00}/{snapshot.AverageMeshWorkerQueueWaitMs:0.00}/{snapshot.PeakMeshWorkerQueueWaitMs:0.00} ms  low-pri {snapshot.LowPriorityDeferredMeshBuildCount}  commit {snapshot.PendingMeshCommitCount}  detail defer {snapshot.LastDeferredDetailPromotionCount}/{snapshot.DeferredDetailPromotionCount}  coalesced {snapshot.LastCoalescedRebuildRequestCount}/{snapshot.CoalescedRebuildRequestCount}");
             }
             else
             {
