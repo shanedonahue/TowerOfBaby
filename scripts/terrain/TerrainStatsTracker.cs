@@ -296,6 +296,8 @@ internal sealed class TerrainStatsTracker
 
         WriteLine(
             $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_worker kind={buildKind} queue_class={queueClass} ms={ms:0.000} queue_wait_ms={queueWaitMs:0.000} queue_depth={queueDepth} heap_delta_kib={managedHeapDeltaBytes / 1024.0:0.0} gc0={gen0Collections} gc1={gen1Collections} gc2={gen2Collections} gc_triggered={(gen0Collections + gen1Collections + gen2Collections) > 0} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+        WriteLine(
+            $"{Prefix} event=mesh_queue_wait chunk={FormatVector(key)} kind={buildKind} queue_class={queueClass} queue_wait_ms={queueWaitMs:0.000} queue_depth={queueDepth}");
     }
 
     public void RecordMeshCommit(
@@ -318,6 +320,44 @@ internal sealed class TerrainStatsTracker
         _lastMeshRebuildMs = ms;
         WriteLine(
             $"{Prefix} event=chunk_remesh_end chunk={FormatVector(key)} phase=mesh_commit ms={ms:0.000} dirty_volume={dirtyBounds.Volume:0.000} dirty_coverage={dirtyBounds.Coverage:0.000} dirty_bounds={FormatDirtyBounds(dirtyBounds)} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+    }
+
+    public void RecordMeshResultDecision(
+        Vector3I key,
+        string decision,
+        TerrainVisualBuildRequestKind buildKind,
+        TerrainVisualBuildQueueClass queueClass,
+        int totalTriangleCount,
+        int detailTriangleCount,
+        int replacedCoarseCellCount,
+        bool usedDetailBrick,
+        bool usedPersistentEdits)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=mesh_result_resolution chunk={FormatVector(key)} decision={Sanitize(decision)} kind={buildKind} queue_class={queueClass} detail_hi={usedDetailBrick} edit_hi={usedPersistentEdits} detail_tris={detailTriangleCount} replace_cells={replacedCoarseCellCount} total_tris={totalTriangleCount}");
+    }
+
+    public void RecordMeshSchedulingDecision(
+        Vector3I key,
+        string category,
+        TerrainVisualBuildRequestKind buildKind,
+        TerrainVisualBuildQueueClass queueClass,
+        TerrainChunkLoadSource loadSource,
+        int totalTriangleCount,
+        string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=mesh_schedule_decision chunk={FormatVector(key)} category={Sanitize(category)} kind={buildKind} queue_class={queueClass} source={loadSource} total_tris={totalTriangleCount} reason=\"{Sanitize(reason)}\"");
     }
 
     public void RecordCollisionRebuild(
@@ -452,6 +492,50 @@ internal sealed class TerrainStatsTracker
 
         WriteLine(
             $"{Prefix} event=chunk_dirty_bounds chunk={FormatVector(key)} source={source} requested={FormatAabb(requestedBounds)} merged={FormatDirtyBounds(mergedBounds)} merged_volume={mergedBounds.Volume:0.000} merged_coverage={mergedBounds.Coverage:0.000} detail_promoted={detailPromoted}");
+    }
+
+    public void RecordCoverageHold(Vector3I key, string reason, bool replacementCoveragePending)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=coverage_hold chunk={FormatVector(key)} replacement_pending={replacementCoveragePending} reason=\"{Sanitize(reason)}\"");
+    }
+
+    public void RecordCoverageReleaseBlocked(Vector3I key, string reason)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=coverage_release_blocked chunk={FormatVector(key)} reason=\"{Sanitize(reason)}\"");
+    }
+
+    public void RecordStaleMeshCleared(Vector3I key, string reason, int previousTriangleCount)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=stale_mesh_cleared chunk={FormatVector(key)} previous_total_tris={previousTriangleCount} reason=\"{Sanitize(reason)}\"");
+    }
+
+    public void RecordEmptyVerticalChunkSkipped(Vector3I key, string reason, float surfaceMaxY, float chunkMinY)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        WriteLine(
+            $"{Prefix} event=desired_vertical_skip chunk={FormatVector(key)} reason=\"{Sanitize(reason)}\" surface_max_y={surfaceMaxY:0.00} chunk_min_y={chunkMinY:0.00}");
     }
 
     public bool RecordDeferredDetailPromotion(Vector3I key, string reason)

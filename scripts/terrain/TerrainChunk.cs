@@ -91,6 +91,7 @@ public partial class TerrainChunk : Node3D
     public bool HeldForCoverageSafety { get; private set; }
     public bool ReplacementCoveragePending { get; private set; }
     public bool SafeToRelease { get; private set; }
+    public string CoverageHoldReason { get; private set; } = string.Empty;
     public double CollisionReadyAtSeconds { get; private set; }
     public double LastRenderBuildMs { get; private set; }
     public double LastCollisionBuildMs { get; private set; }
@@ -159,6 +160,13 @@ public partial class TerrainChunk : Node3D
                 return TerrainChunkCoverageState.CoarsePending;
             }
 
+            if (!HasSurface)
+            {
+                return SafeToRelease
+                    ? TerrainChunkCoverageState.SafeToRelease
+                    : TerrainChunkCoverageState.CoarsePending;
+            }
+
             if (RenderDirty && (HasDetailBrick || DetailRegionCount > 0))
             {
                 return TerrainChunkCoverageState.DetailPending;
@@ -175,7 +183,7 @@ public partial class TerrainChunk : Node3D
         }
     }
     public string CoverageStateSummary =>
-        $"{CoverageState} hold={HeldForCoverageSafety} replacement={ReplacementCoveragePending} safe={SafeToRelease}";
+        $"{CoverageState} hold={HeldForCoverageSafety} replacement={ReplacementCoveragePending} safe={SafeToRelease} reason=\"{CoverageHoldReason}\"";
 
     private MeshInstance3D _meshInstance = null!;
     private CollisionShape3D _collision = null!;
@@ -292,6 +300,7 @@ public partial class TerrainChunk : Node3D
         HeldForCoverageSafety = false;
         ReplacementCoveragePending = false;
         SafeToRelease = false;
+        CoverageHoldReason = string.Empty;
         ResetDetailPromotionTracking();
         RenderDirtyBoundsTracker.Clear();
         CollisionDirtyBoundsTracker.Clear();
@@ -310,11 +319,16 @@ public partial class TerrainChunk : Node3D
         UpdateDebugName();
     }
 
-    public void SetCoverageRetention(bool heldForCoverageSafety, bool replacementCoveragePending, bool safeToRelease)
+    public void SetCoverageRetention(
+        bool heldForCoverageSafety,
+        bool replacementCoveragePending,
+        bool safeToRelease,
+        string holdReason)
     {
         if (HeldForCoverageSafety == heldForCoverageSafety &&
             ReplacementCoveragePending == replacementCoveragePending &&
-            SafeToRelease == safeToRelease)
+            SafeToRelease == safeToRelease &&
+            string.Equals(CoverageHoldReason, holdReason ?? string.Empty, StringComparison.Ordinal))
         {
             return;
         }
@@ -322,6 +336,7 @@ public partial class TerrainChunk : Node3D
         HeldForCoverageSafety = heldForCoverageSafety;
         ReplacementCoveragePending = replacementCoveragePending;
         SafeToRelease = safeToRelease;
+        CoverageHoldReason = holdReason?.Trim() ?? string.Empty;
         UpdateDebugName();
     }
 

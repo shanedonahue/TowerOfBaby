@@ -11,7 +11,23 @@ public partial class TerrainWorld : Node3D
     [Signal] public delegate void InitialLoadCompletedEventHandler();
     private const string PlayerDetailRequestId = "__player_proximity";
     private const string BiomeDetailRequestId = "__biome_policy";
+    private const int MinimumCoverageTriangleCount = 6;
+    private const int TinyFragmentTriangleCount = 6;
+    private const ulong LowValueDetailBackoffFrames = 12;
+    private const ulong PressureThrottledDetailBackoffFrames = 8;
     private static readonly int RecommendedVisualMeshWorkerJobs = Math.Max(1, Math.Min(System.Environment.ProcessorCount / 2, 2));
+    private static readonly Vector2[] ColumnSurfaceSamplePattern =
+    {
+        new(0.15f, 0.15f),
+        new(0.50f, 0.15f),
+        new(0.85f, 0.15f),
+        new(0.15f, 0.50f),
+        new(0.50f, 0.50f),
+        new(0.85f, 0.50f),
+        new(0.15f, 0.85f),
+        new(0.50f, 0.85f),
+        new(0.85f, 0.85f)
+    };
     private readonly record struct TerrainDetailPromotionDeferDecision(
         TerrainDetailPromotionState State,
         string Reason,
@@ -153,6 +169,7 @@ public partial class TerrainWorld : Node3D
     private readonly HashSet<TerrainChunk> _dirtyRenderChunks = new();
     private readonly HashSet<TerrainChunk> _dirtyCollisionChunks = new();
     private readonly Dictionary<Vector2I, float> _columnRetention = new();
+    private readonly Dictionary<Vector2I, float> _columnSurfaceMaxYCache = new();
     private readonly HashSet<Vector3I> _desiredChunks = new();
     private readonly HashSet<Vector3I> _inFlightKeys = new();
     private readonly TerrainDesiredSetBuilder _desiredSetBuilder = new();
@@ -165,6 +182,9 @@ public partial class TerrainWorld : Node3D
     private readonly PriorityQueue<TerrainVisualBuildCompletedJob, TerrainWorkPriority> _pendingMeshCommits = new();
     private readonly PriorityQueue<CollisionQueueEntry, TerrainWorkPriority> _collisionQueue = new();
     private readonly Dictionary<Vector3I, CollisionQueueState> _collisionQueueStates = new();
+    private readonly Dictionary<Vector3I, string> _coverageHoldLogReasons = new();
+    private readonly Dictionary<Vector3I, string> _coverageReleaseBlockLogReasons = new();
+    private readonly HashSet<Vector3I> _loggedEmptyVerticalChunkSkips = new();
 
     private VoxelFieldGenerator _prioritySampler = null!;
     private TerrainBiomeClassifier _biomeClassifier = null!;
@@ -1163,7 +1183,14 @@ public partial class TerrainWorld : Node3D
         {
             for (int y = 0; y < VerticalChunkCount; y++)
             {
-                _desiredChunks.Add(new Vector3I(column.X, y, column.Y));
+                Vector3I key = new(column.X, y, column.Y);
+                if (ShouldSkipDesiredVerticalChunk(key, out float surfaceMaxY))
+                {
+                    RecordEmptyVerticalChunkSkip(key, surfaceMaxY);
+                    continue;
+                }
+
+                _desiredChunks.Add(key);
             }
         }
     }
@@ -1187,34 +1214,51 @@ public partial class TerrainWorld : Node3D
             TerrainChunk chunk = entry.Value;
             bool desired = _desiredChunks.Contains(entry.Key);
             bool replacementCoveragePending = false;
-            bool heldForCoverageSafety = !desired && ShouldHoldChunkForCoverage(chunk, anyPendingDesiredCoverage, out replacementCoveragePending);
-            bool visible = desired || heldForCoverageSafety;
+            string coverageHoldReason = string.Empty;
+            bool heldForCoverageSafety = !desired &&
+                ShouldHoldChunkForCoverage(
+                    chunk,
+                    anyPendingDesiredCoverage,
+                    out replacementCoveragePending,
+                    out coverageHoldReason);
+            bool visible = chunk.HasSurface && (desired || heldForCoverageSafety);
             chunk.SetCoverageRetention(
                 heldForCoverageSafety,
                 replacementCoveragePending,
-                safeToRelease: !desired && !heldForCoverageSafety);
+                safeToRelease: !desired && !heldForCoverageSafety,
+                coverageHoldReason);
             chunk.Visible = visible;
             chunk.ProcessMode = visible ? ProcessModeEnum.Inherit : ProcessModeEnum.Disabled;
             if (heldForCoverageSafety)
             {
                 _lastChunksHeldForCoverageSafetyCount++;
                 _totalChunksHeldForCoverageSafetyCount++;
+                LogCoverageHold(chunk, coverageHoldReason, replacementCoveragePending);
                 if (replacementCoveragePending)
                 {
                     _lastReplacementCoverageWaitCount++;
                     _totalReplacementCoverageWaitCount++;
                 }
             }
+            else
+            {
+                _coverageHoldLogReasons.Remove(chunk.ChunkKey);
+                _coverageReleaseBlockLogReasons.Remove(chunk.ChunkKey);
+            }
         }
     }
 
-    private bool ShouldHoldChunkForCoverage(TerrainChunk chunk, bool anyPendingDesiredCoverage, out bool replacementCoveragePending)
+    private bool ShouldHoldChunkForCoverage(
+        TerrainChunk chunk,
+        bool anyPendingDesiredCoverage,
+        out bool replacementCoveragePending,
+        out string coverageHoldReason)
     {
         replacementCoveragePending = false;
+        coverageHoldReason = string.Empty;
         if (chunk == null ||
             !IsInstanceValid(chunk) ||
-            !chunk.HasCompletedInitialVisualBuild ||
-            !chunk.HasSurface)
+            !CanChunkProvideCoverage(chunk))
         {
             return false;
         }
@@ -1224,17 +1268,24 @@ public partial class TerrainWorld : Node3D
             return false;
         }
 
-        replacementCoveragePending = HasPendingDesiredCoverageNeighbors(chunk.ChunkKey);
+        replacementCoveragePending = HasPendingDesiredCoverageNeighbors(chunk.ChunkKey, out coverageHoldReason);
         if (replacementCoveragePending)
         {
             return true;
         }
 
-        return anyPendingDesiredCoverage && IsChunkNearCoverageFrontier(chunk.ChunkKey);
+        if (anyPendingDesiredCoverage && IsChunkInNearPlayerCoverageSafetyZone(chunk.ChunkKey))
+        {
+            coverageHoldReason = "near_player_pending";
+            return true;
+        }
+
+        return false;
     }
 
-    private bool HasPendingDesiredCoverageNeighbors(Vector3I key)
+    private bool HasPendingDesiredCoverageNeighbors(Vector3I key, out string reason)
     {
+        reason = string.Empty;
         for (int z = -1; z <= 1; z++)
         {
             for (int x = -1; x <= 1; x++)
@@ -1245,9 +1296,26 @@ public partial class TerrainWorld : Node3D
                     continue;
                 }
 
-                if (!_residentChunks.TryGetValue(neighborKey, out TerrainChunk neighborChunk) ||
-                    !neighborChunk.HasCompletedInitialVisualBuild)
+                if (!CanVerticalChunkContainSurface(neighborKey))
                 {
+                    continue;
+                }
+
+                if (!_residentChunks.TryGetValue(neighborKey, out TerrainChunk neighborChunk))
+                {
+                    reason = $"replacement_missing:{neighborKey}";
+                    return true;
+                }
+
+                if (!neighborChunk.HasCompletedInitialVisualBuild)
+                {
+                    reason = $"replacement_build_pending:{neighborKey}";
+                    return true;
+                }
+
+                if (!CanChunkProvideCoverage(neighborChunk))
+                {
+                    reason = $"replacement_bad_mesh:{neighborKey}:tris={neighborChunk.LastTotalTriangleCount}";
                     return true;
                 }
             }
@@ -1260,7 +1328,12 @@ public partial class TerrainWorld : Node3D
     {
         foreach (Vector3I key in _desiredChunks)
         {
-            if (!_residentChunks.TryGetValue(key, out TerrainChunk chunk) || !chunk.HasCompletedInitialVisualBuild)
+            if (!IsChunkInNearPlayerCoverageSafetyZone(key) || !CanVerticalChunkContainSurface(key))
+            {
+                continue;
+            }
+
+            if (!_residentChunks.TryGetValue(key, out TerrainChunk chunk) || !CanChunkProvideCoverage(chunk))
             {
                 return true;
             }
@@ -1269,16 +1342,21 @@ public partial class TerrainWorld : Node3D
         return false;
     }
 
-    private bool IsChunkNearCoverageFrontier(Vector3I key)
+    private bool IsChunkInNearPlayerCoverageSafetyZone(Vector3I key)
     {
         Vector2 offset = new(
             key.X - _searchEvaluationContext.CenterChunk.X,
             key.Z - _searchEvaluationContext.CenterChunk.Y);
-        return offset.Length() <= _searchEvaluationContext.SearchRadius + 1.25f;
+        return offset.Length() <= GuaranteedColumnRadius + 0.85f;
     }
 
     private bool IsChunkCoverageRelevant(TerrainChunk chunk)
     {
+        if (!CanVerticalChunkContainSurface(chunk.ChunkKey))
+        {
+            return false;
+        }
+
         Vector2 offset = new(
             chunk.ChunkKey.X - _searchEvaluationContext.CenterChunk.X,
             chunk.ChunkKey.Z - _searchEvaluationContext.CenterChunk.Y);
@@ -1299,6 +1377,137 @@ public partial class TerrainWorld : Node3D
             distance <= _searchEvaluationContext.SearchRadius + 1.25f &&
             visibility > OccludedPriorityScale &&
             forwardAlignment > -0.55f;
+    }
+
+    private bool CanChunkProvideCoverage(TerrainChunk chunk)
+    {
+        return chunk != null &&
+            IsInstanceValid(chunk) &&
+            chunk.HasCompletedInitialVisualBuild &&
+            chunk.HasSurface &&
+            chunk.LastTotalTriangleCount >= MinimumCoverageTriangleCount &&
+            CanVerticalChunkContainSurface(chunk.ChunkKey);
+    }
+
+    private bool CanVerticalChunkContainSurface(Vector3I key)
+    {
+        if (_settings == null || _prioritySampler == null)
+        {
+            return true;
+        }
+
+        if (_residentChunks.TryGetValue(key, out TerrainChunk residentChunk) &&
+            residentChunk != null &&
+            IsInstanceValid(residentChunk) &&
+            residentChunk.HasSurface)
+        {
+            return true;
+        }
+
+        float surfaceMaxY = EstimateColumnSurfaceMaxY(new Vector2I(key.X, key.Z));
+        float chunkMinY = _settings.GetChunkBounds(key).Position.Y;
+        float surfaceMargin = Mathf.Max(VoxelSize * 2.0f, DetailHeight + VoxelSize);
+        return chunkMinY <= surfaceMaxY + surfaceMargin;
+    }
+
+    private bool ShouldSkipDesiredVerticalChunk(Vector3I key, out float surfaceMaxY)
+    {
+        surfaceMaxY = float.PositiveInfinity;
+        if (IsChunkInNearPlayerCoverageSafetyZone(key) || _settings == null || _prioritySampler == null)
+        {
+            return false;
+        }
+
+        if (_cacheManager != null)
+        {
+            TerrainChunkLoadSource estimatedSource = _cacheManager.EstimateSource(key, _useStartupSnapshot);
+            if (estimatedSource is TerrainChunkLoadSource.StartupSnapshot or TerrainChunkLoadSource.PersistedChunk)
+            {
+                return false;
+            }
+        }
+
+        surfaceMaxY = EstimateColumnSurfaceMaxY(new Vector2I(key.X, key.Z));
+        float chunkMinY = _settings.GetChunkBounds(key).Position.Y;
+        float surfaceMargin = Mathf.Max(VoxelSize * 2.0f, DetailHeight + VoxelSize);
+        return chunkMinY > surfaceMaxY + surfaceMargin;
+    }
+
+    private float EstimateColumnSurfaceMaxY(Vector2I columnKey)
+    {
+        if (_columnSurfaceMaxYCache.TryGetValue(columnKey, out float cached))
+        {
+            return cached;
+        }
+
+        if (_settings == null || _prioritySampler == null)
+        {
+            return float.PositiveInfinity;
+        }
+
+        float minX = columnKey.X * _settings.ChunkSize;
+        float minZ = columnKey.Y * _settings.ChunkSize;
+        float maxSurfaceY = float.NegativeInfinity;
+        foreach (Vector2 sample in ColumnSurfaceSamplePattern)
+        {
+            float sampleX = minX + (sample.X * _settings.ChunkSize);
+            float sampleZ = minZ + (sample.Y * _settings.ChunkSize);
+            maxSurfaceY = Mathf.Max(maxSurfaceY, _prioritySampler.SampleSurfaceHeight(sampleX, sampleZ));
+        }
+
+        _columnSurfaceMaxYCache[columnKey] = maxSurfaceY;
+        return maxSurfaceY;
+    }
+
+    private void RecordEmptyVerticalChunkSkip(Vector3I key, float surfaceMaxY)
+    {
+        if (!_loggedEmptyVerticalChunkSkips.Add(key))
+        {
+            return;
+        }
+
+        float chunkMinY = _settings.GetChunkBounds(key).Position.Y;
+        _terrainStats.RecordEmptyVerticalChunkSkipped(key, "above_surface_band", surfaceMaxY, chunkMinY);
+    }
+
+    private void LogCoverageHold(TerrainChunk chunk, string reason, bool replacementCoveragePending)
+    {
+        if (chunk == null || !IsInstanceValid(chunk))
+        {
+            return;
+        }
+
+        string effectiveReason = string.IsNullOrWhiteSpace(reason)
+            ? chunk.CoverageStateSummary
+            : reason;
+        if (_coverageHoldLogReasons.TryGetValue(chunk.ChunkKey, out string previousReason) &&
+            string.Equals(previousReason, effectiveReason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _coverageHoldLogReasons[chunk.ChunkKey] = effectiveReason;
+        _terrainStats.RecordCoverageHold(chunk.ChunkKey, effectiveReason, replacementCoveragePending);
+    }
+
+    private void LogCoverageReleaseBlocked(TerrainChunk chunk)
+    {
+        if (chunk == null || !IsInstanceValid(chunk))
+        {
+            return;
+        }
+
+        string reason = string.IsNullOrWhiteSpace(chunk.CoverageHoldReason)
+            ? chunk.CoverageStateSummary
+            : chunk.CoverageHoldReason;
+        if (_coverageReleaseBlockLogReasons.TryGetValue(chunk.ChunkKey, out string previousReason) &&
+            string.Equals(previousReason, reason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _coverageReleaseBlockLogReasons[chunk.ChunkKey] = reason;
+        _terrainStats.RecordCoverageReleaseBlocked(chunk.ChunkKey, reason);
     }
 
     private void UpdateColumnRetention(Vector2I centerChunk)
@@ -1402,6 +1611,7 @@ public partial class TerrainWorld : Node3D
             {
                 _lastPreventedCoverageGapReleaseCount++;
                 _totalPreventedCoverageGapReleaseCount++;
+                LogCoverageReleaseBlocked(chunk);
                 continue;
             }
 
@@ -1414,6 +1624,8 @@ public partial class TerrainWorld : Node3D
             _dirtyRenderChunks.Remove(chunk);
             _dirtyCollisionChunks.Remove(chunk);
             _collisionQueueStates.Remove(release.Key);
+            _coverageHoldLogReasons.Remove(release.Key);
+            _coverageReleaseBlockLogReasons.Remove(release.Key);
             _residentChunks.Remove(release.Key);
             chunk.QueueFree();
 
@@ -1550,6 +1762,16 @@ public partial class TerrainWorld : Node3D
             if (chunk.ConsumeDetailPromotionReevaluationPending(out _))
             {
                 RecordDeferredPromotionReevaluation();
+            }
+
+            if (TryBuildLowValueDetailPromotionDeferDecision(
+                    chunk,
+                    currentFrame,
+                    pressureModeActive,
+                    out TerrainDetailPromotionDeferDecision lowValueDecision))
+            {
+                ApplyDeferredDetailPromotion(chunk, lowValueDecision);
+                continue;
             }
 
             if (ShouldDeferAutomaticDetailPromotion(
@@ -1813,7 +2035,38 @@ public partial class TerrainWorld : Node3D
             decision.Reason,
             decision.NextEligibleFrame,
             decision.NextEligibleAtSeconds);
+        if (TryGetDetailPromotionSchedulingCategory(decision.Reason, out string category))
+        {
+            _terrainStats.RecordMeshSchedulingDecision(
+                chunk.ChunkKey,
+                category,
+                TerrainVisualBuildRequestKind.DetailPromotion,
+                ClassifyVisualBuildQueue(chunk, TerrainVisualBuildRequestKind.DetailPromotion),
+                chunk.LoadSource,
+                chunk.LastTotalTriangleCount,
+                decision.Reason);
+        }
+
         RecordDeferredDetailPromotion(chunk, decision.Reason);
+    }
+
+    private static bool TryGetDetailPromotionSchedulingCategory(string reason, out string category)
+    {
+        if (string.Equals(reason, "pressure_mode", StringComparison.Ordinal))
+        {
+            category = "pressure_throttle";
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(reason) &&
+            reason.StartsWith("low_value", StringComparison.Ordinal))
+        {
+            category = "skip_promotion";
+            return true;
+        }
+
+        category = string.Empty;
+        return false;
     }
 
     private void ClearDeferredDetailPromotionState(TerrainChunk chunk, string trigger)
@@ -1867,13 +2120,100 @@ public partial class TerrainWorld : Node3D
             return false;
         }
 
-        if (HasStickyDetailDemand(chunk) || chunk.DetailPromotionReevaluationPending || chunk.DetailPromotionFollowupRequested)
+        float distance = ComputeTrackedChunkDistance(chunk);
+        float veryNearRange = Mathf.Max(PlayerDetailRequestRadius * 0.45f, _settings.ChunkSize * 0.75f);
+        if (distance <= veryNearRange)
         {
             return true;
         }
 
-        float veryNearRange = Mathf.Max(PlayerDetailRequestRadius * 0.45f, _settings.ChunkSize * 0.75f);
-        return ComputeTrackedChunkDistance(chunk) <= veryNearRange;
+        if (HasUrgentStickyDetailDemand(chunk))
+        {
+            return true;
+        }
+
+        return
+            (chunk.DetailPromotionReevaluationPending || chunk.DetailPromotionFollowupRequested) &&
+            distance <= GetImmediateCoarseVisibilityRange();
+    }
+
+    private static bool HasUrgentStickyDetailDemand(TerrainChunk chunk)
+    {
+        if (chunk == null)
+        {
+            return false;
+        }
+
+        if (chunk.HasEditedDetailBrick)
+        {
+            return true;
+        }
+
+        foreach (TerrainDetailRegion region in chunk.DetailRegionManager.Regions)
+        {
+            if (region.Sticky && region.Source == TerrainDetailRegionSource.Edit)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryBuildLowValueDetailPromotionDeferDecision(
+        TerrainChunk chunk,
+        ulong currentFrame,
+        bool pressureModeActive,
+        out TerrainDetailPromotionDeferDecision decision)
+    {
+        decision = default;
+        if (chunk == null ||
+            !IsInstanceValid(chunk) ||
+            ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+        {
+            return false;
+        }
+
+        ulong backoffFrames = pressureModeActive
+            ? LowValueDetailBackoffFrames + 4UL
+            : LowValueDetailBackoffFrames;
+        if (!CanVerticalChunkContainSurface(chunk.ChunkKey))
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPromotionBudget,
+                "low_value_empty_vertical",
+                currentFrame + backoffFrames,
+                double.NegativeInfinity);
+            return true;
+        }
+
+        if (!chunk.HasCompletedInitialVisualBuild)
+        {
+            return false;
+        }
+
+        if (!chunk.HasSurface)
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPromotionBudget,
+                "low_value_no_surface",
+                currentFrame + backoffFrames,
+                double.NegativeInfinity);
+            return true;
+        }
+
+        if (chunk.LastTotalTriangleCount > 0 &&
+            chunk.LastTotalTriangleCount <= TinyFragmentTriangleCount)
+        {
+            decision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPromotionBudget,
+                "low_value_tiny_surface",
+                currentFrame + backoffFrames,
+                double.NegativeInfinity);
+            return true;
+        }
+
+        return false;
     }
 
     private TerrainDetailPromotionDeferDecision BuildPromotionBudgetDeferDecision(
@@ -1883,7 +2223,7 @@ public partial class TerrainWorld : Node3D
     {
         ulong backoffFrames = ShouldPrioritizeAutomaticDetailDuringPressure(chunk)
             ? 1UL
-            : (pressureModeActive ? 4UL : 2UL);
+            : (pressureModeActive ? 6UL : 3UL);
         return new TerrainDetailPromotionDeferDecision(
             TerrainDetailPromotionState.DeferredPromotionBudget,
             "promotion_budget",
@@ -2138,6 +2478,34 @@ public partial class TerrainWorld : Node3D
             _dirtyRenderChunks.Add(chunk);
             RefreshVisualMeshSchedulerState();
             TerrainVisualBuildQueueClass queueClass = ClassifyVisualBuildQueue(chunk, requestKind);
+            if (string.Equals(reason, "dirty_retry", StringComparison.Ordinal) &&
+                TrySuppressDirtyRetryEnqueue(
+                    chunk,
+                    requestKind,
+                    queueClass,
+                    Engine.GetProcessFrames(),
+                    out string suppressReason,
+                    out TerrainDetailPromotionDeferDecision deferredPromotionDecision))
+            {
+                if (requestKind == TerrainVisualBuildRequestKind.DetailPromotion)
+                {
+                    ApplyDeferredDetailPromotion(chunk, deferredPromotionDecision);
+                }
+
+                string schedulingCategory = requestKind == TerrainVisualBuildRequestKind.InitialCoarse
+                    ? "skip_rebuild"
+                    : "suppress_retry";
+                _terrainStats.RecordMeshSchedulingDecision(
+                    chunk.ChunkKey,
+                    schedulingCategory,
+                    requestKind,
+                    queueClass,
+                    chunk.LoadSource,
+                    chunk.LastTotalTriangleCount,
+                    suppressReason);
+                return;
+            }
+
             TerrainMeshQueueResult enqueueResult = QueueVisualBuildRequest(
                 new TerrainVisualBuildRequest(
                     chunk,
@@ -2176,6 +2544,61 @@ public partial class TerrainWorld : Node3D
                 RecordCoalescedRebuildRequest(chunk.ChunkKey, "collision", reason);
             }
         }
+    }
+
+    private bool TrySuppressDirtyRetryEnqueue(
+        TerrainChunk chunk,
+        TerrainVisualBuildRequestKind requestKind,
+        TerrainVisualBuildQueueClass queueClass,
+        ulong currentFrame,
+        out string suppressReason,
+        out TerrainDetailPromotionDeferDecision deferredPromotionDecision)
+    {
+        suppressReason = string.Empty;
+        deferredPromotionDecision = default;
+        if (chunk == null ||
+            !IsInstanceValid(chunk) ||
+            queueClass != TerrainVisualBuildQueueClass.Background)
+        {
+            return false;
+        }
+
+        if (requestKind == TerrainVisualBuildRequestKind.InitialCoarse &&
+            !_desiredChunks.Contains(chunk.ChunkKey) &&
+            !CanVerticalChunkContainSurface(chunk.ChunkKey))
+        {
+            suppressReason = "predicted_empty_vertical";
+            return true;
+        }
+
+        if (requestKind != TerrainVisualBuildRequestKind.DetailPromotion)
+        {
+            return false;
+        }
+
+        bool pressureModeActive = IsVisualMeshPressureActive();
+        if (TryBuildLowValueDetailPromotionDeferDecision(
+                chunk,
+                currentFrame,
+                pressureModeActive,
+                out deferredPromotionDecision))
+        {
+            suppressReason = deferredPromotionDecision.Reason;
+            return true;
+        }
+
+        if (pressureModeActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+        {
+            deferredPromotionDecision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPressure,
+                "pressure_mode",
+                currentFrame + PressureThrottledDetailBackoffFrames,
+                double.NegativeInfinity);
+            suppressReason = deferredPromotionDecision.Reason;
+            return true;
+        }
+
+        return false;
     }
 
     private TerrainMeshQueueResult QueueVisualBuildRequest(TerrainVisualBuildRequest request)
@@ -2486,7 +2909,43 @@ public partial class TerrainWorld : Node3D
             }
 
             _terrainStats.LogChunkRemeshBegin(job.Key, "mesh_commit", job.DirtyBounds);
-            bool committed = residentChunk.TryCommitRenderMesh(completedJob.ExecutionResult.MeshResult, job.Revision);
+            VoxelMeshBuildResult meshResult = completedJob.ExecutionResult.MeshResult;
+            bool hadSurfaceBeforeCommit = residentChunk.HasSurface;
+            int previousTriangleCount = residentChunk.LastTotalTriangleCount;
+            bool emptyMesh = !meshResult.HasGeometry || meshResult.TotalTriangleCount <= 0;
+            bool tinyMesh = !emptyMesh && meshResult.TotalTriangleCount <= TinyFragmentTriangleCount;
+            bool suppressTinyMesh = tinyMesh && ShouldSuppressTinyMesh(residentChunk, job, meshResult);
+            if (emptyMesh)
+            {
+                _terrainStats.RecordMeshResultDecision(
+                    residentChunk.ChunkKey,
+                    "empty_cleared",
+                    job.Kind,
+                    job.QueueClass,
+                    meshResult.TotalTriangleCount,
+                    meshResult.DetailTriangleCount,
+                    meshResult.ReplacedCoarseCellCount,
+                    meshResult.UsedDetailBrick,
+                    meshResult.UsedPersistentDetailEdits);
+            }
+            else if (tinyMesh)
+            {
+                _terrainStats.RecordMeshResultDecision(
+                    residentChunk.ChunkKey,
+                    suppressTinyMesh ? "tiny_suppressed" : "tiny_committed",
+                    job.Kind,
+                    job.QueueClass,
+                    meshResult.TotalTriangleCount,
+                    meshResult.DetailTriangleCount,
+                    meshResult.ReplacedCoarseCellCount,
+                    meshResult.UsedDetailBrick,
+                    meshResult.UsedPersistentDetailEdits);
+            }
+
+            VoxelMeshBuildResult commitMeshResult = suppressTinyMesh
+                ? VoxelMeshBuildResult.Empty
+                : meshResult;
+            bool committed = residentChunk.TryCommitRenderMesh(commitMeshResult, job.Revision);
             if (!committed)
             {
                 HandleDetailPromotionAfterVisualCommit(residentChunk, job, committed: false);
@@ -2511,10 +2970,23 @@ public partial class TerrainWorld : Node3D
                 residentChunk.LastDetailTriangleCount,
                 residentChunk.LastReplacedCoarseCellCount,
                 residentChunk.LastTotalTriangleCount);
+            if (hadSurfaceBeforeCommit && !residentChunk.HasSurface)
+            {
+                string reason = suppressTinyMesh
+                    ? "tiny_suppressed"
+                    : "empty_rebuild";
+                _terrainStats.RecordStaleMeshCleared(residentChunk.ChunkKey, reason, previousTriangleCount);
+            }
             visualBudget--;
             if (!residentChunk.RenderDirty)
             {
                 _dirtyRenderChunks.Remove(residentChunk);
+            }
+
+            if (!residentChunk.HasSurface && residentChunk.HasCollision && !residentChunk.CollisionDirty)
+            {
+                residentChunk.MarkCollisionDirty(CollisionRebuildDelaySeconds);
+                _dirtyCollisionChunks.Add(residentChunk);
             }
 
             if (residentChunk.CollisionDirty)
@@ -2524,10 +2996,17 @@ public partial class TerrainWorld : Node3D
                     job.Kind == TerrainVisualBuildRequestKind.Edit
                         ? TerrainCollisionRequestKind.Edit
                         : TerrainCollisionRequestKind.NearPlayer,
-                    "visual_commit_followup");
+                    residentChunk.HasSurface
+                        ? "visual_commit_followup"
+                        : "empty_visual_clear");
                 if (collisionResult.Coalesced)
                 {
-                    RecordCoalescedRebuildRequest(residentChunk.ChunkKey, "collision", "visual_commit_followup");
+                    RecordCoalescedRebuildRequest(
+                        residentChunk.ChunkKey,
+                        "collision",
+                        residentChunk.HasSurface
+                            ? "visual_commit_followup"
+                            : "empty_visual_clear");
                 }
             }
             else if (residentChunk.IsInitialVisualReady &&
@@ -2547,6 +3026,27 @@ public partial class TerrainWorld : Node3D
                 }
             }
         }
+    }
+
+    private bool ShouldSuppressTinyMesh(
+        TerrainChunk chunk,
+        TerrainVisualBuildJob job,
+        VoxelMeshBuildResult meshResult)
+    {
+        if (chunk == null ||
+            !IsInstanceValid(chunk) ||
+            meshResult.TotalTriangleCount <= 0 ||
+            meshResult.TotalTriangleCount > TinyFragmentTriangleCount)
+        {
+            return false;
+        }
+
+        if (job.QueueClass != TerrainVisualBuildQueueClass.Background)
+        {
+            return false;
+        }
+
+        return !IsChunkInNearPlayerCoverageSafetyZone(chunk.ChunkKey);
     }
 
     private void HandleDetailPromotionAfterVisualCommit(
@@ -2639,6 +3139,11 @@ public partial class TerrainWorld : Node3D
             TerrainVisualBuildRequestKind requestKind = !chunk.HasCompletedInitialVisualBuild
                 ? TerrainVisualBuildRequestKind.InitialCoarse
                 : (chunk.HasEditedDetailBrick ? TerrainVisualBuildRequestKind.Edit : TerrainVisualBuildRequestKind.DetailPromotion);
+            if (requestKind == TerrainVisualBuildRequestKind.DetailPromotion && chunk.IsDetailPromotionDeferred)
+            {
+                continue;
+            }
+
             TerrainMeshDetailMode detailMode = chunk.HasDetailBrick || chunk.DetailRegionCount > 0
                 ? TerrainMeshDetailMode.IncludeTransientDetail
                 : TerrainMeshDetailMode.CoarseOnly;
@@ -2668,6 +3173,29 @@ public partial class TerrainWorld : Node3D
             return null;
         }
 
+        if (TrySuppressPreparedVisualBuild(
+                residentChunk,
+                request,
+                out string schedulingCategory,
+                out string suppressReason,
+                out TerrainDetailPromotionDeferDecision deferredPromotionDecision))
+        {
+            if (request.Kind == TerrainVisualBuildRequestKind.DetailPromotion)
+            {
+                ApplyDeferredDetailPromotion(residentChunk, deferredPromotionDecision);
+            }
+
+            _terrainStats.RecordMeshSchedulingDecision(
+                request.Key,
+                schedulingCategory,
+                request.Kind,
+                request.QueueClass,
+                residentChunk.LoadSource,
+                residentChunk.LastTotalTriangleCount,
+                suppressReason);
+            return null;
+        }
+
         TerrainVisualBuildJob? preparedJob = residentChunk.TryCreateVisualBuildJob(request);
         if (preparedJob.HasValue)
         {
@@ -2681,6 +3209,69 @@ public partial class TerrainWorld : Node3D
         }
 
         return preparedJob;
+    }
+
+    private bool TrySuppressPreparedVisualBuild(
+        TerrainChunk chunk,
+        TerrainVisualBuildRequest request,
+        out string schedulingCategory,
+        out string suppressReason,
+        out TerrainDetailPromotionDeferDecision deferredPromotionDecision)
+    {
+        schedulingCategory = string.Empty;
+        suppressReason = string.Empty;
+        deferredPromotionDecision = default;
+        if (chunk == null ||
+            !IsInstanceValid(chunk) ||
+            request.QueueClass != TerrainVisualBuildQueueClass.Background)
+        {
+            return false;
+        }
+
+        if (request.Kind == TerrainVisualBuildRequestKind.InitialCoarse &&
+            !_desiredChunks.Contains(request.Key) &&
+            !CanVerticalChunkContainSurface(request.Key))
+        {
+            schedulingCategory = "skip_rebuild";
+            suppressReason = "predicted_empty_vertical";
+            return true;
+        }
+
+        if (request.Kind != TerrainVisualBuildRequestKind.DetailPromotion)
+        {
+            return false;
+        }
+
+        ulong currentFrame = Engine.GetProcessFrames();
+        bool pressureModeActive = IsVisualMeshPressureActive();
+        if (TryBuildLowValueDetailPromotionDeferDecision(
+                chunk,
+                currentFrame,
+                pressureModeActive,
+                out deferredPromotionDecision))
+        {
+            schedulingCategory = string.Equals(request.Reason, "dirty_retry", StringComparison.Ordinal)
+                ? "suppress_retry"
+                : "skip_rebuild";
+            suppressReason = deferredPromotionDecision.Reason;
+            return true;
+        }
+
+        if (pressureModeActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+        {
+            deferredPromotionDecision = new TerrainDetailPromotionDeferDecision(
+                TerrainDetailPromotionState.DeferredPressure,
+                "pressure_mode",
+                currentFrame + PressureThrottledDetailBackoffFrames,
+                double.NegativeInfinity);
+            schedulingCategory = string.Equals(request.Reason, "dirty_retry", StringComparison.Ordinal)
+                ? "suppress_retry"
+                : "pressure_throttle";
+            suppressReason = deferredPromotionDecision.Reason;
+            return true;
+        }
+
+        return false;
     }
 
     private TerrainVisualBuildExecutionResult ExecuteVisualBuildJob(TerrainVisualBuildJob job)
@@ -2868,7 +3459,7 @@ public partial class TerrainWorld : Node3D
         {
             TerrainVisualBuildRequestKind.Edit => 5000.0f - distance,
             TerrainVisualBuildRequestKind.InitialCoarse => 3200.0f - distance,
-            _ => HasStickyDetailDemand(chunk)
+            _ => HasUrgentStickyDetailDemand(chunk)
                 ? 2400.0f - distance
                 : 1400.0f - distance
         };
@@ -2900,7 +3491,13 @@ public partial class TerrainWorld : Node3D
                 : TerrainVisualBuildQueueClass.Background;
         }
 
-        if (HasStickyDetailDemand(chunk))
+        if ((IsVisualMeshPressureActive() || ShouldPrioritizeStartupCoarseShell()) &&
+            !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
+        {
+            return TerrainVisualBuildQueueClass.Background;
+        }
+
+        if (HasUrgentStickyDetailDemand(chunk))
         {
             return distance <= nearDetailRange
                 ? TerrainVisualBuildQueueClass.Critical
@@ -3015,7 +3612,7 @@ public partial class TerrainWorld : Node3D
             return true;
         }
 
-        if (startupCoarsePriorityActive && !HasStickyDetailDemand(chunk))
+        if (startupCoarsePriorityActive && !ShouldPrioritizeAutomaticDetailDuringPressure(chunk))
         {
             decision = new TerrainDetailPromotionDeferDecision(
                 TerrainDetailPromotionState.DeferredStartupPriority,
@@ -3472,10 +4069,31 @@ public partial class TerrainWorld : Node3D
         TerrainChunkLoadSource source = _residentChunks.TryGetValue(key, out TerrainChunk chunk)
             ? chunk.LoadSource
             : TerrainChunkLoadSource.Resident;
+        float retainScore = retain.TotalScore;
         string reason = $"not desired | {retain.Summary}";
+        if (chunk != null && IsInstanceValid(chunk))
+        {
+            if (!chunk.HasSurface)
+            {
+                retainScore -= 260.0f;
+                reason = $"not desired | no_surface | {retain.Summary}";
+            }
+            else if (!CanChunkProvideCoverage(chunk))
+            {
+                retainScore -= 120.0f;
+                reason = $"not desired | weak_coverage tris={chunk.LastTotalTriangleCount} | {retain.Summary}";
+            }
+        }
+
+        if (!CanVerticalChunkContainSurface(key))
+        {
+            retainScore -= 320.0f;
+            reason = $"not desired | empty_vertical | {retain.Summary}";
+        }
+
         return new ChunkReleaseInfo(
             key,
-            retain.TotalScore,
+            retainScore,
             reason,
             source,
             retain.DominantBiome,
