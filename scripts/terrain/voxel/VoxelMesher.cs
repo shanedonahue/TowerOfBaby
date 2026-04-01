@@ -245,14 +245,19 @@ public static class VoxelMesher
             Vector2 uvB = ComputeUv(vertexB);
             Vector2 uvC = ComputeUv(vertexC);
             Vector3 faceNormal = ComputeTriangleNormal(vertexA, vertexB, vertexC);
-            if (HasNormalMismatch(edgeNormals[edgeA], edgeNormals[edgeB], edgeNormals[edgeC], faceNormal))
+            Vector3 referenceNormal = ResolveReferenceNormal(
+                faceNormal,
+                edgeNormals[edgeA],
+                edgeNormals[edgeB],
+                edgeNormals[edgeC]);
+            if (HasNormalMismatch(edgeNormals[edgeA], edgeNormals[edgeB], edgeNormals[edgeC], referenceNormal))
             {
                 normalDebugMismatchCount++;
             }
 
-            Vector3 normalA = AlignSmoothNormal(edgeNormals[edgeA], faceNormal);
-            Vector3 normalB = AlignSmoothNormal(edgeNormals[edgeB], faceNormal);
-            Vector3 normalC = AlignSmoothNormal(edgeNormals[edgeC], faceNormal);
+            Vector3 normalA = AlignSmoothNormal(edgeNormals[edgeA], referenceNormal);
+            Vector3 normalB = AlignSmoothNormal(edgeNormals[edgeB], referenceNormal);
+            Vector3 normalC = AlignSmoothNormal(edgeNormals[edgeC], referenceNormal);
             Color colorA = ResolveVertexColor(colorMode, edgeColors[edgeA], normalA);
             Color colorB = ResolveVertexColor(colorMode, edgeColors[edgeB], normalB);
             Color colorC = ResolveVertexColor(colorMode, edgeColors[edgeC], normalC);
@@ -262,7 +267,7 @@ public static class VoxelMesher
                 Vector3 tangentNormal = (normalA + normalB + normalC).Normalized();
                 if (tangentNormal.LengthSquared() <= 0.000001f)
                 {
-                    tangentNormal = faceNormal;
+                    tangentNormal = referenceNormal;
                 }
 
                 ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, tangentNormal, out float tx, out float ty, out float tz, out float tw);
@@ -279,6 +284,38 @@ public static class VoxelMesher
         }
 
         return normalDebugMismatchCount;
+    }
+
+    private static Vector3 ResolveReferenceNormal(
+        Vector3 faceNormal,
+        Vector3 normalA,
+        Vector3 normalB,
+        Vector3 normalC)
+    {
+        Vector3 smoothNormalSum = Vector3.Zero;
+        if (normalA.LengthSquared() > 0.000001f)
+        {
+            smoothNormalSum += normalA;
+        }
+
+        if (normalB.LengthSquared() > 0.000001f)
+        {
+            smoothNormalSum += normalB;
+        }
+
+        if (normalC.LengthSquared() > 0.000001f)
+        {
+            smoothNormalSum += normalC;
+        }
+
+        if (smoothNormalSum.LengthSquared() <= 0.000001f)
+        {
+            return faceNormal;
+        }
+
+        return smoothNormalSum.Dot(faceNormal) < 0.0f
+            ? -faceNormal
+            : faceNormal;
     }
 
     private static Vector3 Interpolate(Vector3 p0, Vector3 p1, float d0, float d1, float isoLevel, out float t)
@@ -423,17 +460,17 @@ public static class VoxelMesher
 
     private static Color MaterialColor(VoxelMaterialId materialId)
     {
-        Color materialColor = materialId switch
+        return materialId switch
         {
-            VoxelMaterialId.Grass => new Color(0.82f, 0.90f, 0.66f),
-            VoxelMaterialId.Rock => new Color(0.78f, 0.77f, 0.75f),
-            VoxelMaterialId.Cliff => new Color(0.86f, 0.76f, 0.61f),
-            VoxelMaterialId.Snow => new Color(0.94f, 0.95f, 0.97f),
-            VoxelMaterialId.Scorched => new Color(0.44f, 0.40f, 0.38f),
-            _ => new Color(0.74f, 0.62f, 0.48f)
+            // Keep lit gameplay terrain readable under the bright outdoor rig
+            // without washing the palette back toward white.
+            VoxelMaterialId.Grass => new Color(0.47f, 0.56f, 0.33f),
+            VoxelMaterialId.Rock => new Color(0.53f, 0.51f, 0.49f),
+            VoxelMaterialId.Cliff => new Color(0.61f, 0.55f, 0.41f),
+            VoxelMaterialId.Snow => new Color(0.86f, 0.87f, 0.89f),
+            VoxelMaterialId.Scorched => new Color(0.21f, 0.19f, 0.18f),
+            _ => new Color(0.50f, 0.40f, 0.27f)
         };
-
-        return Colors.White.Lerp(materialColor, 0.35f);
     }
 
     private static MeshBuildScratch GetScratch()

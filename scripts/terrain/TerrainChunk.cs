@@ -26,8 +26,8 @@ public partial class TerrainChunk : Node3D
 
     private static readonly StandardMaterial3D SharedTerrainMaterial = new()
     {
-        VertexColorUseAsAlbedo = false,
-        AlbedoColor = new Color(0.88f, 0.85f, 0.79f),
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = Colors.White,
         Roughness = 0.97f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
@@ -36,7 +36,7 @@ public partial class TerrainChunk : Node3D
     private static readonly StandardMaterial3D SharedTerrainTintMaterial = new()
     {
         VertexColorUseAsAlbedo = true,
-        AlbedoColor = new Color(0.92f, 0.90f, 0.86f),
+        AlbedoColor = Colors.White,
         Roughness = 0.97f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel

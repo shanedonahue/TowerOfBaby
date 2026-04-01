@@ -143,7 +143,7 @@ public partial class TerrainWorld : Node3D
 
     [ExportGroup("Debug")]
     [Export] public bool EnableTerrainInstrumentation = true;
-    [Export] public bool EnableTerrainVertexTint = false;
+    [Export] public bool EnableTerrainVertexTint = true;
     [Export] public bool EnableBiomeDebugTint = false;
     [Export] public bool TerrainGenerateTangents = false;
     [Export] public TerrainVisualDebugMode TerrainDebugView = TerrainVisualDebugMode.Lit;
@@ -369,9 +369,7 @@ public partial class TerrainWorld : Node3D
         {
             TerrainVisualDebugMode.VertexTint => VoxelMeshColorMode.MaterialTint,
             TerrainVisualDebugMode.Normals => VoxelMeshColorMode.NormalDebug,
-            _ => EnableTerrainVertexTint
-                ? VoxelMeshColorMode.MaterialTint
-                : VoxelMeshColorMode.Neutral
+            _ => VoxelMeshColorMode.MaterialTint
         };
 
         bool generateTangents =
