@@ -2318,18 +2318,25 @@ public partial class TerrainWorld : Node3D
         float nearDetailRange = Mathf.Max(
             PlayerDetailRequestRadius * 1.15f,
             _settings.ChunkSize * (GuaranteedColumnRadius + 0.75f));
+        float immediateVisibilityRange = GetImmediateCoarseVisibilityRange();
+        if (requestKind == TerrainVisualBuildRequestKind.InitialCoarse)
+        {
+            // A chunk's very first coarse shell must not be demoted behind sticky-detail
+            // demand, or startup can strand dirty chunks with no foreground mesh work.
+            if (!_initialLoadComplete)
+            {
+                return TerrainVisualBuildQueueClass.NearCoarse;
+            }
+
+            return distance <= immediateVisibilityRange
+                ? TerrainVisualBuildQueueClass.NearCoarse
+                : TerrainVisualBuildQueueClass.Background;
+        }
+
         if (HasStickyDetailDemand(chunk))
         {
             return distance <= nearDetailRange
                 ? TerrainVisualBuildQueueClass.Critical
-                : TerrainVisualBuildQueueClass.Background;
-        }
-
-        float immediateVisibilityRange = GetImmediateCoarseVisibilityRange();
-        if (requestKind == TerrainVisualBuildRequestKind.InitialCoarse)
-        {
-            return distance <= immediateVisibilityRange
-                ? TerrainVisualBuildQueueClass.NearCoarse
                 : TerrainVisualBuildQueueClass.Background;
         }
 
@@ -2663,7 +2670,10 @@ public partial class TerrainWorld : Node3D
 
     private bool IsChunkInitialLoadReady(TerrainChunk chunk)
     {
-        if (!chunk.IsInitialVisualReady)
+        // Startup progress should unblock once the chunk has a committed coarse visual.
+        // Follow-up detail rebuilds can legitimately keep RenderDirty true for a while,
+        // but they should not pin the loading overlay.
+        if (!chunk.HasCompletedInitialVisualBuild)
         {
             return false;
         }
