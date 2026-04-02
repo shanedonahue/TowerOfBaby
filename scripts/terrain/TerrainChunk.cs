@@ -14,9 +14,10 @@ public enum TerrainDetailPromotionState
     DeferredPressure = 4,
     DeferredPromotionBudget = 5,
     DeferredStartupPriority = 6,
-    Queued = 7,
-    Running = 8,
-    Applied = 9
+    DeferredCollisionBootstrap = 7,
+    Queued = 8,
+    Running = 9,
+    Applied = 10
 }
 
 public partial class TerrainChunk : Node3D
@@ -120,7 +121,8 @@ public partial class TerrainChunk : Node3D
             TerrainDetailPromotionState.DeferredWarmup or
             TerrainDetailPromotionState.DeferredPressure or
             TerrainDetailPromotionState.DeferredPromotionBudget or
-            TerrainDetailPromotionState.DeferredStartupPriority;
+            TerrainDetailPromotionState.DeferredStartupPriority or
+            TerrainDetailPromotionState.DeferredCollisionBootstrap;
     public bool IsDetailPromotionMeshBlocked =>
         DetailPromotionState is TerrainDetailPromotionState.DeferredPendingMesh or
             TerrainDetailPromotionState.Queued or
