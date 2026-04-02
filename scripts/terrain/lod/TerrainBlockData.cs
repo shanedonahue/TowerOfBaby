@@ -13,40 +13,88 @@ public enum TerrainBlockState
 
 public sealed class TerrainBlockData
 {
-    public TerrainBlockData(TerrainBlockId id, TerrainRenderer renderer)
+    public TerrainBlockData(TerrainBlockId id, TerrainRenderer renderer, long instanceVersion)
     {
         Id = id;
         Renderer = renderer;
+        InstanceVersion = instanceVersion;
     }
 
     public TerrainBlockId Id { get; }
     public TerrainRenderer Renderer { get; }
+    public long InstanceVersion { get; }
     public TerrainBlockState State { get; set; } = TerrainBlockState.Requested;
     public bool Desired { get; set; } = true;
     public int TriangleCount { get; private set; }
     public VoxelChunkData Field { get; private set; }
     public VoxelMeshBuildResult Mesh { get; private set; } = VoxelMeshBuildResult.Empty;
     public double ReleaseEligibleAtSeconds { get; private set; }
+    public int FieldBuildRevision { get; private set; }
+    public bool FieldBuildRunning { get; private set; }
+    public int MeshBuildRevision { get; private set; }
+    public bool MeshBuildRunning { get; private set; }
+    public bool CollisionPending { get; private set; }
+
+    public int BeginFieldBuild()
+    {
+        FieldBuildRunning = true;
+        return ++FieldBuildRevision;
+    }
+
+    public bool MatchesFieldBuild(long instanceVersion, int revision)
+    {
+        return InstanceVersion == instanceVersion && FieldBuildRevision == revision;
+    }
 
     public void SetField(VoxelChunkData field)
     {
+        FieldBuildRunning = false;
         Field = field;
         State = TerrainBlockState.FieldReady;
     }
 
+    public void ClearFieldBuildRunning(int revision)
+    {
+        if (FieldBuildRevision == revision)
+        {
+            FieldBuildRunning = false;
+        }
+    }
+
+    public int BeginMeshBuild()
+    {
+        MeshBuildRunning = true;
+        return ++MeshBuildRevision;
+    }
+
+    public bool MatchesMeshBuild(long instanceVersion, int revision)
+    {
+        return InstanceVersion == instanceVersion && MeshBuildRevision == revision;
+    }
+
     public void SetMesh(VoxelMeshBuildResult mesh)
     {
+        MeshBuildRunning = false;
         Mesh = mesh;
         TriangleCount = mesh.TotalTriangleCount;
         State = TerrainBlockState.MeshReady;
     }
 
-    public void MarkVisible()
+    public void ClearMeshBuildRunning(int revision)
+    {
+        if (MeshBuildRevision == revision)
+        {
+            MeshBuildRunning = false;
+        }
+    }
+
+    public void MarkVisible(bool collisionPending = false)
     {
         Field = null;
         Mesh = VoxelMeshBuildResult.Empty;
         Desired = true;
         ReleaseEligibleAtSeconds = 0.0;
+        CollisionPending = collisionPending;
         State = TerrainBlockState.Visible;
     }
 
@@ -54,6 +102,7 @@ public sealed class TerrainBlockData
     {
         Desired = true;
         ReleaseEligibleAtSeconds = 0.0;
+        CollisionPending = false;
         State = TerrainBlockState.Visible;
     }
 
@@ -61,7 +110,18 @@ public sealed class TerrainBlockData
     {
         Desired = false;
         ReleaseEligibleAtSeconds = releaseEligibleAtSeconds;
+        CollisionPending = false;
         State = TerrainBlockState.Releasable;
+    }
+
+    public void MarkCollisionPending()
+    {
+        CollisionPending = true;
+    }
+
+    public void MarkCollisionReady()
+    {
+        CollisionPending = false;
     }
 
     public bool IsHeldForRelease(double nowSeconds)
@@ -73,5 +133,8 @@ public sealed class TerrainBlockData
     {
         Field = null;
         Mesh = VoxelMeshBuildResult.Empty;
+        FieldBuildRunning = false;
+        MeshBuildRunning = false;
+        CollisionPending = false;
     }
 }

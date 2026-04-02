@@ -39,6 +39,12 @@ public partial class TerrainRenderer : Node3D
 
     public void ApplyMesh(VoxelMeshBuildResult meshBuild, bool includeCollision)
     {
+        ApplyVisualMesh(meshBuild);
+        ApplyCollision(includeCollision);
+    }
+
+    public void ApplyVisualMesh(VoxelMeshBuildResult meshBuild)
+    {
         EnsureNodes();
         EnsureSurfaceGroup();
 
@@ -64,9 +70,21 @@ public partial class TerrainRenderer : Node3D
         _meshInstance.Mesh = mesh;
         _meshInstance.MaterialOverride = SharedTerrainMaterial;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
-        _collision.Shape = includeCollision
-            ? mesh.CreateTrimeshShape()
-            : null;
+        _collision.Shape = null;
+    }
+
+    public void ApplyCollision(bool includeCollision)
+    {
+        EnsureNodes();
+        if (!includeCollision ||
+            _meshInstance.Mesh is not ArrayMesh mesh ||
+            mesh.GetSurfaceCount() == 0)
+        {
+            _collision.Shape = null;
+            return;
+        }
+
+        _collision.Shape = mesh.CreateTrimeshShape();
     }
 
     public void ClearVisuals()
@@ -76,6 +94,8 @@ public partial class TerrainRenderer : Node3D
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
         _collision.Shape = null;
     }
+
+    public bool HasCollision => _collision?.Shape != null;
 
     private void EnsureNodes()
     {

@@ -5,18 +5,23 @@ namespace TowerOfBaby.Terrain;
 public sealed class TerrainMesher
 {
     private readonly TerrainConfig _config;
-    private readonly VoxelFieldGenerator _fieldGenerator;
+    private readonly int _seed;
+    private readonly float _terrainHeight;
+    private readonly float _detailHeight;
+    private readonly float _caveScale;
+    private readonly float _caveThreshold;
+    private readonly VoxelFieldGenerator _surfaceSampler;
     private readonly VoxelMeshBuildOptions _meshOptions;
 
     public TerrainMesher(TerrainConfig config)
     {
         _config = config;
-        _fieldGenerator = new VoxelFieldGenerator(
-            config.Seed,
-            config.TerrainHeight,
-            config.DetailHeight,
-            config.CaveScale,
-            config.CaveThreshold);
+        _seed = config.Seed;
+        _terrainHeight = config.TerrainHeight;
+        _detailHeight = config.DetailHeight;
+        _caveScale = config.CaveScale;
+        _caveThreshold = config.CaveThreshold;
+        _surfaceSampler = CreateFieldGenerator();
         _meshOptions = new VoxelMeshBuildOptions(
             config.GenerateTangents,
             config.MeshColorMode);
@@ -28,7 +33,9 @@ public sealed class TerrainMesher
             _config.PointsPerAxis,
             TerrainMetrics.GetVoxelSize(_config, blockId.Lod),
             TerrainMetrics.GetBlockOrigin(_config, blockId));
-        _fieldGenerator.FillChunk(data);
+        // Field builds now run on worker threads, so each job gets its own generator instance
+        // instead of sharing mutable noise state across threads.
+        CreateFieldGenerator().FillChunk(data);
         return data;
     }
 
@@ -39,6 +46,16 @@ public sealed class TerrainMesher
 
     public float SampleSurfaceHeight(float worldX, float worldZ)
     {
-        return _fieldGenerator.SampleSurfaceHeight(worldX, worldZ);
+        return _surfaceSampler.SampleSurfaceHeight(worldX, worldZ);
+    }
+
+    private VoxelFieldGenerator CreateFieldGenerator()
+    {
+        return new VoxelFieldGenerator(
+            _seed,
+            _terrainHeight,
+            _detailHeight,
+            _caveScale,
+            _caveThreshold);
     }
 }
