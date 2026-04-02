@@ -29,7 +29,7 @@ public partial class TerrainChunk : Node3D
     {
         VertexColorUseAsAlbedo = true,
         AlbedoColor = Colors.White,
-        Roughness = 0.97f,
+        Roughness = 1.0f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
     };
@@ -38,7 +38,7 @@ public partial class TerrainChunk : Node3D
     {
         VertexColorUseAsAlbedo = true,
         AlbedoColor = Colors.White,
-        Roughness = 0.97f,
+        Roughness = 1.0f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
     };
@@ -54,6 +54,13 @@ public partial class TerrainChunk : Node3D
 
     [Export] public int PointsPerAxis = 18;
     [Export] public float VoxelSize = 1.2f;
+
+    public static void ConfigureSharedSurfaceMaterial(float roughness)
+    {
+        float clampedRoughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
+        SharedTerrainMaterial.Roughness = clampedRoughness;
+        SharedTerrainTintMaterial.Roughness = clampedRoughness;
+    }
 
     public Vector3I ChunkKey { get; private set; }
     public TerrainBiomeSample BiomeSample { get; private set; } = TerrainBiomeSample.Default;

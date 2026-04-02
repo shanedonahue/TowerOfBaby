@@ -169,6 +169,13 @@ public sealed class TerrainSurfaceColorizer
         color = color.Lerp(macroTarget, 0.08f + (groundBlend * 0.04f));
         color = ScaleColor(color, Mathf.Lerp(0.94f, 1.07f, macroShade));
 
+        // Stylized readability pass: gently lift flatter caps while pushing cliffs a bit darker
+        // so broad forms hold together under a single strong sun direction.
+        float plateauLift = groundBlend * (0.05f + (highlandBlend * 0.05f));
+        float cliffDarkening = cliffBlend * 0.12f;
+        color = color.Lerp(new Color(0.88f, 0.89f, 0.84f, 1.0f), plateauLift * 0.12f);
+        color = ScaleColor(color, 1.0f - cliffDarkening);
+
         float flatLift = Mathf.SmoothStep(0.0f, 0.18f, groundBlend) * 0.08f;
         color = color.Lerp(SnowDustColor, flatLift * 0.12f);
         return ClampColor(color);

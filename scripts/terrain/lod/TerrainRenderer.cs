@@ -12,7 +12,7 @@ public partial class TerrainRenderer : Node3D
     {
         VertexColorUseAsAlbedo = true,
         AlbedoColor = Colors.White,
-        Roughness = 0.97f,
+        Roughness = 1.0f,
         Metallic = 0.0f,
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
     };
@@ -37,6 +37,11 @@ public partial class TerrainRenderer : Node3D
     private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
 
     public TerrainBlockId BlockId { get; private set; }
+
+    public static void ConfigureSharedSurfaceMaterial(float roughness)
+    {
+        SharedTerrainMaterial.Roughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
+    }
 
     public override void _Ready()
     {

@@ -4,14 +4,14 @@
 [ext_resource type="PackedScene" path="res://scenes/characters/Humanoid.tscn" id="3_humanoid"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
-[ext_resource type="Script" uid="uid://cyepdlpj8faj7" path="res://scripts/world/TimeOfDayController.cs" id="6_time"]
+[ext_resource type="Script" path="res://scripts/world/OutdoorLookController.cs" id="6_look"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.34117648, 0.68235296, 0.98039216, 1)
-sky_horizon_color = Color(0.7411765, 0.8901961, 1, 1)
-ground_bottom_color = Color(0.14901961, 0.27450982, 0.4117647, 1)
-ground_horizon_color = Color(0.45490196, 0.6901961, 0.9019608, 1)
-sun_angle_max = 22.0
+sky_top_color = Color(0.23, 0.55, 0.9, 1)
+sky_horizon_color = Color(0.78, 0.9, 1, 1)
+ground_bottom_color = Color(0.29, 0.34, 0.39, 1)
+ground_horizon_color = Color(0.56, 0.67, 0.74, 1)
+sun_angle_max = 18.0
 
 [sub_resource type="Sky" id="Sky_sky"]
 sky_material = SubResource("ProceduralSkyMaterial_sky")
@@ -20,26 +20,18 @@ sky_material = SubResource("ProceduralSkyMaterial_sky")
 background_mode = 2
 sky = SubResource("Sky_sky")
 ambient_light_source = 3
-ambient_light_sky_contribution = 0.6
+ambient_light_sky_contribution = 0.52
 reflected_light_source = 2
 tonemap_mode = 2
-tonemap_exposure = 1.18
-ssao_enabled = true
-ssil_enabled = true
+tonemap_exposure = 1.06
 fog_mode = 1
-fog_sun_scatter = 0.08
-fog_density = 0.095
-fog_aerial_perspective = 0.72
-fog_sky_affect = 0.72
-fog_depth_curve = 2.2
-fog_depth_end = 64.0
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_moon"]
-transparency = 1
-no_depth_test = true
-shading_mode = 0
-albedo_color = Color(0.92, 0.95, 1, 1)
-billboard_mode = 1
+fog_sun_scatter = 0.02
+fog_density = 0.055
+fog_aerial_perspective = 0.86
+fog_sky_affect = 0.92
+fog_depth_begin = 56.0
+fog_depth_curve = 1.6
+fog_depth_end = 260.0
 
 [node name="Game" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")
@@ -54,37 +46,15 @@ TrackedCharacterPath = NodePath("../Player")
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1986201173]
 environment = SubResource("Environment_main")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=126458690]
+[node name="SunLight" type="DirectionalLight3D" parent="." unique_id=126458690]
 transform = Transform3D(0.9223053, -0.18688592, 0.33826998, 0, 0.87529933, 0.48358154, -0.38646206, -0.4460098, 0.8072932, 0, 35, 0)
-light_color = Color(1, 0.9529412, 0.87058824, 1)
-light_energy = 1.75
-light_indirect_energy = 0.35
+light_color = Color(1, 0.95, 0.84, 1)
+light_energy = 1.65
+light_indirect_energy = 0.16
 shadow_enabled = true
 
-[node name="FillLight" type="DirectionalLight3D" parent="." unique_id=734793170]
-transform = Transform3D(0.7346276, 0.060736947, -0.6757465, 0, 0.995985, 0.08952039, 0.67847055, -0.065764144, 0.73167807, 0, 18, 0)
-light_color = Color(0.5411765, 0.6431373, 0.7372549, 1)
-light_energy = 0.22
-
-[node name="MoonLight" type="DirectionalLight3D" parent="." unique_id=943388254]
-transform = Transform3D(-0.9223053, 0.18688592, -0.33826998, 0, 0.87529933, 0.48358154, 0.38646206, 0.4460098, -0.8072932, 0, 35, 0)
-light_color = Color(0.6627451, 0.7607843, 0.98039216, 1)
-light_energy = 0.0
-light_indirect_energy = 0.0
-
-[node name="MoonVisual" type="Sprite3D" parent="." unique_id=20158377]
-transform = Transform3D(1.6, 0, 0, 0, 1.6, 0, 0, 0, 1.6, 0, 48, -140)
-material_override = SubResource("StandardMaterial3D_moon")
-modulate = Color(0.86, 0.9, 1, 0)
-pixel_size = 0.08
-axis = 1
-billboard = 1
-texture_filter = 0
-
-[node name="TimeOfDayController" type="Node" parent="." unique_id=191334561]
-script = ExtResource("6_time")
-DayLengthSeconds = 210.0
-TimeOfDay = 0.3
+[node name="OutdoorLookController" type="Node" parent="." unique_id=191334561]
+script = ExtResource("6_look")
 
 [node name="FpsOverlay" type="CanvasLayer" parent="." unique_id=1670152037]
 script = ExtResource("5_fps")
