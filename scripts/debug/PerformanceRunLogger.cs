@@ -572,11 +572,16 @@ public partial class PerformanceRunLogger : Node
                 builder.AppendLine($"PeakDetailMeshWorkerHeapDeltaKiB: {latestSnapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.00}");
                 if (latestSnapshot.SearchThrottleState == "lod_blocks")
                 {
+                    builder.AppendLine($"LodNearPlayerBubbleParentCount: {latestSnapshot.NearPlayerBubbleParentCount}");
                     builder.AppendLine($"LodRefinedParentCount: {latestSnapshot.RefinedParentCount}");
+                    builder.AppendLine($"LodRefinedSameLodBlockCount: {latestSnapshot.RefinedSameLodBlockCount}");
                     builder.AppendLine($"LodHysteresisRetainedBlockCount: {latestSnapshot.HysteresisRetainedBlockCount}");
                     builder.AppendLine($"LodBlockCreateRatePerSecond: {latestSnapshot.BlockCreateRatePerSecond:0.00}");
                     builder.AppendLine($"LodBlockReleaseRatePerSecond: {latestSnapshot.BlockReleaseRatePerSecond:0.00}");
+                    builder.AppendLine($"LodBlockSetChangeRatePerSecond: {latestSnapshot.BlockSetChangeRatePerSecond:0.00}");
                     builder.AppendLine($"LodRefinementHandoffCount: {latestSnapshot.RefinementHandoffCount}");
+                    builder.AppendLine($"LodReleaseDeferralsDueToHysteresis: {latestSnapshot.ReleaseDeferralsHysteresisCount}");
+                    builder.AppendLine($"LodReleaseDeferralsDueToCoverage: {latestSnapshot.ReleaseDeferralsCoverageCount}");
                     builder.AppendLine($"LodLastRefinementHandoff: {latestSnapshot.LastRefinementHandoffSummary}");
                     builder.AppendLine($"LodDesiredSetSummary: {latestSnapshot.LastSelectedChunkSummary}");
                 }

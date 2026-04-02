@@ -172,11 +172,18 @@ public sealed class TerrainWorldProfileSnapshot
     public string TrackedRenderDirtyBoundsSummary { get; init; } = string.Empty;
     public string TrackedCollisionDirtyBoundsSummary { get; init; } = string.Empty;
     public string TrackedCoverageStateSummary { get; init; } = string.Empty;
+    public int NearPlayerBubbleParentCount { get; init; }
     public int RefinedParentCount { get; init; }
+    public int RefinedSameLodBlockCount { get; init; }
     public int HysteresisRetainedBlockCount { get; init; }
     public double BlockCreateRatePerSecond { get; init; }
     public double BlockReleaseRatePerSecond { get; init; }
+    public double BlockSetChangeRatePerSecond { get; init; }
     public long RefinementHandoffCount { get; init; }
+    public long ReleaseDeferralsHysteresisCount { get; init; }
+    public int LastReleaseDeferralsHysteresisCount { get; init; }
+    public long ReleaseDeferralsCoverageCount { get; init; }
+    public int LastReleaseDeferralsCoverageCount { get; init; }
     public string LastSelectedChunkSummary { get; init; } = string.Empty;
     public string LastRefinementHandoffSummary { get; init; } = string.Empty;
     public string LastReleasedChunkSummary { get; init; } = string.Empty;
