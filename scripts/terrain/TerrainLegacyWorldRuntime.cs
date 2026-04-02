@@ -87,6 +87,9 @@ public partial class TerrainLegacyWorldRuntime : Node3D
     [Export] public float DetailHeight = 2.8f;
     [Export] public float CaveScale = 9.0f;
     [Export] public float CaveThreshold = 0.63f;
+    [Export] public float WaterLevel = -2.6f;
+    [Export] public float ShorelineFalloff = 3.4f;
+    [Export] public float WaterBasinInfluence = 0.48f;
     [Export] public bool UseHorizonLoadPriority = true;
     [Export] public float OccludedPriorityScale = 0.3f;
 
@@ -327,7 +330,15 @@ public partial class TerrainLegacyWorldRuntime : Node3D
         _terrainStats = new TerrainStatsTracker(EnableTerrainInstrumentation);
         _biomeClassifier = new TerrainBiomeClassifier(Seed);
         _structureSource = new TerrainStructureSource(Seed, _settings);
-        _prioritySampler = new VoxelFieldGenerator(Seed, TerrainHeight, DetailHeight, CaveScale, CaveThreshold);
+        _prioritySampler = new VoxelFieldGenerator(
+            Seed,
+            TerrainHeight,
+            DetailHeight,
+            CaveScale,
+            CaveThreshold,
+            WaterLevel,
+            ShorelineFalloff,
+            WaterBasinInfluence);
         _chunkStore = new TerrainChunkStore(Seed);
         _cacheManager = new TerrainCacheManager(_chunkStore, _terrainStats);
         _trackedCharacter = GetNodeOrNull<Node3D>(TrackedCharacterPath) ?? GetTree().GetFirstNodeInGroup("terrain_tracker") as Node3D;
@@ -1709,7 +1720,15 @@ public partial class TerrainLegacyWorldRuntime : Node3D
             key.Z * _settings.ChunkSize);
 
         VoxelChunkData generated = new(PointsPerAxis, VoxelSize, origin);
-        VoxelFieldGenerator generator = new(Seed, TerrainHeight, DetailHeight, CaveScale, CaveThreshold);
+        VoxelFieldGenerator generator = new(
+            Seed,
+            TerrainHeight,
+            DetailHeight,
+            CaveScale,
+            CaveThreshold,
+            WaterLevel,
+            ShorelineFalloff,
+            WaterBasinInfluence);
         generator.FillChunk(generated);
         return generated;
     }

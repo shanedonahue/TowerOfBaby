@@ -10,6 +10,9 @@ public sealed class TerrainMesher
     private readonly float _detailHeight;
     private readonly float _caveScale;
     private readonly float _caveThreshold;
+    private readonly float _waterLevel;
+    private readonly float _shorelineFalloff;
+    private readonly float _waterBasinInfluence;
     private readonly VoxelFieldGenerator _surfaceSampler;
     private readonly VoxelMeshBuildOptions _meshOptions;
 
@@ -21,6 +24,9 @@ public sealed class TerrainMesher
         _detailHeight = config.DetailHeight;
         _caveScale = config.CaveScale;
         _caveThreshold = config.CaveThreshold;
+        _waterLevel = config.WaterLevel;
+        _shorelineFalloff = config.ShorelineFalloff;
+        _waterBasinInfluence = config.WaterBasinInfluence;
         _surfaceSampler = CreateFieldGenerator();
         _meshOptions = new VoxelMeshBuildOptions(
             config.GenerateTangents,
@@ -56,6 +62,9 @@ public sealed class TerrainMesher
             _terrainHeight,
             _detailHeight,
             _caveScale,
-            _caveThreshold);
+            _caveThreshold,
+            _waterLevel,
+            _shorelineFalloff,
+            _waterBasinInfluence);
     }
 }

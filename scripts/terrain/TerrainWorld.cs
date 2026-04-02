@@ -20,6 +20,9 @@ public partial class TerrainWorld : Node3D
     [Export] public float DetailHeight = 2.8f;
     [Export] public float CaveScale = 9.0f;
     [Export] public float CaveThreshold = 0.63f;
+    [Export] public float WaterLevel = -2.6f;
+    [Export] public float ShorelineFalloff = 3.4f;
+    [Export] public float WaterBasinInfluence = 0.48f;
 
     [ExportGroup("Brush")]
     [Export] public float BrushRadius = 2.4f;

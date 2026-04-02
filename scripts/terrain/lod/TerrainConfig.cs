@@ -12,6 +12,9 @@ public sealed class TerrainConfig
     public float DetailHeight { get; init; }
     public float CaveScale { get; init; }
     public float CaveThreshold { get; init; }
+    public float WaterLevel { get; init; }
+    public float ShorelineFalloff { get; init; }
+    public float WaterBasinInfluence { get; init; }
     public int CoarseRadiusXZ { get; init; } = 1;
     public int VerticalRadius { get; init; }
     public int FieldBuildsPerFrame { get; init; } = 4;

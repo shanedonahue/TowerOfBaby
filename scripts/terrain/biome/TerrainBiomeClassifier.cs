@@ -72,9 +72,14 @@ public sealed class TerrainBiomeClassifier
 
     public TerrainBiomeSample SampleWorldPosition(Vector3 worldPosition)
     {
+        return SampleWorldPosition(worldPosition.X, worldPosition.Z);
+    }
+
+    public TerrainBiomeSample SampleWorldPosition(float worldX, float worldZ)
+    {
         float warpStrength = 38.0f;
-        float sampleX = worldPosition.X + (_warpNoiseX.GetNoise2D(worldPosition.X, worldPosition.Z) * warpStrength);
-        float sampleZ = worldPosition.Z + (_warpNoiseZ.GetNoise2D(worldPosition.X, worldPosition.Z) * warpStrength);
+        float sampleX = worldX + (_warpNoiseX.GetNoise2D(worldX, worldZ) * warpStrength);
+        float sampleZ = worldZ + (_warpNoiseZ.GetNoise2D(worldX, worldZ) * warpStrength);
 
         float heat = NoiseToUnit(_temperatureNoise.GetNoise2D(sampleX, sampleZ));
         float moisture = NoiseToUnit(_moistureNoise.GetNoise2D(sampleX, sampleZ));
