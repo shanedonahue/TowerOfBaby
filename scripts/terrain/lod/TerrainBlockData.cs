@@ -26,6 +26,7 @@ public sealed class TerrainBlockData
     public int TriangleCount { get; private set; }
     public VoxelChunkData Field { get; private set; }
     public VoxelMeshBuildResult Mesh { get; private set; } = VoxelMeshBuildResult.Empty;
+    public double ReleaseEligibleAtSeconds { get; private set; }
 
     public void SetField(VoxelChunkData field)
     {
@@ -44,13 +45,28 @@ public sealed class TerrainBlockData
     {
         Field = null;
         Mesh = VoxelMeshBuildResult.Empty;
+        Desired = true;
+        ReleaseEligibleAtSeconds = 0.0;
         State = TerrainBlockState.Visible;
     }
 
-    public void MarkReleasable()
+    public void RestoreVisibility()
+    {
+        Desired = true;
+        ReleaseEligibleAtSeconds = 0.0;
+        State = TerrainBlockState.Visible;
+    }
+
+    public void MarkReleasable(double releaseEligibleAtSeconds)
     {
         Desired = false;
+        ReleaseEligibleAtSeconds = releaseEligibleAtSeconds;
         State = TerrainBlockState.Releasable;
+    }
+
+    public bool IsHeldForRelease(double nowSeconds)
+    {
+        return State == TerrainBlockState.Releasable && nowSeconds < ReleaseEligibleAtSeconds;
     }
 
     public void CancelPendingData()

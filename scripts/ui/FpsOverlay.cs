@@ -302,11 +302,16 @@ public partial class FpsOverlay : CanvasLayer
         {
             _detailBuilder.AppendLine(
                 $"Terrain init {snapshot.InitialLoadProgress * 100.0f:0}%  desired {snapshot.DesiredChunkCount}  visible {snapshot.ActiveChunkCount}  release {snapshot.ToReleaseCount}");
+            _detailBuilder.AppendLine(
+                $"Refine parents {snapshot.RefinedParentCount}  held {snapshot.HysteresisRetainedBlockCount}  handoffs {snapshot.RefinementHandoffCount}");
+            _detailBuilder.AppendLine(
+                $"Churn create/release {snapshot.BlockCreateRatePerSecond:0.0}/{snapshot.BlockReleaseRatePerSecond:0.0} per s");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
             _detailBuilder.AppendLine($"Viewer {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
             _detailBuilder.AppendLine($"Lifecycle {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
             _detailBuilder.AppendLine($"LOD {TrimForOverlay(snapshot.TrackedCoverageStateSummary, 84)}");
             _detailBuilder.AppendLine($"Select {TrimForOverlay(snapshot.LastSelectedChunkSummary, 84)}");
+            _detailBuilder.AppendLine($"Handoff {TrimForOverlay(snapshot.LastRefinementHandoffSummary, 84)}");
             _detailBuilder.AppendLine($"Latest {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
             _detailBuilder.AppendLine($"Release {TrimForOverlay(snapshot.LastReleasedChunkSummary, 84)}");
         }

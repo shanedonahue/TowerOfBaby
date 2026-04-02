@@ -13,6 +13,11 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "1,4,1")] public int CoarseRadiusXZ = 1;
     [Export(PropertyHint.Range, "0,2,1")] public int VerticalRadius;
 
+    [ExportGroup("Refinement Stability")]
+    [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float RefinedParentOverlapFraction = 0.18f;
+    [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float CenterSwitchHysteresisFraction = 0.20f;
+    [Export(PropertyHint.Range, "0.00,2.00,0.01")] public float BlockReleaseHysteresisSeconds = 0.40f;
+
     [ExportGroup("Scheduler")]
     [Export(PropertyHint.Range, "1,16,1")] public int FieldBuildsPerFrame = 4;
     [Export(PropertyHint.Range, "1,16,1")] public int MeshBuildsPerFrame = 4;
@@ -21,9 +26,12 @@ public partial class TerrainLodManager : Node3D
     [Export] public bool GenerateCollisionForCoarseLods;
 
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
+    private readonly HashSet<TerrainBlockId> _refinedParents = new();
     private readonly HashSet<TerrainBlockId> _startupBlocks = new();
     private readonly HashSet<TerrainBlockId> _startupSatisfiedBlocks = new();
     private readonly StringBuilder _debugBuilder = new();
+    private readonly Queue<double> _recentCreationTimes = new();
+    private readonly Queue<double> _recentReleaseTimes = new();
 
     private TerrainConfig _config = null!;
     private TerrainMesher _mesher = null!;
@@ -31,16 +39,24 @@ public partial class TerrainLodManager : Node3D
     private TerrainWorld _terrainWorld = null!;
     private Node3D _trackedCharacter = null!;
     private TerrainBlockId _currentCenterParent;
+    private TerrainBlockId _currentViewerParent;
     private Vector3 _lastViewerPosition;
+    private double _currentTimeSeconds;
     private string _lastSelectionSummary = "waiting_for_viewer";
+    private string _lastRefinementHandoffSummary = "none";
     private string _lastReleaseSummary = "none";
     private string _lastCommitSummary = "none";
     private bool _selectionInitialized;
     private bool _initialLoadComplete;
+    private int _lastDesiredBlockCount;
+    private int _hysteresisRetainedBlockCount;
     private int _lastFieldBuildCount;
     private int _lastMeshBuildCount;
     private int _lastCommitCount;
     private int _lastReleaseCount;
+    private double _blockCreateRatePerSecond;
+    private double _blockReleaseRatePerSecond;
+    private long _refinementHandoffCount;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -56,9 +72,11 @@ public partial class TerrainLodManager : Node3D
 
     public override void _Process(double delta)
     {
+        _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
         _trackedCharacter ??= ResolveTrackedCharacter();
         if (_trackedCharacter == null)
         {
+            RefreshLifecycleRates();
             _latestProfileSnapshot = BuildProfileSnapshot();
             return;
         }
@@ -74,6 +92,7 @@ public partial class TerrainLodManager : Node3D
         ProcessMeshBuilds();
         ProcessCommits();
         ProcessReleases();
+        RefreshLifecycleRates();
         UpdateInitialLoadState();
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
@@ -90,6 +109,7 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.AppendLine($"LOD0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  LOD1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}");
         _debugBuilder.AppendLine(_lastSelectionSummary);
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
+        _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
         _debugBuilder.Append($"Latest {(_lastCommitSummary == string.Empty ? "none" : _lastCommitSummary)}");
         return _debugBuilder.ToString();
     }
@@ -150,14 +170,14 @@ public partial class TerrainLodManager : Node3D
 
     private void UpdateDesiredBlocks(Vector3 viewerPosition)
     {
-        TerrainBlockId centerParent = ComputeCenterParent(viewerPosition);
-        if (_selectionInitialized && centerParent.Equals(_currentCenterParent))
-        {
-            return;
-        }
+        TerrainBlockId viewerParent = ComputeCenterParent(viewerPosition);
+        TerrainBlockId centerParent = ResolveSelectionCenterParent(viewerPosition, viewerParent);
+        HashSet<TerrainBlockId> refinedParents = BuildRefinedParents(viewerPosition, centerParent);
+        HashSet<TerrainBlockId> desired = BuildDesiredSet(centerParent, refinedParents);
 
+        _currentViewerParent = viewerParent;
         _currentCenterParent = centerParent;
-        HashSet<TerrainBlockId> desired = BuildDesiredSet(centerParent);
+        _lastDesiredBlockCount = desired.Count;
         if (!_selectionInitialized)
         {
             _startupBlocks.Clear();
@@ -166,7 +186,21 @@ public partial class TerrainLodManager : Node3D
             {
                 _startupBlocks.Add(blockId);
             }
+            _refinedParents.Clear();
+            foreach (TerrainBlockId parent in refinedParents)
+            {
+                _refinedParents.Add(parent);
+            }
             _selectionInitialized = true;
+        }
+        else if (!_refinedParents.SetEquals(refinedParents))
+        {
+            RecordRefinementHandoff(refinedParents);
+            _refinedParents.Clear();
+            foreach (TerrainBlockId parent in refinedParents)
+            {
+                _refinedParents.Add(parent);
+            }
         }
 
         List<TerrainBlockId> releaseNow = new();
@@ -178,14 +212,15 @@ public partial class TerrainLodManager : Node3D
                 block.Desired = true;
                 if (block.State == TerrainBlockState.Releasable)
                 {
-                    block.State = TerrainBlockState.Visible;
+                    block.RestoreVisibility();
                 }
                 continue;
             }
 
             if (block.State == TerrainBlockState.Visible)
             {
-                block.MarkReleasable();
+                // Hold outgoing visuals briefly so the incoming side can become ready without immediate free/recreate churn.
+                block.MarkReleasable(_currentTimeSeconds + Mathf.Max(0.0f, BlockReleaseHysteresisSeconds));
             }
             else if (block.State == TerrainBlockState.Releasable)
             {
@@ -212,7 +247,13 @@ public partial class TerrainLodManager : Node3D
             CreateBlock(blockId);
         }
 
-        _lastSelectionSummary = BuildSelectionSummary(centerParent, desired.Count);
+        _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
+        _lastSelectionSummary = BuildSelectionSummary(
+            centerParent,
+            viewerParent,
+            desired.Count,
+            refinedParents,
+            _hysteresisRetainedBlockCount);
     }
 
     private TerrainBlockId ComputeCenterParent(Vector3 viewerPosition)
@@ -224,11 +265,107 @@ public partial class TerrainLodManager : Node3D
         return TerrainMetrics.GetBlockForWorldPosition(_config, 1, anchor);
     }
 
-    private HashSet<TerrainBlockId> BuildDesiredSet(TerrainBlockId centerParent)
+    private TerrainBlockId ResolveSelectionCenterParent(Vector3 viewerPosition, TerrainBlockId viewerParent)
+    {
+        if (!_selectionInitialized)
+        {
+            return viewerParent;
+        }
+
+        if (viewerParent.Index.Y != _currentCenterParent.Index.Y)
+        {
+            return viewerParent;
+        }
+
+        float parentSpan = TerrainMetrics.GetBlockSpan(_config, 1);
+        float hysteresis = Mathf.Clamp(CenterSwitchHysteresisFraction, 0.0f, 0.49f) * parentSpan;
+        Vector3 origin = TerrainMetrics.GetBlockOrigin(_config, _currentCenterParent);
+        float maxX = origin.X + parentSpan;
+        float maxZ = origin.Z + parentSpan;
+        // Let the coarse-ring center trail the raw viewer parent slightly so parent-border crossings do not
+        // swap the refined island on the exact boundary.
+        bool outsideStableBounds =
+            viewerPosition.X < (origin.X - hysteresis) ||
+            viewerPosition.X > (maxX + hysteresis) ||
+            viewerPosition.Z < (origin.Z - hysteresis) ||
+            viewerPosition.Z > (maxZ + hysteresis);
+        return outsideStableBounds ? viewerParent : _currentCenterParent;
+    }
+
+    private HashSet<TerrainBlockId> BuildRefinedParents(Vector3 viewerPosition, TerrainBlockId centerParent)
+    {
+        HashSet<TerrainBlockId> refinedParents = new() { centerParent };
+        float parentSpan = TerrainMetrics.GetBlockSpan(_config, centerParent.Lod);
+        float overlap = Mathf.Clamp(RefinedParentOverlapFraction, 0.0f, 0.49f) * parentSpan;
+        if (overlap <= 0.0f)
+        {
+            return refinedParents;
+        }
+
+        Vector3 origin = TerrainMetrics.GetBlockOrigin(_config, centerParent);
+        float maxX = origin.X + parentSpan;
+        float maxZ = origin.Z + parentSpan;
+        bool nearNegX = viewerPosition.X <= (origin.X + overlap);
+        bool nearPosX = viewerPosition.X >= (maxX - overlap);
+        bool nearNegZ = viewerPosition.Z <= (origin.Z + overlap);
+        bool nearPosZ = viewerPosition.Z >= (maxZ - overlap);
+
+        if (nearNegX)
+        {
+            AddRefinedParent(refinedParents, centerParent, -1, 0);
+        }
+
+        if (nearPosX)
+        {
+            AddRefinedParent(refinedParents, centerParent, 1, 0);
+        }
+
+        if (nearNegZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, 0, -1);
+        }
+
+        if (nearPosZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, 0, 1);
+        }
+
+        if (nearNegX && nearNegZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, -1, -1);
+        }
+
+        if (nearNegX && nearPosZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, -1, 1);
+        }
+
+        if (nearPosX && nearNegZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, 1, -1);
+        }
+
+        if (nearPosX && nearPosZ)
+        {
+            AddRefinedParent(refinedParents, centerParent, 1, 1);
+        }
+
+        return refinedParents;
+    }
+
+    private static void AddRefinedParent(HashSet<TerrainBlockId> refinedParents, TerrainBlockId centerParent, int xOffset, int zOffset)
+    {
+        refinedParents.Add(new TerrainBlockId(
+            centerParent.Lod,
+            centerParent.Index + new Vector3I(xOffset, 0, zOffset)));
+    }
+
+    private HashSet<TerrainBlockId> BuildDesiredSet(TerrainBlockId centerParent, IReadOnlySet<TerrainBlockId> refinedParents)
     {
         HashSet<TerrainBlockId> desired = new();
 
-        // Current policy: keep a tiny LOD1 ring and refine only the viewer's parent block into its eight LOD0 children.
+        // Keep a small stable LOD1 ring around the viewer, then overlap neighboring parents near borders so
+        // refinement hands off gradually instead of flipping from one parent block to the next in a single frame.
         for (int z = -_config.CoarseRadiusXZ; z <= _config.CoarseRadiusXZ; z++)
         {
             for (int y = -_config.VerticalRadius; y <= _config.VerticalRadius; y++)
@@ -238,7 +375,7 @@ public partial class TerrainLodManager : Node3D
                     TerrainBlockId coarseBlock = new(
                         1,
                         centerParent.Index + new Vector3I(x, y, z));
-                    if (coarseBlock.Equals(centerParent))
+                    if (refinedParents.Contains(coarseBlock))
                     {
                         foreach (TerrainBlockId child in TerrainMetrics.GetChildren(coarseBlock))
                         {
@@ -261,6 +398,7 @@ public partial class TerrainLodManager : Node3D
         renderer.Initialize(blockId, TerrainMetrics.GetBlockOrigin(_config, blockId));
         AddChild(renderer);
         _blocks[blockId] = new TerrainBlockData(blockId, renderer);
+        _recentCreationTimes.Enqueue(_currentTimeSeconds);
     }
 
     private void ProcessFieldBuilds()
@@ -321,6 +459,11 @@ public partial class TerrainLodManager : Node3D
                 break;
             }
 
+            if (block.IsHeldForRelease(_currentTimeSeconds))
+            {
+                continue;
+            }
+
             ReleaseBlock(block.Id, "fell_outside_desired_set");
         }
     }
@@ -340,7 +483,65 @@ public partial class TerrainLodManager : Node3D
         block.CancelPendingData();
         block.Renderer.QueueFree();
         _lastReleaseCount++;
+        _recentReleaseTimes.Enqueue(_currentTimeSeconds);
         _lastReleaseSummary = $"{blockId} {reason}";
+    }
+
+    private void RecordRefinementHandoff(IReadOnlySet<TerrainBlockId> nextRefinedParents)
+    {
+        List<TerrainBlockId> added = new();
+        foreach (TerrainBlockId parent in nextRefinedParents)
+        {
+            if (!_refinedParents.Contains(parent))
+            {
+                added.Add(parent);
+            }
+        }
+
+        List<TerrainBlockId> removed = new();
+        foreach (TerrainBlockId parent in _refinedParents)
+        {
+            if (!nextRefinedParents.Contains(parent))
+            {
+                removed.Add(parent);
+            }
+        }
+
+        _refinementHandoffCount++;
+        _lastRefinementHandoffSummary =
+            $"handoff {_refinementHandoffCount} center {_currentCenterParent} -> raw {_currentViewerParent} " +
+            $"+{BuildBlockListSummary(added)} -{BuildBlockListSummary(removed)}";
+    }
+
+    private void RefreshLifecycleRates()
+    {
+        PruneEventQueue(_recentCreationTimes);
+        PruneEventQueue(_recentReleaseTimes);
+        _blockCreateRatePerSecond = _recentCreationTimes.Count;
+        _blockReleaseRatePerSecond = _recentReleaseTimes.Count;
+        _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
+    }
+
+    private void PruneEventQueue(Queue<double> timestamps)
+    {
+        while (timestamps.Count > 0 && (_currentTimeSeconds - timestamps.Peek()) > 1.0)
+        {
+            timestamps.Dequeue();
+        }
+    }
+
+    private int CountHysteresisRetainedBlocks()
+    {
+        int retained = 0;
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (block.IsHeldForRelease(_currentTimeSeconds))
+            {
+                retained++;
+            }
+        }
+
+        return retained;
     }
 
     private List<TerrainBlockData> GetOrderedBlocks(TerrainBlockState state, bool farthestFirst = false)
@@ -470,7 +671,8 @@ public partial class TerrainLodManager : Node3D
             ? "viewer missing"
             : $"viewer {_lastViewerPosition.X:0.0},{_lastViewerPosition.Y:0.0},{_lastViewerPosition.Z:0.0}";
         string lodSummary =
-            $"lod0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  lod1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}  center {_currentCenterParent}";
+            $"lod0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  lod1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}  " +
+            $"raw {_currentViewerParent}  center {_currentCenterParent}  overlap {RefinedParentOverlapFraction:0.00}  switch {CenterSwitchHysteresisFraction:0.00}";
 
         return new TerrainWorldProfileSnapshot
         {
@@ -478,7 +680,7 @@ public partial class TerrainLodManager : Node3D
             ActiveChunkCount = visible,
             ResidentChunkCount = _blocks.Count,
             LoadedChunkCount = fieldReady + meshReady + visible + releasable,
-            DesiredChunkCount = _blocks.Count - releasable,
+            DesiredChunkCount = _lastDesiredBlockCount,
             PendingLoadCount = requested,
             PreparedChunkCount = fieldReady,
             PendingMeshBuildCount = fieldReady,
@@ -489,12 +691,18 @@ public partial class TerrainLodManager : Node3D
             LastChunkActivationCount = _lastCommitCount,
             LastVisualRebuildCount = _lastCommitCount,
             LastChunkReleaseCount = _lastReleaseCount,
-            MeshBackendName = "lod_blocks_v0",
+            MeshBackendName = "lod_blocks_v1",
             SearchThrottleState = "lod_blocks",
             TrackedBiomeSummary = viewerSummary,
             TrackedDetailSummary = BuildLifecycleSummary(),
             TrackedCoverageStateSummary = lodSummary,
+            RefinedParentCount = _refinedParents.Count,
+            HysteresisRetainedBlockCount = _hysteresisRetainedBlockCount,
+            BlockCreateRatePerSecond = _blockCreateRatePerSecond,
+            BlockReleaseRatePerSecond = _blockReleaseRatePerSecond,
+            RefinementHandoffCount = _refinementHandoffCount,
             LastSelectedChunkSummary = _lastSelectionSummary,
+            LastRefinementHandoffSummary = _lastRefinementHandoffSummary,
             LastReleasedChunkSummary = _lastReleaseSummary,
             LastChunkSourceSummary = _lastCommitSummary,
             InitialLoadProgress = InitialLoadProgress,
@@ -532,13 +740,50 @@ public partial class TerrainLodManager : Node3D
             }
         }
 
-        return $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}";
+        return
+            $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
+            $"hold {_hysteresisRetainedBlockCount}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
     }
 
-    private string BuildSelectionSummary(TerrainBlockId centerParent, int desiredCount)
+    private string BuildSelectionSummary(
+        TerrainBlockId centerParent,
+        TerrainBlockId viewerParent,
+        int desiredCount,
+        IReadOnlyCollection<TerrainBlockId> refinedParents,
+        int retainedBlocks)
     {
         return
-            $"center {centerParent}  ring {_config.CoarseRadiusXZ}  desired {desiredCount}  " +
-            "policy center lod1 block -> 8 lod0 children, outer ring stays lod1.";
+            $"raw {viewerParent}  center {centerParent}  ring {_config.CoarseRadiusXZ}  desired {desiredCount}  " +
+            $"refined {refinedParents.Count}:{BuildBlockListSummary(refinedParents)}  held {retainedBlocks}  " +
+            "policy stable-center + border-overlap + release-hold.";
+    }
+
+    private static string BuildBlockListSummary(IReadOnlyCollection<TerrainBlockId> blockIds)
+    {
+        if (blockIds.Count == 0)
+        {
+            return "none";
+        }
+
+        List<TerrainBlockId> ordered = new(blockIds);
+        ordered.Sort(CompareBlockIds);
+
+        StringBuilder builder = new();
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append('|');
+            }
+
+            TerrainBlockId blockId = ordered[i];
+            builder.Append(blockId.Index.X);
+            builder.Append(',');
+            builder.Append(blockId.Index.Y);
+            builder.Append(',');
+            builder.Append(blockId.Index.Z);
+        }
+
+        return builder.ToString();
     }
 }

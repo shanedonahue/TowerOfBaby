@@ -570,6 +570,16 @@ public partial class PerformanceRunLogger : Node
                 builder.AppendLine($"PeakCoarseMeshWorkerHeapDeltaKiB: {latestSnapshot.PeakCoarseMeshWorkerHeapDeltaKiB:0.00}");
                 builder.AppendLine($"AverageDetailMeshWorkerHeapDeltaKiB: {latestSnapshot.AverageDetailMeshWorkerHeapDeltaKiB:0.00}");
                 builder.AppendLine($"PeakDetailMeshWorkerHeapDeltaKiB: {latestSnapshot.PeakDetailMeshWorkerHeapDeltaKiB:0.00}");
+                if (latestSnapshot.SearchThrottleState == "lod_blocks")
+                {
+                    builder.AppendLine($"LodRefinedParentCount: {latestSnapshot.RefinedParentCount}");
+                    builder.AppendLine($"LodHysteresisRetainedBlockCount: {latestSnapshot.HysteresisRetainedBlockCount}");
+                    builder.AppendLine($"LodBlockCreateRatePerSecond: {latestSnapshot.BlockCreateRatePerSecond:0.00}");
+                    builder.AppendLine($"LodBlockReleaseRatePerSecond: {latestSnapshot.BlockReleaseRatePerSecond:0.00}");
+                    builder.AppendLine($"LodRefinementHandoffCount: {latestSnapshot.RefinementHandoffCount}");
+                    builder.AppendLine($"LodLastRefinementHandoff: {latestSnapshot.LastRefinementHandoffSummary}");
+                    builder.AppendLine($"LodDesiredSetSummary: {latestSnapshot.LastSelectedChunkSummary}");
+                }
             }
             builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");
             builder.AppendLine($"LocomotionRightStepCount: {rightStepCount}");
