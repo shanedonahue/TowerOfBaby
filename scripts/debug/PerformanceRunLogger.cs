@@ -92,10 +92,6 @@ public partial class PerformanceRunLogger : Node
         _sampleMaxFrameMs = Mathf.Max(_sampleMaxFrameMs, frameMs);
         _sampleFrameCount++;
 
-        int fps = (int)Engine.GetFramesPerSecond();
-        _minFps = Mathf.Min(_minFps, fps);
-        _maxFps = Mathf.Max(_maxFps, fps);
-
         TerrainWorldProfileSnapshot snapshot = _terrainWorld?.GetProfileSnapshot();
         _locomotionTelemetrySource ??= ResolveLocomotionTelemetrySource();
         LocomotionTelemetrySnapshot locomotionSnapshot = _locomotionTelemetrySource?.GetLocomotionTelemetrySnapshot();
@@ -151,6 +147,9 @@ public partial class PerformanceRunLogger : Node
         float sampleAverageFrameMs = _sampleFrameCount > 0
             ? (float)(_sampleFrameMsAccum / _sampleFrameCount)
             : 0.0f;
+        int sampleFps = Mathf.RoundToInt(FrameMsToFps(sampleAverageFrameMs));
+        _minFps = Mathf.Min(_minFps, sampleFps);
+        _maxFps = Mathf.Max(_maxFps, sampleFps);
         MemoryUsageSnapshot memory = CaptureMemoryUsage();
         int gen0CollectionCount = GC.CollectionCount(0);
         int gen1CollectionCount = GC.CollectionCount(1);
@@ -175,7 +174,7 @@ public partial class PerformanceRunLogger : Node
             : snapshot.LowPriorityDeferredMeshBuildCount - _previousLowPriorityDeferredMeshBuildCount;
         SamplePoint sample = new(
             _elapsedSeconds,
-            fps,
+            sampleFps,
             sampleAverageFrameMs,
             _sampleMaxFrameMs,
             memory.WorkingSetMiB,
@@ -322,7 +321,6 @@ public partial class PerformanceRunLogger : Node
 
         if (_samples.Count > 0)
         {
-            double averageFps = 0.0;
             TerrainWorldProfileSnapshot latestSnapshot = null;
             int peakLoadedChunks = 0;
             int peakActiveChunks = 0;
@@ -393,6 +391,7 @@ public partial class PerformanceRunLogger : Node
             long peakPressureModeActiveFrames = 0;
             int peakPressureModeActivationCount = 0;
             float averageFrameMs = ComputeAverageFrameMs();
+            float averageFps = FrameMsToFps(averageFrameMs);
             float p95FrameMs = ComputePercentileFrameMs(0.95f);
             float maxFrameMs = ComputePercentileFrameMs(1.0f);
             float peakFootSkate = 0.0f;
@@ -403,7 +402,6 @@ public partial class PerformanceRunLogger : Node
 
             foreach (SamplePoint sample in _samples)
             {
-                averageFps += sample.Fps;
                 if (sample.LocomotionSnapshot != null)
                 {
                     peakFootSkate = Mathf.Max(
@@ -491,7 +489,6 @@ public partial class PerformanceRunLogger : Node
                 totalGen2Collections += sample.Gen2CollectionsDelta;
             }
 
-            averageFps /= _samples.Count;
             builder.AppendLine($"AvgFPS: {averageFps:0.00}");
             builder.AppendLine($"AvgFrameMs: {averageFrameMs:0.00}");
             builder.AppendLine($"P95FrameMs: {p95FrameMs:0.00}");
@@ -742,6 +739,13 @@ public partial class PerformanceRunLogger : Node
         sorted.Sort();
         int index = Mathf.Clamp(Mathf.CeilToInt((sorted.Count - 1) * percentile), 0, sorted.Count - 1);
         return sorted[index];
+    }
+
+    private static float FrameMsToFps(float frameMs)
+    {
+        return frameMs > Mathf.Epsilon
+            ? 1000.0f / frameMs
+            : 0.0f;
     }
 
     private static MemoryUsageSnapshot CaptureMemoryUsage()

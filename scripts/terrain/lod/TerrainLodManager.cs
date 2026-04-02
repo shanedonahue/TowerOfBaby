@@ -7,6 +7,14 @@ namespace TowerOfBaby.Terrain;
 
 public partial class TerrainLodManager : Node3D
 {
+    private const int MaxCreateBlocksPerFrame = 32;
+    private const int MaxDispatchStepsPerFrame = 16;
+    private const int MaxFieldBuildsPerFrame = 16;
+    private const int MaxMeshBuildsPerFrame = 16;
+    private const int MaxCommitsPerFrame = 16;
+    private const int MaxReleasesPerFrame = 32;
+    private const int MaxRefinedParentTransitionsPerFrame = 8;
+
     [Signal] public delegate void InitialLoadCompletedEventHandler();
 
     [ExportGroup("LOD Policy")]
@@ -18,6 +26,7 @@ public partial class TerrainLodManager : Node3D
 
     [ExportGroup("Refinement Stability")]
     [Export(PropertyHint.Range, "0,2,1")] public int SameLodBubbleRadiusXZ = 1;
+    [Export(PropertyHint.Range, "1,8,1")] public int CollisionSafetyRadiusXZ = 3;
     [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float BubbleMovePaddingFraction = 0.20f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float BlockReleaseHysteresisSeconds = 0.70f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float RefinedBlockReleaseExtraSeconds = 0.45f;
@@ -25,10 +34,12 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentDemotionsPerFrame = 1;
 
     [ExportGroup("Scheduler")]
-    [Export(PropertyHint.Range, "1,16,1")] public int FieldBuildsPerFrame = 4;
-    [Export(PropertyHint.Range, "1,16,1")] public int MeshBuildsPerFrame = 4;
-    [Export(PropertyHint.Range, "1,16,1")] public int CommitsPerFrame = 4;
-    [Export(PropertyHint.Range, "1,32,1")] public int ReleasesPerFrame = 8;
+    [Export(PropertyHint.Range, "1,16,1")] public int DispatchStepsPerFrame = 5;
+    [Export(PropertyHint.Range, "1,32,1")] public int CreateBlocksPerFrame = 2;
+    [Export(PropertyHint.Range, "1,16,1")] public int FieldBuildsPerFrame = 1;
+    [Export(PropertyHint.Range, "1,16,1")] public int MeshBuildsPerFrame = 1;
+    [Export(PropertyHint.Range, "1,16,1")] public int CommitsPerFrame = 2;
+    [Export(PropertyHint.Range, "1,32,1")] public int ReleasesPerFrame = 2;
     [Export] public bool GenerateCollisionForCoarseLods;
 
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
@@ -41,6 +52,16 @@ public partial class TerrainLodManager : Node3D
     private readonly Queue<double> _recentCreationTimes = new();
     private readonly Queue<double> _recentReleaseTimes = new();
     private readonly Queue<double> _recentDesiredSetChangeTimes = new();
+    private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _createDispatcherQueue = new();
+    private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _fieldBuildDispatcherQueue = new();
+    private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _meshBuildDispatcherQueue = new();
+    private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _commitDispatcherQueue = new();
+    private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _releaseDispatcherQueue = new();
+    private readonly Dictionary<TerrainBlockId, int> _createDispatchTokens = new();
+    private readonly Dictionary<TerrainBlockId, int> _fieldBuildDispatchTokens = new();
+    private readonly Dictionary<TerrainBlockId, int> _meshBuildDispatchTokens = new();
+    private readonly Dictionary<TerrainBlockId, int> _commitDispatchTokens = new();
+    private readonly Dictionary<TerrainBlockId, int> _releaseDispatchTokens = new();
 
     private TerrainConfig _config = null!;
     private TerrainMesher _mesher = null!;
@@ -49,6 +70,7 @@ public partial class TerrainLodManager : Node3D
     private Node3D _trackedCharacter = null!;
     private TerrainBlockId _currentCenterParent;
     private TerrainBlockId _targetCenterParent;
+    private TerrainBlockId _pendingBoundaryShiftCenterParent;
     private TerrainBlockId _currentViewerParent;
     private Vector3 _lastViewerPosition;
     private double _currentTimeSeconds;
@@ -58,6 +80,8 @@ public partial class TerrainLodManager : Node3D
     private string _lastCommitSummary = "none";
     private bool _selectionInitialized;
     private bool _initialLoadComplete;
+    private bool _boundaryShiftStepActive;
+    private bool _boundaryShiftAwaitingDemotions;
     private int _lastDesiredBlockCount;
     private int _lastDesiredSetChangeCount;
     private int _hysteresisRetainedBlockCount;
@@ -68,18 +92,26 @@ public partial class TerrainLodManager : Node3D
     private int _lastDemotedParentCount;
     private int _pendingPromotionParentCount;
     private int _pendingDemotionParentCount;
+    private int _lastCreateCount;
     private int _lastFieldBuildCount;
     private int _lastMeshBuildCount;
     private int _lastCommitCount;
+    private int _lastCollisionCount;
     private int _lastReleaseCount;
     private int _lastReleaseHysteresisDeferralCount;
     private int _lastReleaseCoverageDeferralCount;
+    private double _lastFieldBuildMs;
+    private double _lastMeshBuildMs;
+    private double _lastCommitMs;
+    private double _lastCollisionMs;
+    private double _lastReleaseMs;
     private double _blockCreateRatePerSecond;
     private double _blockReleaseRatePerSecond;
     private double _blockSetChangeRatePerSecond;
     private long _refinementHandoffCount;
     private long _releaseHysteresisDeferralCount;
     private long _releaseCoverageDeferralCount;
+    private int _dispatchSequence;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -104,17 +136,21 @@ public partial class TerrainLodManager : Node3D
             return;
         }
 
+        _lastCreateCount = 0;
         _lastFieldBuildCount = 0;
         _lastMeshBuildCount = 0;
         _lastCommitCount = 0;
+        _lastCollisionCount = 0;
         _lastReleaseCount = 0;
+        _lastFieldBuildMs = 0.0;
+        _lastMeshBuildMs = 0.0;
+        _lastCommitMs = 0.0;
+        _lastCollisionMs = 0.0;
+        _lastReleaseMs = 0.0;
 
         _lastViewerPosition = _trackedCharacter.GlobalTransform.Origin;
         UpdateDesiredBlocks(_lastViewerPosition);
-        ProcessFieldBuilds();
-        ProcessMeshBuilds();
-        ProcessCommits();
-        ProcessReleases();
+        DispatchRuntimeWork();
         RefreshLifecycleRates();
         UpdateInitialLoadState();
         _latestProfileSnapshot = BuildProfileSnapshot();
@@ -153,10 +189,10 @@ public partial class TerrainLodManager : Node3D
                 CaveThreshold = 0.63f,
                 CoarseRadiusXZ = Mathf.Max(1, CoarseRadiusXZ),
                 VerticalRadius = Mathf.Max(0, VerticalRadius),
-                FieldBuildsPerFrame = Mathf.Max(1, FieldBuildsPerFrame),
-                MeshBuildsPerFrame = Mathf.Max(1, MeshBuildsPerFrame),
-                CommitsPerFrame = Mathf.Max(1, CommitsPerFrame),
-                ReleasesPerFrame = Mathf.Max(1, ReleasesPerFrame),
+                FieldBuildsPerFrame = Mathf.Clamp(FieldBuildsPerFrame, 1, MaxFieldBuildsPerFrame),
+                MeshBuildsPerFrame = Mathf.Clamp(MeshBuildsPerFrame, 1, MaxMeshBuildsPerFrame),
+                CommitsPerFrame = Mathf.Clamp(CommitsPerFrame, 1, MaxCommitsPerFrame),
+                ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
                 GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods
             };
         }
@@ -173,10 +209,10 @@ public partial class TerrainLodManager : Node3D
             CaveThreshold = _terrainWorld.CaveThreshold,
             CoarseRadiusXZ = Mathf.Max(1, CoarseRadiusXZ),
             VerticalRadius = Mathf.Max(0, VerticalRadius),
-            FieldBuildsPerFrame = Mathf.Max(1, FieldBuildsPerFrame),
-            MeshBuildsPerFrame = Mathf.Max(1, MeshBuildsPerFrame),
-            CommitsPerFrame = Mathf.Max(1, CommitsPerFrame),
-            ReleasesPerFrame = Mathf.Max(1, ReleasesPerFrame),
+            FieldBuildsPerFrame = Mathf.Clamp(FieldBuildsPerFrame, 1, MaxFieldBuildsPerFrame),
+            MeshBuildsPerFrame = Mathf.Clamp(MeshBuildsPerFrame, 1, MaxMeshBuildsPerFrame),
+            CommitsPerFrame = Mathf.Clamp(CommitsPerFrame, 1, MaxCommitsPerFrame),
+            ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
             GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods
         };
     }
@@ -213,6 +249,9 @@ public partial class TerrainLodManager : Node3D
                 _targetRefinedParents.Add(parent);
             }
             _selectionInitialized = true;
+            _boundaryShiftStepActive = false;
+            _boundaryShiftAwaitingDemotions = false;
+            _pendingBoundaryShiftCenterParent = _currentCenterParent;
             _lastDesiredSetChangeCount = 0;
             _lastPromotedParentCount = 0;
             _lastDemotedParentCount = 0;
@@ -245,51 +284,7 @@ public partial class TerrainLodManager : Node3D
             }
         }
 
-        RecordDesiredSetChanges(desired);
-
-        List<TerrainBlockId> releaseNow = new();
-        foreach (KeyValuePair<TerrainBlockId, TerrainBlockData> entry in _blocks)
-        {
-            TerrainBlockData block = entry.Value;
-            if (desired.Contains(block.Id))
-            {
-                block.Desired = true;
-                if (block.State == TerrainBlockState.Releasable)
-                {
-                    block.RestoreVisibility();
-                }
-                continue;
-            }
-
-            if (block.State == TerrainBlockState.Visible)
-            {
-                // Keep outgoing visuals alive long enough for the new same-LOD bubble to settle before we drop them.
-                block.MarkReleasable(_currentTimeSeconds + ComputeReleaseHoldSeconds(block.Id));
-            }
-            else if (block.State == TerrainBlockState.Releasable)
-            {
-                block.Desired = false;
-            }
-            else
-            {
-                releaseNow.Add(block.Id);
-            }
-        }
-
-        foreach (TerrainBlockId blockId in releaseNow)
-        {
-            ReleaseBlock(blockId, "dropped_before_visible");
-        }
-
-        foreach (TerrainBlockId blockId in desired)
-        {
-            if (_blocks.ContainsKey(blockId))
-            {
-                continue;
-            }
-
-            CreateBlock(blockId);
-        }
+        ApplyDesiredSetChanges(desired);
 
         _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
         _lastSelectionSummary = BuildSelectionSummary(
@@ -442,85 +437,244 @@ public partial class TerrainLodManager : Node3D
         _recentCreationTimes.Enqueue(_currentTimeSeconds);
     }
 
-    private void ProcessFieldBuilds()
+    private void DispatchRuntimeWork()
     {
-        foreach (TerrainBlockData block in GetOrderedBlocks(TerrainBlockState.Requested))
+        _lastReleaseHysteresisDeferralCount = 0;
+        _lastReleaseCoverageDeferralCount = 0;
+        int remainingDispatchSteps = Mathf.Clamp(DispatchStepsPerFrame, 1, MaxDispatchStepsPerFrame);
+        while (remainingDispatchSteps > 0)
         {
-            if (_lastFieldBuildCount >= _config.FieldBuildsPerFrame)
+            bool progressed = false;
+            if (TryProcessCommitDispatch(ref remainingDispatchSteps))
+            {
+                progressed = true;
+            }
+
+            if (remainingDispatchSteps > 0 && TryProcessMeshBuildDispatch(ref remainingDispatchSteps))
+            {
+                progressed = true;
+            }
+
+            if (remainingDispatchSteps > 0 && TryProcessFieldBuildDispatch(ref remainingDispatchSteps))
+            {
+                progressed = true;
+            }
+
+            if (remainingDispatchSteps > 0 && TryProcessCreateDispatch(ref remainingDispatchSteps))
+            {
+                progressed = true;
+            }
+
+            if (remainingDispatchSteps > 0 && TryProcessReleaseDispatch(ref remainingDispatchSteps))
+            {
+                progressed = true;
+            }
+
+            if (!progressed)
             {
                 break;
             }
+        }
+    }
 
+    private bool TryProcessCreateDispatch(ref int remainingDispatchSteps)
+    {
+        if (remainingDispatchSteps <= 0)
+        {
+            return false;
+        }
+
+        int createBudget = Mathf.Clamp(CreateBlocksPerFrame, 1, MaxCreateBlocksPerFrame);
+        if (_lastCreateCount >= createBudget)
+        {
+            return false;
+        }
+
+        while (TryDequeueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, out TerrainBlockId blockId))
+        {
+            if (_blocks.ContainsKey(blockId) || !_desiredBlocks.Contains(blockId))
+            {
+                continue;
+            }
+
+            CreateBlock(blockId);
+            _lastCreateCount++;
+            remainingDispatchSteps--;
+            EnqueueFieldBuildDispatch(blockId);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryProcessFieldBuildDispatch(ref int remainingDispatchSteps)
+    {
+        if (remainingDispatchSteps <= 0 || _lastFieldBuildCount >= _config.FieldBuildsPerFrame)
+        {
+            return false;
+        }
+
+        while (TryDequeueBlockDispatch(_fieldBuildDispatcherQueue, _fieldBuildDispatchTokens, out TerrainBlockId blockId))
+        {
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+                block.State != TerrainBlockState.Requested)
+            {
+                continue;
+            }
+
+            if (!block.Desired)
+            {
+                EnqueueReleaseDispatch(blockId);
+                continue;
+            }
+
+            ulong buildStart = Time.GetTicksUsec();
             block.SetField(_mesher.BuildField(block.Id));
+            _lastFieldBuildMs += (Time.GetTicksUsec() - buildStart) / 1000.0;
+            EnqueueMeshBuildDispatch(block.Id);
             _lastFieldBuildCount++;
+            remainingDispatchSteps--;
+            return true;
         }
+
+        return false;
     }
 
-    private void ProcessMeshBuilds()
+    private bool TryProcessMeshBuildDispatch(ref int remainingDispatchSteps)
     {
-        foreach (TerrainBlockData block in GetOrderedBlocks(TerrainBlockState.FieldReady))
+        if (remainingDispatchSteps <= 0 || _lastMeshBuildCount >= _config.MeshBuildsPerFrame)
         {
-            if (_lastMeshBuildCount >= _config.MeshBuildsPerFrame)
+            return false;
+        }
+
+        while (TryDequeueBlockDispatch(_meshBuildDispatcherQueue, _meshBuildDispatchTokens, out TerrainBlockId blockId))
+        {
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+                block.State != TerrainBlockState.FieldReady)
             {
-                break;
+                continue;
             }
 
+            if (!block.Desired)
+            {
+                EnqueueReleaseDispatch(blockId);
+                continue;
+            }
+
+            ulong buildStart = Time.GetTicksUsec();
             block.SetMesh(_mesher.BuildMesh(block.Field));
+            _lastMeshBuildMs += (Time.GetTicksUsec() - buildStart) / 1000.0;
+            EnqueueCommitDispatch(block.Id);
             _lastMeshBuildCount++;
+            remainingDispatchSteps--;
+            return true;
         }
+
+        return false;
     }
 
-    private void ProcessCommits()
+    private bool TryProcessCommitDispatch(ref int remainingDispatchSteps)
     {
-        foreach (TerrainBlockData block in GetOrderedBlocks(TerrainBlockState.MeshReady))
+        if (remainingDispatchSteps <= 0 || _lastCommitCount >= _config.CommitsPerFrame)
         {
-            if (_lastCommitCount >= _config.CommitsPerFrame)
+            return false;
+        }
+
+        while (TryDequeueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, out TerrainBlockId blockId))
+        {
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+                block.State != TerrainBlockState.MeshReady)
             {
-                break;
+                continue;
             }
 
-            // The player can step onto the coarse safety border before the next bubble handoff completes, so
-            // every visible block needs collision even if it is not part of the refined island.
-            bool includeCollision = true;
+            if (!block.Desired)
+            {
+                EnqueueReleaseDispatch(blockId);
+                continue;
+            }
+
+            // Keep collision on the refined bubble plus a nearby coarse safety band, but avoid building
+            // trimesh collision all the way out to the far horizon during a handoff.
+            bool includeCollision = ShouldIncludeCollision(block.Id);
+            ulong commitStart = Time.GetTicksUsec();
             block.Renderer.ApplyMesh(block.Mesh, includeCollision);
             block.MarkVisible();
+            double commitMs = (Time.GetTicksUsec() - commitStart) / 1000.0;
+            _lastCommitMs += commitMs;
+            if (includeCollision)
+            {
+                _lastCollisionCount++;
+                _lastCollisionMs += commitMs;
+            }
             _lastCommitCount++;
+            remainingDispatchSteps--;
             _lastCommitSummary = $"{block.Id} tri {block.TriangleCount} {(includeCollision ? "collision" : "visual_only")}";
             if (_startupBlocks.Contains(block.Id))
             {
                 _startupSatisfiedBlocks.Add(block.Id);
             }
+
+            return true;
         }
+
+        return false;
     }
 
-    private void ProcessReleases()
+    private bool TryProcessReleaseDispatch(ref int remainingDispatchSteps)
     {
-        _lastReleaseHysteresisDeferralCount = 0;
-        _lastReleaseCoverageDeferralCount = 0;
-
-        foreach (TerrainBlockData block in GetOrderedBlocks(TerrainBlockState.Releasable, farthestFirst: true))
+        if (remainingDispatchSteps <= 0 || _lastReleaseCount >= _config.ReleasesPerFrame)
         {
-            if (_lastReleaseCount >= _config.ReleasesPerFrame)
+            return false;
+        }
+
+        while (TryDequeueBlockDispatch(_releaseDispatcherQueue, _releaseDispatchTokens, out TerrainBlockId blockId))
+        {
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
             {
-                break;
+                continue;
+            }
+
+            if (block.Desired)
+            {
+                if (block.State == TerrainBlockState.Releasable)
+                {
+                    block.RestoreVisibility();
+                }
+
+                continue;
+            }
+
+            if (block.State != TerrainBlockState.Releasable)
+            {
+                ReleaseBlock(blockId, "dropped_before_visible");
+                continue;
             }
 
             if (block.IsHeldForRelease(_currentTimeSeconds))
             {
                 _lastReleaseHysteresisDeferralCount++;
                 _releaseHysteresisDeferralCount++;
-                continue;
+                EnqueueReleaseDispatch(blockId);
+                return false;
             }
 
             if (!HasReadySuccessorCoverage(block.Id))
             {
                 _lastReleaseCoverageDeferralCount++;
                 _releaseCoverageDeferralCount++;
-                continue;
+                EnqueueReleaseDispatch(blockId);
+                return false;
             }
 
+            ulong releaseStart = Time.GetTicksUsec();
             ReleaseBlock(block.Id, "fell_outside_desired_set");
+            _lastReleaseMs += (Time.GetTicksUsec() - releaseStart) / 1000.0;
+            remainingDispatchSteps--;
+            return true;
         }
+
+        return false;
     }
 
     private void ReleaseBlock(TerrainBlockId blockId, string reason)
@@ -537,6 +691,7 @@ public partial class TerrainLodManager : Node3D
 
         block.CancelPendingData();
         block.Renderer.QueueFree();
+        RemoveBlockFromDispatcherQueues(blockId);
         _lastReleaseCount++;
         _recentReleaseTimes.Enqueue(_currentTimeSeconds);
         _lastReleaseSummary = $"{blockId} {reason}";
@@ -606,46 +761,52 @@ public partial class TerrainLodManager : Node3D
         return retained;
     }
 
-    private void RecordDesiredSetChanges(IReadOnlySet<TerrainBlockId> desired)
+    private void ApplyDesiredSetChanges(IReadOnlySet<TerrainBlockId> desired)
     {
         if (_desiredBlocks.Count == 0)
         {
-            _desiredBlocks.Clear();
             foreach (TerrainBlockId blockId in desired)
             {
                 _desiredBlocks.Add(blockId);
+                HandleDesiredBlockAdded(blockId);
             }
 
             _lastDesiredSetChangeCount = 0;
             return;
         }
 
-        int changes = 0;
+        int desiredSetChangeCount = 0;
         foreach (TerrainBlockId blockId in desired)
         {
-            if (!_desiredBlocks.Contains(blockId))
+            if (_desiredBlocks.Contains(blockId))
             {
-                changes++;
-                _recentDesiredSetChangeTimes.Enqueue(_currentTimeSeconds);
+                continue;
             }
+
+            _desiredBlocks.Add(blockId);
+            HandleDesiredBlockAdded(blockId);
+            desiredSetChangeCount++;
+            _recentDesiredSetChangeTimes.Enqueue(_currentTimeSeconds);
         }
 
+        List<TerrainBlockId> removedBlocks = new();
         foreach (TerrainBlockId blockId in _desiredBlocks)
         {
             if (!desired.Contains(blockId))
             {
-                changes++;
-                _recentDesiredSetChangeTimes.Enqueue(_currentTimeSeconds);
+                removedBlocks.Add(blockId);
             }
         }
 
-        _desiredBlocks.Clear();
-        foreach (TerrainBlockId blockId in desired)
+        foreach (TerrainBlockId blockId in removedBlocks)
         {
-            _desiredBlocks.Add(blockId);
+            _desiredBlocks.Remove(blockId);
+            HandleDesiredBlockRemoved(blockId);
+            desiredSetChangeCount++;
+            _recentDesiredSetChangeTimes.Enqueue(_currentTimeSeconds);
         }
 
-        _lastDesiredSetChangeCount = changes;
+        _lastDesiredSetChangeCount = desiredSetChangeCount;
     }
 
     private double ComputeReleaseHoldSeconds(TerrainBlockId blockId)
@@ -664,44 +825,67 @@ public partial class TerrainLodManager : Node3D
         _lastPromotedParentCount = 0;
         _lastDemotedParentCount = 0;
 
+        if (!_boundaryShiftStepActive && !_currentCenterParent.Equals(_targetCenterParent))
+        {
+            _pendingBoundaryShiftCenterParent = ComputeNextCenterStep(_currentCenterParent, _targetCenterParent);
+            _boundaryShiftStepActive = !_pendingBoundaryShiftCenterParent.Equals(_currentCenterParent);
+            _boundaryShiftAwaitingDemotions = false;
+        }
+
+        if (_boundaryShiftStepActive)
+        {
+            HashSet<TerrainBlockId> pendingStepBubbleParents = BuildRefinedParents(_pendingBoundaryShiftCenterParent);
+            if (!_boundaryShiftAwaitingDemotions)
+            {
+                List<TerrainBlockId> enteringBoundaryParents = GetSortedSetDifference(
+                    pendingStepBubbleParents,
+                    _refinedParents,
+                    farthestFirst: false);
+                if (enteringBoundaryParents.Count > 0)
+                {
+                    ApplyRefinedParentPromotions(enteringBoundaryParents);
+                    _pendingPromotionParentCount = CountSetDifference(pendingStepBubbleParents, _refinedParents);
+                    _pendingDemotionParentCount = 0;
+                    return;
+                }
+
+                TerrainBlockId previousCenterParent = _currentCenterParent;
+                _currentCenterParent = _pendingBoundaryShiftCenterParent;
+                _boundaryShiftAwaitingDemotions = true;
+                RecordRefinementHandoff(
+                    previousCenterParent,
+                    _currentCenterParent,
+                    _currentViewerParent,
+                    pendingStepBubbleParents);
+                _pendingPromotionParentCount = 0;
+                _pendingDemotionParentCount = CountSetDifference(_refinedParents, pendingStepBubbleParents);
+                return;
+            }
+
+            List<TerrainBlockId> leavingBoundaryParents = GetSortedSetDifference(
+                _refinedParents,
+                pendingStepBubbleParents,
+                farthestFirst: true);
+            if (leavingBoundaryParents.Count > 0)
+            {
+                ApplyRefinedParentDemotions(leavingBoundaryParents);
+                _pendingPromotionParentCount = 0;
+                _pendingDemotionParentCount = CountSetDifference(_refinedParents, pendingStepBubbleParents);
+                return;
+            }
+
+            _boundaryShiftStepActive = false;
+            _boundaryShiftAwaitingDemotions = false;
+        }
+
         HashSet<TerrainBlockId> activeBubbleParents = BuildRefinedParents(_currentCenterParent);
-        List<TerrainBlockId> staleBoundaryParents = GetSortedSetDifference(_refinedParents, activeBubbleParents, farthestFirst: true);
-        if (staleBoundaryParents.Count > 0)
-        {
-            ApplyRefinedParentDemotions(staleBoundaryParents);
-            _pendingPromotionParentCount = 0;
-            _pendingDemotionParentCount = CountSetDifference(_refinedParents, activeBubbleParents);
-            return;
-        }
-
-        TerrainBlockId nextCenterParent = ComputeNextCenterStep(_currentCenterParent, _targetCenterParent);
-        HashSet<TerrainBlockId> nextBubbleParents = BuildRefinedParents(nextCenterParent);
-        List<TerrainBlockId> enteringBoundaryParents = GetSortedSetDifference(nextBubbleParents, _refinedParents, farthestFirst: false);
-        if (enteringBoundaryParents.Count > 0)
-        {
-            ApplyRefinedParentPromotions(enteringBoundaryParents);
-            _pendingPromotionParentCount = CountSetDifference(nextBubbleParents, _refinedParents);
-            _pendingDemotionParentCount = 0;
-            return;
-        }
-
-        if (!_currentCenterParent.Equals(nextCenterParent))
-        {
-            TerrainBlockId previousCenterParent = _currentCenterParent;
-            _currentCenterParent = nextCenterParent;
-            RecordRefinementHandoff(previousCenterParent, nextCenterParent, _currentViewerParent, nextBubbleParents);
-            _pendingPromotionParentCount = 0;
-            _pendingDemotionParentCount = CountSetDifference(_refinedParents, nextBubbleParents);
-            return;
-        }
-
         _pendingPromotionParentCount = CountSetDifference(_targetRefinedParents, _refinedParents);
-        _pendingDemotionParentCount = CountSetDifference(_refinedParents, _targetRefinedParents);
+        _pendingDemotionParentCount = CountSetDifference(_refinedParents, activeBubbleParents);
     }
 
     private void ApplyRefinedParentPromotions(IReadOnlyList<TerrainBlockId> enteringBoundaryParents)
     {
-        int promotionBudget = Mathf.Max(0, RefinedParentPromotionsPerFrame);
+        int promotionBudget = Mathf.Clamp(RefinedParentPromotionsPerFrame, 0, MaxRefinedParentTransitionsPerFrame);
         for (int i = 0; i < enteringBoundaryParents.Count && _lastPromotedParentCount < promotionBudget; i++)
         {
             _refinedParents.Add(enteringBoundaryParents[i]);
@@ -711,7 +895,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ApplyRefinedParentDemotions(IReadOnlyList<TerrainBlockId> leavingBoundaryParents)
     {
-        int demotionBudget = Mathf.Max(0, RefinedParentDemotionsPerFrame);
+        int demotionBudget = Mathf.Clamp(RefinedParentDemotionsPerFrame, 0, MaxRefinedParentTransitionsPerFrame);
         for (int i = 0; i < leavingBoundaryParents.Count && _lastDemotedParentCount < demotionBudget; i++)
         {
             _refinedParents.Remove(leavingBoundaryParents[i]);
@@ -858,44 +1042,161 @@ public partial class TerrainLodManager : Node3D
         return delta < 0 ? -magnitude : magnitude;
     }
 
-    private List<TerrainBlockData> GetOrderedBlocks(TerrainBlockState state, bool farthestFirst = false)
+    private void HandleDesiredBlockAdded(TerrainBlockId blockId)
     {
-        List<TerrainBlockData> ordered = new();
-        foreach (TerrainBlockData block in _blocks.Values)
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
         {
-            if (block.State != state)
-            {
-                continue;
-            }
-
-            if (!block.Desired && state != TerrainBlockState.Releasable)
-            {
-                continue;
-            }
-
-            ordered.Add(block);
+            EnqueueCreateDispatch(blockId);
+            return;
         }
 
-        ordered.Sort((a, b) => CompareBlockPriority(a, b, farthestFirst));
-        return ordered;
+        block.Desired = true;
+        InvalidateBlockDispatch(_releaseDispatchTokens, blockId);
+        if (block.State == TerrainBlockState.Releasable)
+        {
+            block.RestoreVisibility();
+            return;
+        }
+
+        EnqueueDispatcherForCurrentState(block);
     }
 
-    private int CompareBlockPriority(TerrainBlockData a, TerrainBlockData b, bool farthestFirst)
+    private void HandleDesiredBlockRemoved(TerrainBlockId blockId)
     {
-        if (a.Id.Lod != b.Id.Lod)
+        InvalidateBlockDispatch(_createDispatchTokens, blockId);
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
         {
-            return a.Id.Lod.CompareTo(b.Id.Lod);
+            return;
         }
 
-        float aDistance = TerrainMetrics.DistanceSquaredToBlock(_config, a.Id, _lastViewerPosition);
-        float bDistance = TerrainMetrics.DistanceSquaredToBlock(_config, b.Id, _lastViewerPosition);
-        int distanceCompare = aDistance.CompareTo(bDistance);
-        if (distanceCompare != 0)
+        InvalidateBlockDispatch(_fieldBuildDispatchTokens, blockId);
+        InvalidateBlockDispatch(_meshBuildDispatchTokens, blockId);
+        InvalidateBlockDispatch(_commitDispatchTokens, blockId);
+        if (block.State == TerrainBlockState.Visible)
         {
-            return farthestFirst ? -distanceCompare : distanceCompare;
+            // Desired-set transitions only enqueue state changes here; the actual renderer and mesh work is pulled
+            // later through the dispatcher queues in small per-frame slices.
+            block.MarkReleasable(_currentTimeSeconds + ComputeReleaseHoldSeconds(block.Id));
+        }
+        else
+        {
+            block.Desired = false;
         }
 
-        return CompareBlockIds(a.Id, b.Id);
+        EnqueueReleaseDispatch(blockId);
+    }
+
+    private void EnqueueDispatcherForCurrentState(TerrainBlockData block)
+    {
+        switch (block.State)
+        {
+            case TerrainBlockState.Requested:
+                EnqueueFieldBuildDispatch(block.Id);
+                break;
+            case TerrainBlockState.FieldReady:
+                EnqueueMeshBuildDispatch(block.Id);
+                break;
+            case TerrainBlockState.MeshReady:
+                EnqueueCommitDispatch(block.Id);
+                break;
+            case TerrainBlockState.Releasable:
+                EnqueueReleaseDispatch(block.Id);
+                break;
+        }
+    }
+
+    private void EnqueueCreateDispatch(TerrainBlockId blockId)
+    {
+        EnqueueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, blockId, farthestFirst: false);
+    }
+
+    private void EnqueueFieldBuildDispatch(TerrainBlockId blockId)
+    {
+        EnqueueBlockDispatch(_fieldBuildDispatcherQueue, _fieldBuildDispatchTokens, blockId, farthestFirst: false);
+    }
+
+    private void EnqueueMeshBuildDispatch(TerrainBlockId blockId)
+    {
+        EnqueueBlockDispatch(_meshBuildDispatcherQueue, _meshBuildDispatchTokens, blockId, farthestFirst: false);
+    }
+
+    private void EnqueueCommitDispatch(TerrainBlockId blockId)
+    {
+        EnqueueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, blockId, farthestFirst: false);
+    }
+
+    private void EnqueueReleaseDispatch(TerrainBlockId blockId)
+    {
+        EnqueueBlockDispatch(_releaseDispatcherQueue, _releaseDispatchTokens, blockId, farthestFirst: true);
+    }
+
+    private void EnqueueBlockDispatch(
+        PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> queue,
+        Dictionary<TerrainBlockId, int> tokens,
+        TerrainBlockId blockId,
+        bool farthestFirst)
+    {
+        int token = ++_dispatchSequence;
+        tokens[blockId] = token;
+        queue.Enqueue(
+            new QueuedBlockDispatchEntry(blockId, token),
+            BuildDispatchPriority(blockId, farthestFirst, token));
+    }
+
+    private bool TryDequeueBlockDispatch(
+        PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> queue,
+        Dictionary<TerrainBlockId, int> tokens,
+        out TerrainBlockId blockId)
+    {
+        while (queue.Count > 0)
+        {
+            QueuedBlockDispatchEntry entry = queue.Dequeue();
+            if (!tokens.TryGetValue(entry.BlockId, out int token) || token != entry.Token)
+            {
+                continue;
+            }
+            tokens.Remove(entry.BlockId);
+            blockId = entry.BlockId;
+            return true;
+        }
+
+        blockId = default;
+        return false;
+    }
+
+    private BlockDispatchPriority BuildDispatchPriority(TerrainBlockId blockId, bool farthestFirst, int token)
+    {
+        float distance = TerrainMetrics.DistanceSquaredToBlock(_config, blockId, _lastViewerPosition);
+        return new BlockDispatchPriority(
+            blockId.Lod,
+            farthestFirst ? -distance : distance,
+            token);
+    }
+
+    private bool ShouldIncludeCollision(TerrainBlockId blockId)
+    {
+        TerrainBlockId parent = blockId.Lod == 0
+            ? GetParentBlock(blockId)
+            : blockId;
+        int safetyRadius = Mathf.Max(SameLodBubbleRadiusXZ + 1, CollisionSafetyRadiusXZ);
+        Vector3I delta = parent.Index - _currentCenterParent.Index;
+        return Mathf.Abs(delta.X) <= safetyRadius &&
+               Mathf.Abs(delta.Y) <= Mathf.Max(0, VerticalRadius) &&
+               Mathf.Abs(delta.Z) <= safetyRadius;
+    }
+
+    private void RemoveBlockFromDispatcherQueues(TerrainBlockId blockId)
+    {
+        InvalidateBlockDispatch(_createDispatchTokens, blockId);
+        InvalidateBlockDispatch(_fieldBuildDispatchTokens, blockId);
+        InvalidateBlockDispatch(_meshBuildDispatchTokens, blockId);
+        InvalidateBlockDispatch(_commitDispatchTokens, blockId);
+        InvalidateBlockDispatch(_releaseDispatchTokens, blockId);
+    }
+
+    private static void InvalidateBlockDispatch(Dictionary<TerrainBlockId, int> tokens, TerrainBlockId blockId)
+    {
+        tokens.Remove(blockId);
     }
 
     private static int CompareBlockIds(TerrainBlockId a, TerrainBlockId b)
@@ -1004,10 +1305,17 @@ public partial class TerrainLodManager : Node3D
             PendingMeshCommitCount = meshReady,
             ToReleaseCount = releasable,
             LastChunkLoadCount = _lastFieldBuildCount,
+            LastChunkLoadMs = _lastFieldBuildMs,
             LastMeshWorkerBuildCount = _lastMeshBuildCount,
+            LastMeshWorkerBuildMs = _lastMeshBuildMs,
             LastChunkActivationCount = _lastCommitCount,
+            LastChunkActivationMs = _lastCommitMs,
             LastVisualRebuildCount = _lastCommitCount,
+            LastVisualRebuildMs = _lastCommitMs,
+            LastCollisionRebuildCount = _lastCollisionCount,
+            LastCollisionRebuildMs = _lastCollisionMs,
             LastChunkReleaseCount = _lastReleaseCount,
+            LastChunkReleaseMs = _lastReleaseMs,
             MeshBackendName = "lod_blocks_v1",
             SearchThrottleState = "lod_blocks",
             TrackedBiomeSummary = viewerSummary,
@@ -1067,6 +1375,7 @@ public partial class TerrainLodManager : Node3D
         return
             $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
             $"hold {_hysteresisRetainedBlockCount}  step +{_lastPromotedParentCount}/-{_lastDemotedParentCount}  " +
+            $"dispatch c{_createDispatchTokens.Count}/f{_fieldBuildDispatchTokens.Count}/m{_meshBuildDispatchTokens.Count}/k{_commitDispatchTokens.Count}/r{_releaseDispatchTokens.Count}  " +
             $"pending +{_pendingPromotionParentCount}/-{_pendingDemotionParentCount}  set/s {_blockSetChangeRatePerSecond:0.0}  " +
             $"create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
     }
@@ -1118,5 +1427,27 @@ public partial class TerrainLodManager : Node3D
         }
 
         return builder.ToString();
+    }
+
+    private readonly record struct QueuedBlockDispatchEntry(TerrainBlockId BlockId, int Token);
+
+    private readonly record struct BlockDispatchPriority(int Lod, float DistanceMetric, int Token) : System.IComparable<BlockDispatchPriority>
+    {
+        public int CompareTo(BlockDispatchPriority other)
+        {
+            int lodCompare = Lod.CompareTo(other.Lod);
+            if (lodCompare != 0)
+            {
+                return lodCompare;
+            }
+
+            int distanceCompare = DistanceMetric.CompareTo(other.DistanceMetric);
+            if (distanceCompare != 0)
+            {
+                return distanceCompare;
+            }
+
+            return Token.CompareTo(other.Token);
+        }
     }
 }

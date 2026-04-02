@@ -84,12 +84,10 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         float frameMs = (float)(delta * 1000.0);
-        _currentFps = delta > 0.0
-            ? (float)(1.0 / delta)
-            : 0.0f;
-        AddGraphSample(frameMs, _currentFps, _workingSetMiB);
-
+        AddGraphSample(frameMs, _workingSetMiB);
         ComputeFrameStats(out _averageFrameMs, out _worstFrameMs);
+        _currentFps = FrameMsToFps(_averageFrameMs);
+        UpdateLatestFpsSample(_currentFps);
 
         bool expanded = IsExpandPressed();
         bool expansionChanged = expanded != _isExpanded;
@@ -176,13 +174,24 @@ public partial class FpsOverlay : CanvasLayer
         content.AddChild(_detailLabel);
     }
 
-    private void AddGraphSample(float frameMs, float fps, float ramMiB)
+    private void AddGraphSample(float frameMs, float ramMiB)
     {
         _frameTimesMs[_sampleIndex] = frameMs;
-        _fpsSamples[_sampleIndex] = fps;
+        _fpsSamples[_sampleIndex] = 0.0f;
         _ramSamplesMiB[_sampleIndex] = ramMiB;
         _sampleIndex = (_sampleIndex + 1) % _frameTimesMs.Length;
         _sampleCount = Mathf.Min(_sampleCount + 1, _frameTimesMs.Length);
+    }
+
+    private void UpdateLatestFpsSample(float fps)
+    {
+        if (_sampleCount == 0)
+        {
+            return;
+        }
+
+        int latestSampleIndex = (_sampleIndex - 1 + _fpsSamples.Length) % _fpsSamples.Length;
+        _fpsSamples[latestSampleIndex] = fps;
     }
 
     private void ComputeFrameStats(out float avgFrameMs, out float worstFrameMs)
@@ -200,6 +209,13 @@ public partial class FpsOverlay : CanvasLayer
         {
             avgFrameMs /= _sampleCount;
         }
+    }
+
+    private static float FrameMsToFps(float frameMs)
+    {
+        return frameMs > Mathf.Epsilon
+            ? 1000.0f / frameMs
+            : 0.0f;
     }
 
     private void RefreshMemoryStats()
