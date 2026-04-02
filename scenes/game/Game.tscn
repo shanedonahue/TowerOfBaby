@@ -87,7 +87,6 @@ DayLengthSeconds = 210.0
 TimeOfDay = 0.3
 
 [node name="FpsOverlay" type="CanvasLayer" parent="." unique_id=1670152037]
-visible = false
 script = ExtResource("5_fps")
 
 [node name="Label" type="Label" parent="FpsOverlay" unique_id=1573539413]
