@@ -78,6 +78,7 @@ public partial class TerrainLodManager : Node3D
 
     private TerrainConfig _config = null!;
     private TerrainMesher _mesher = null!;
+    private TerrainSurfaceColorizer _surfaceColorizer = null!;
     private TerrainWorldProfileSnapshot _latestProfileSnapshot = null!;
     private TerrainWorld _terrainWorld = null!;
     private Node3D _trackedCharacter = null!;
@@ -128,15 +129,19 @@ public partial class TerrainLodManager : Node3D
     private int _activeFieldWorkerJobs;
     private int _activeMeshWorkerJobs;
     private int _dispatchSequence;
+    private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
+    public TerrainVisualDebugMode ActiveTerrainDebugView => _activeTerrainDebugView;
 
     public override void _Ready()
     {
         _terrainWorld = GetParent() as TerrainWorld;
         _config = BuildConfig();
         _mesher = new TerrainMesher(_config);
+        _surfaceColorizer = new TerrainSurfaceColorizer(_config);
+        _activeTerrainDebugView = ResolveTerrainDebugView(_terrainWorld?.TerrainDebugView ?? TerrainVisualDebugMode.Lit);
         _trackedCharacter = ResolveTrackedCharacter();
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
@@ -182,11 +187,35 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.Clear();
         _debugBuilder.AppendLine("TerrainLodManager active.");
         _debugBuilder.AppendLine($"LOD0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  LOD1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}");
+        _debugBuilder.AppendLine($"Debug {_activeTerrainDebugView.GetDisplayName()}");
         _debugBuilder.AppendLine(_lastSelectionSummary);
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
         _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
         _debugBuilder.Append($"Latest {(_lastCommitSummary == string.Empty ? "none" : _lastCommitSummary)}");
         return _debugBuilder.ToString();
+    }
+
+    public bool SetTerrainDebugView(TerrainVisualDebugMode debugView)
+    {
+        TerrainVisualDebugMode resolvedDebugView = ResolveTerrainDebugView(debugView);
+        if (_activeTerrainDebugView == resolvedDebugView)
+        {
+            return false;
+        }
+
+        _activeTerrainDebugView = resolvedDebugView;
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (block.Renderer == null || !IsInstanceValid(block.Renderer))
+            {
+                continue;
+            }
+
+            block.Renderer.SetDebugView(_activeTerrainDebugView, _surfaceColorizer);
+        }
+
+        _latestProfileSnapshot = BuildProfileSnapshot();
+        return true;
     }
 
     private TerrainConfig BuildConfig()
@@ -212,7 +241,8 @@ public partial class TerrainLodManager : Node3D
                 MeshBuildsPerFrame = Mathf.Clamp(MeshWorkerJobs, 1, MaxMeshWorkerJobs),
                 CommitsPerFrame = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame),
                 ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
-                GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods
+                GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods,
+                MeshColorMode = VoxelMeshColorMode.MaterialTint
             };
         }
 
@@ -235,8 +265,16 @@ public partial class TerrainLodManager : Node3D
             MeshBuildsPerFrame = Mathf.Clamp(MeshWorkerJobs, 1, MaxMeshWorkerJobs),
             CommitsPerFrame = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame),
             ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
-            GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods
+            GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods,
+            MeshColorMode = VoxelMeshColorMode.MaterialTint
         };
+    }
+
+    private static TerrainVisualDebugMode ResolveTerrainDebugView(TerrainVisualDebugMode debugView)
+    {
+        return OS.IsDebugBuild()
+            ? debugView
+            : TerrainVisualDebugMode.Lit;
     }
 
     private Node3D ResolveTrackedCharacter()
@@ -691,7 +729,7 @@ public partial class TerrainLodManager : Node3D
 
             bool includeCollision = ShouldIncludeCollision(block.Id) && block.TriangleCount > 0;
             ulong commitStart = Time.GetTicksUsec();
-            block.Renderer.ApplyVisualMesh(block.Mesh);
+            block.Renderer.ApplyVisualMesh(block.Mesh, _activeTerrainDebugView, _surfaceColorizer);
             block.MarkVisible(collisionPending: includeCollision);
             _lastCommitMs += (Time.GetTicksUsec() - commitStart) / 1000.0;
             _lastCommitCount++;
@@ -1447,13 +1485,13 @@ public partial class TerrainLodManager : Node3D
 
         string viewerSummary = _trackedCharacter == null
             ? "viewer missing"
-            : $"viewer {_lastViewerPosition.X:0.0},{_lastViewerPosition.Y:0.0},{_lastViewerPosition.Z:0.0}";
+            : $"viewer {_lastViewerPosition.X:0.0},{_lastViewerPosition.Y:0.0},{_lastViewerPosition.Z:0.0}  debug {_activeTerrainDebugView.GetDisplayName()}";
         string centerSummary = _currentCenterParent.Equals(_targetCenterParent)
             ? _currentCenterParent.ToString()
             : $"{_currentCenterParent}->{_targetCenterParent}";
         string lodSummary =
             $"lod0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  lod1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}  " +
-            $"raw {_currentViewerParent}  center {centerSummary}  bubble_r {Mathf.Max(0, SameLodBubbleRadiusXZ)}  border_r {_currentCoarseBorderRadius}  move_pad {BubbleMovePaddingFraction:0.00}";
+            $"raw {_currentViewerParent}  center {centerSummary}  bubble_r {Mathf.Max(0, SameLodBubbleRadiusXZ)}  border_r {_currentCoarseBorderRadius}  move_pad {BubbleMovePaddingFraction:0.00}  debug {_activeTerrainDebugView.GetDisplayName()}";
 
         return new TerrainWorldProfileSnapshot
         {

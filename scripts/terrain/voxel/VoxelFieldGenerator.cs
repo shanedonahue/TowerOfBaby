@@ -3,6 +3,18 @@ using TowerOfBaby.Terrain;
 
 namespace TowerOfBaby.Terrain.Voxel;
 
+public readonly record struct TerrainMountainRangeDebugSample(
+    float BeltMask,
+    float SystemMask,
+    float ShoulderMask,
+    float PeakMask);
+
+public readonly record struct TerrainWaterDebugSample(
+    float SurfaceHeight,
+    float ShoreMask,
+    float WaterMask,
+    float BasinMask);
+
 public sealed class VoxelFieldGenerator
 {
     private const float TerrainWarpStrength = 18.0f;
@@ -300,6 +312,49 @@ public sealed class VoxelFieldGenerator
         SampleTerrainSurface(worldPosition.X, worldPosition.Z, out float terrain, out TerrainBiomeSample biome);
         float slope = SampleSlope(worldPosition.X, worldPosition.Z);
         return SampleMaterial(worldPosition, density, terrain, slope, biome);
+    }
+
+    public TerrainBiomeSample SampleBiome(float worldX, float worldZ)
+    {
+        return _biomeClassifier.SampleWorldPosition(worldX, worldZ);
+    }
+
+    public float SampleSurfaceSlope(float worldX, float worldZ)
+    {
+        return SampleSlope(worldX, worldZ);
+    }
+
+    public TerrainMountainRangeDebugSample SampleMountainRangeDebug(float worldX, float worldZ)
+    {
+        Vector2 warped = WarpXZ(worldX, worldZ);
+        float continent = NoiseToUnit(_continentNoise.GetNoise2D(warped.X, warped.Y));
+        continent = Mathf.SmoothStep(0.22f, 0.90f, continent);
+        float landPresence = Mathf.SmoothStep(MountainLandThresholdMin, MountainLandThresholdMax, continent);
+        MountainRangeMaskSample mask = SampleMountainRangeMask(warped);
+        return new TerrainMountainRangeDebugSample(
+            mask.BeltMask,
+            mask.SystemMask,
+            landPresence * mask.ShoulderMask,
+            landPresence * mask.PeakMask);
+    }
+
+    public TerrainWaterDebugSample SampleWaterDebug(float worldX, float worldZ)
+    {
+        Vector2 warped = WarpXZ(worldX, worldZ);
+        TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldX, worldZ);
+        float basinNoise = NoiseToUnit(_waterBasinNoise.GetNoise2D(warped.X, warped.Y));
+        float terrain = BuildTerrainHeight(warped, biome);
+        float shorelineDistance = Mathf.Abs(terrain - _waterLevel);
+        float shoreMask = 1.0f - Mathf.SmoothStep(
+            _shorelineFalloff,
+            _shorelineFalloff * WaterShorelineFadeMultiplier,
+            shorelineDistance);
+        float waterMask = 1.0f - Mathf.SmoothStep(
+            _waterLevel - (_shorelineFalloff * WaterSubmergedFadeMultiplier),
+            _waterLevel + (_shorelineFalloff * 0.25f),
+            terrain);
+        float basinMask = Mathf.SmoothStep(WaterBasinThresholdMin, WaterBasinThresholdMax, basinNoise) * _waterBasinInfluence;
+        return new TerrainWaterDebugSample(terrain, shoreMask, waterMask, basinMask);
     }
 
     private float SampleDensity(Vector3 worldPosition, float terrain)

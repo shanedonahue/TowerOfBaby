@@ -1,4 +1,5 @@
 using Godot;
+using System;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -7,7 +8,70 @@ public enum TerrainVisualDebugMode
 {
     Lit = 0,
     VertexTint = 1,
-    Normals = 2
+    Normals = 2,
+    FinalBiomeColor = 3,
+    SlopeBands = 4,
+    HeightBands = 5,
+    MountainRangeMask = 6,
+    WaterShoreMask = 7
+}
+
+public static class TerrainVisualDebugModeExtensions
+{
+    private static readonly TerrainVisualDebugMode[] RuntimeSelectorModes =
+    {
+        TerrainVisualDebugMode.Lit,
+        TerrainVisualDebugMode.FinalBiomeColor,
+        TerrainVisualDebugMode.SlopeBands,
+        TerrainVisualDebugMode.HeightBands,
+        TerrainVisualDebugMode.MountainRangeMask,
+        TerrainVisualDebugMode.WaterShoreMask
+    };
+
+    public static bool UsesDiagnosticVertexColors(this TerrainVisualDebugMode mode)
+    {
+        return mode != TerrainVisualDebugMode.Lit;
+    }
+
+    public static string GetDisplayName(this TerrainVisualDebugMode mode)
+    {
+        return mode switch
+        {
+            TerrainVisualDebugMode.Lit => "Lit",
+            TerrainVisualDebugMode.VertexTint => "Material Tint",
+            TerrainVisualDebugMode.Normals => "Normals",
+            TerrainVisualDebugMode.FinalBiomeColor => "Biome Color",
+            TerrainVisualDebugMode.SlopeBands => "Slope Bands",
+            TerrainVisualDebugMode.HeightBands => "Height Bands",
+            TerrainVisualDebugMode.MountainRangeMask => "Mountain Mask",
+            TerrainVisualDebugMode.WaterShoreMask => "Water/Shore Mask",
+            _ => mode.ToString()
+        };
+    }
+
+    public static TerrainVisualDebugMode[] GetRuntimeSelectorModes()
+    {
+        return RuntimeSelectorModes;
+    }
+
+    public static TerrainVisualDebugMode CycleRuntimeSelectorMode(this TerrainVisualDebugMode mode, int delta)
+    {
+        TerrainVisualDebugMode[] selectorModes = RuntimeSelectorModes;
+        int currentIndex = Array.IndexOf(selectorModes, mode);
+        if (currentIndex < 0)
+        {
+            currentIndex = 0;
+        }
+
+        int nextIndex = currentIndex + delta;
+        while (nextIndex < 0)
+        {
+            nextIndex += selectorModes.Length;
+        }
+
+        nextIndex %= selectorModes.Length;
+        return selectorModes[nextIndex];
+    }
 }
 
 public enum TerrainChunkCoverageState

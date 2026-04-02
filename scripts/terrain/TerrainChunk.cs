@@ -809,7 +809,7 @@ public partial class TerrainChunk : Node3D
 
     private StandardMaterial3D ResolveBaseSurfaceMaterial()
     {
-        if (_visualDebugMode is TerrainVisualDebugMode.VertexTint or TerrainVisualDebugMode.Normals)
+        if (_visualDebugMode.UsesDiagnosticVertexColors())
         {
             return SharedTerrainDebugVertexColorMaterial;
         }

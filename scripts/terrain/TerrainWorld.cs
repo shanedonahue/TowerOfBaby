@@ -23,6 +23,8 @@ public partial class TerrainWorld : Node3D
     [Export] public float WaterLevel = -2.6f;
     [Export] public float ShorelineFalloff = 3.4f;
     [Export] public float WaterBasinInfluence = 0.48f;
+    [ExportGroup("Debug")]
+    [Export] public TerrainVisualDebugMode TerrainDebugView = TerrainVisualDebugMode.Lit;
 
     [ExportGroup("Brush")]
     [Export] public float BrushRadius = 2.4f;
@@ -52,6 +54,7 @@ public partial class TerrainWorld : Node3D
         }
 
         _lodManager.InitialLoadCompleted += HandleRuntimeInitialLoadCompleted;
+        _lodManager.SetTerrainDebugView(TerrainDebugView);
     }
 
     public float GetInitialLoadProgress()
@@ -112,6 +115,24 @@ public partial class TerrainWorld : Node3D
         return _lodManager?.GetDebugSummary() ?? "TerrainLodManager missing under TerrainWorld.";
     }
 
+    public TerrainVisualDebugMode GetTerrainDebugView()
+    {
+        return _lodManager?.ActiveTerrainDebugView ?? ResolveTerrainDebugView(TerrainDebugView);
+    }
+
+    public bool SetTerrainDebugView(TerrainVisualDebugMode debugView)
+    {
+        TerrainDebugView = ResolveTerrainDebugView(debugView);
+        return _lodManager?.SetTerrainDebugView(TerrainDebugView) ?? false;
+    }
+
+    public TerrainVisualDebugMode CycleTerrainDebugView(int delta)
+    {
+        TerrainVisualDebugMode nextMode = GetTerrainDebugView().CycleRuntimeSelectorMode(delta);
+        SetTerrainDebugView(nextMode);
+        return GetTerrainDebugView();
+    }
+
     private void HandleRuntimeInitialLoadCompleted()
     {
         EmitSignal(SignalName.InitialLoadCompleted);
@@ -125,6 +146,13 @@ public partial class TerrainWorld : Node3D
     private TerrainChunkStore GetChunkStore()
     {
         return _chunkStore ??= new TerrainChunkStore(Seed);
+    }
+
+    private static TerrainVisualDebugMode ResolveTerrainDebugView(TerrainVisualDebugMode debugView)
+    {
+        return OS.IsDebugBuild()
+            ? debugView
+            : TerrainVisualDebugMode.Lit;
     }
 
     private TerrainWorldProfileSnapshot BuildFallbackProfileSnapshot()

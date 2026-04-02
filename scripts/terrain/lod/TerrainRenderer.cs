@@ -17,9 +17,24 @@ public partial class TerrainRenderer : Node3D
         ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
     };
 
+    private static readonly StandardMaterial3D SharedTerrainDebugMaterial = new()
+    {
+        VertexColorUseAsAlbedo = true,
+        AlbedoColor = Colors.White,
+        Roughness = 1.0f,
+        Metallic = 0.0f,
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
+    };
+
     private MeshInstance3D _meshInstance = null!;
     private StaticBody3D _body = null!;
     private CollisionShape3D _collision = null!;
+    private Vector3[] _vertices = System.Array.Empty<Vector3>();
+    private Vector3[] _normals = System.Array.Empty<Vector3>();
+    private Vector2[] _uvs = System.Array.Empty<Vector2>();
+    private Color[] _baseColors = System.Array.Empty<Color>();
+    private float[] _tangents = System.Array.Empty<float>();
+    private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
 
     public TerrainBlockId BlockId { get; private set; }
 
@@ -37,16 +52,24 @@ public partial class TerrainRenderer : Node3D
         EnsureNodes();
     }
 
-    public void ApplyMesh(VoxelMeshBuildResult meshBuild, bool includeCollision)
+    public void ApplyMesh(
+        VoxelMeshBuildResult meshBuild,
+        bool includeCollision,
+        TerrainVisualDebugMode debugView,
+        TerrainSurfaceColorizer surfaceColorizer)
     {
-        ApplyVisualMesh(meshBuild);
+        ApplyVisualMesh(meshBuild, debugView, surfaceColorizer);
         ApplyCollision(includeCollision);
     }
 
-    public void ApplyVisualMesh(VoxelMeshBuildResult meshBuild)
+    public void ApplyVisualMesh(
+        VoxelMeshBuildResult meshBuild,
+        TerrainVisualDebugMode debugView,
+        TerrainSurfaceColorizer surfaceColorizer)
     {
         EnsureNodes();
         EnsureSurfaceGroup();
+        _debugView = debugView;
 
         if (!meshBuild.HasGeometry)
         {
@@ -54,24 +77,26 @@ public partial class TerrainRenderer : Node3D
             return;
         }
 
-        ArrayMesh mesh = new();
-        GodotArray arrays = new();
-        arrays.Resize((int)Mesh.ArrayType.Max);
-        arrays[(int)Mesh.ArrayType.Vertex] = meshBuild.Vertices;
-        arrays[(int)Mesh.ArrayType.Normal] = meshBuild.Normals;
-        arrays[(int)Mesh.ArrayType.TexUV] = meshBuild.Uvs;
-        arrays[(int)Mesh.ArrayType.Color] = meshBuild.Colors;
-        if (meshBuild.HasTangents)
+        _vertices = meshBuild.Vertices;
+        _normals = meshBuild.Normals;
+        _uvs = meshBuild.Uvs;
+        _baseColors = meshBuild.Colors;
+        _tangents = meshBuild.Tangents;
+        ApplyCachedVisuals(surfaceColorizer, resetCollision: true);
+    }
+
+    public void SetDebugView(TerrainVisualDebugMode debugView, TerrainSurfaceColorizer surfaceColorizer)
+    {
+        _debugView = debugView;
+        if (_vertices.Length == 0)
         {
-            arrays[(int)Mesh.ArrayType.Tangent] = meshBuild.Tangents;
+            return;
         }
 
-        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-        _meshInstance.Mesh = mesh;
-        _meshInstance.MaterialOverride = SharedTerrainMaterial;
-        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
-        _collision.Shape = null;
+        ApplyCachedVisuals(surfaceColorizer, resetCollision: false);
     }
+
+    public bool HasVisuals => _vertices.Length > 0;
 
     public void ApplyCollision(bool includeCollision)
     {
@@ -90,12 +115,64 @@ public partial class TerrainRenderer : Node3D
     public void ClearVisuals()
     {
         EnsureNodes();
+        _vertices = System.Array.Empty<Vector3>();
+        _normals = System.Array.Empty<Vector3>();
+        _uvs = System.Array.Empty<Vector2>();
+        _baseColors = System.Array.Empty<Color>();
+        _tangents = System.Array.Empty<float>();
         _meshInstance.Mesh = null;
+        _meshInstance.MaterialOverride = null;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
         _collision.Shape = null;
     }
 
     public bool HasCollision => _collision?.Shape != null;
+
+    private void ApplyCachedVisuals(TerrainSurfaceColorizer surfaceColorizer, bool resetCollision)
+    {
+        ArrayMesh mesh = new();
+        GodotArray arrays = new();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = _vertices;
+        arrays[(int)Mesh.ArrayType.Normal] = _normals;
+        arrays[(int)Mesh.ArrayType.TexUV] = _uvs;
+        arrays[(int)Mesh.ArrayType.Color] = BuildRenderColors(surfaceColorizer);
+        if (_tangents.Length > 0)
+        {
+            arrays[(int)Mesh.ArrayType.Tangent] = _tangents;
+        }
+
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        _meshInstance.Mesh = mesh;
+        _meshInstance.MaterialOverride = _debugView.UsesDiagnosticVertexColors()
+            ? SharedTerrainDebugMaterial
+            : SharedTerrainMaterial;
+        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
+        if (resetCollision)
+        {
+            _collision.Shape = null;
+        }
+    }
+
+    private Color[] BuildRenderColors(TerrainSurfaceColorizer surfaceColorizer)
+    {
+        if (_debugView == TerrainVisualDebugMode.Lit ||
+            _debugView == TerrainVisualDebugMode.VertexTint ||
+            surfaceColorizer == null)
+        {
+            return _baseColors;
+        }
+
+        Color[] colors = new Color[_vertices.Length];
+        Vector3 origin = GlobalTransform.Origin;
+        for (int i = 0; i < colors.Length; i++)
+        {
+            Vector3 worldPosition = origin + _vertices[i];
+            colors[i] = surfaceColorizer.ResolveDebugColor(_debugView, worldPosition, _normals[i], _baseColors[i]);
+        }
+
+        return colors;
+    }
 
     private void EnsureNodes()
     {

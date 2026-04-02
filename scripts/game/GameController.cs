@@ -21,6 +21,8 @@ public partial class GameController : Node3D
     [Export] public float BrushPreviewGroundLift = 0.06f;
     [Export] public bool EnableDebugTerrainBrush;
     [Export] public PlayerStartMode StartMode = PlayerStartMode.ResumeSerializedLocation;
+    [ExportGroup("Debug Terrain View")]
+    [Export] public bool EnableTerrainDebugViewSelector = true;
     [ExportGroup("Debug Cache Hygiene")]
     [Export] public bool ClearProfilingLogsOnReady;
     [Export] public bool ClearStartupCacheOnReady;
@@ -32,6 +34,8 @@ public partial class GameController : Node3D
     private StandardMaterial3D _brushMaterial = null!;
     private CanvasLayer _loadingOverlay = null!;
     private Label _loadingLabel = null!;
+    private CanvasLayer _terrainDebugOverlay = null!;
+    private Label _terrainDebugLabel = null!;
     private PerformanceRunLogger _performanceLogger = null!;
     private Transform3D _playerSpawnTransform;
 
@@ -75,11 +79,13 @@ public partial class GameController : Node3D
         ApplyDebugCacheClears();
 
         BuildLoadingOverlay();
+        BuildTerrainDebugOverlay();
         SetPlayerLoadingState(active: _terrainWorld != null && !_terrainWorld.InitialLoadComplete);
         if (_terrainWorld != null)
         {
             _terrainWorld.InitialLoadCompleted += HandleInitialLoadCompleted;
         }
+        UpdateTerrainDebugOverlay();
 
         if (StartMode == PlayerStartMode.RestartAtSceneSpawn)
         {
@@ -95,6 +101,11 @@ public partial class GameController : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (TryHandleTerrainDebugViewSelector(@event))
+        {
+            return;
+        }
+
         if (@event.IsActionPressed("ui_cancel"))
         {
             Input.MouseMode = Input.MouseMode == Input.MouseModeEnum.Captured
@@ -259,6 +270,70 @@ public partial class GameController : Node3D
         root.AddChild(_loadingLabel);
     }
 
+    private void BuildTerrainDebugOverlay()
+    {
+        if (!OS.IsDebugBuild())
+        {
+            return;
+        }
+
+        _terrainDebugOverlay = new CanvasLayer { Name = "TerrainDebugOverlay", Layer = 12 };
+        AddChild(_terrainDebugOverlay);
+
+        Control root = new Control
+        {
+            Name = "TerrainDebugRoot",
+            AnchorRight = 1.0f,
+            AnchorBottom = 1.0f,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            FocusMode = Control.FocusModeEnum.None
+        };
+        _terrainDebugOverlay.AddChild(root);
+
+        PanelContainer panel = new()
+        {
+            Name = "TerrainDebugPanel",
+            AnchorLeft = 1.0f,
+            AnchorRight = 1.0f,
+            OffsetLeft = -320.0f,
+            OffsetTop = 12.0f,
+            OffsetRight = -12.0f,
+            OffsetBottom = 56.0f,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        StyleBoxFlat style = new()
+        {
+            BgColor = new Color(0.05f, 0.07f, 0.09f, 0.82f),
+            BorderColor = new Color(0.31f, 0.42f, 0.50f, 0.9f),
+            CornerRadiusTopLeft = 6,
+            CornerRadiusTopRight = 6,
+            CornerRadiusBottomRight = 6,
+            CornerRadiusBottomLeft = 6,
+            ContentMarginLeft = 10.0f,
+            ContentMarginTop = 8.0f,
+            ContentMarginRight = 10.0f,
+            ContentMarginBottom = 8.0f,
+            BorderWidthLeft = 1,
+            BorderWidthTop = 1,
+            BorderWidthRight = 1,
+            BorderWidthBottom = 1
+        };
+        panel.AddThemeStyleboxOverride("panel", style);
+        root.AddChild(panel);
+
+        _terrainDebugLabel = new Label
+        {
+            Name = "TerrainDebugLabel",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        _terrainDebugLabel.AddThemeFontSizeOverride("font_size", 13);
+        panel.AddChild(_terrainDebugLabel);
+    }
+
     private void UpdateLoadingOverlay()
     {
         if (_terrainWorld == null || _loadingOverlay == null)
@@ -277,6 +352,25 @@ public partial class GameController : Node3D
         _loadingLabel.Text = $"Generating terrain... {(int)(progress * 100.0f)}%";
     }
 
+    private void UpdateTerrainDebugOverlay()
+    {
+        if (_terrainDebugOverlay == null || _terrainDebugLabel == null)
+        {
+            return;
+        }
+
+        bool selectorEnabled = IsTerrainDebugViewSelectorEnabled();
+        _terrainDebugOverlay.Visible = selectorEnabled;
+        if (!selectorEnabled)
+        {
+            return;
+        }
+
+        TerrainVisualDebugMode debugView = _terrainWorld.GetTerrainDebugView();
+        _terrainDebugLabel.Text =
+            $"Terrain View: {debugView.GetDisplayName()}  F6 next  Shift+F6 prev";
+    }
+
     private void HandleInitialLoadCompleted()
     {
         SetPlayerLoadingState(active: false);
@@ -284,6 +378,22 @@ public partial class GameController : Node3D
         {
             _loadingOverlay.Visible = false;
         }
+    }
+
+    private bool TryHandleTerrainDebugViewSelector(InputEvent @event)
+    {
+        if (!IsTerrainDebugViewSelectorEnabled() ||
+            @event is not InputEventKey keyEvent ||
+            !keyEvent.Pressed ||
+            keyEvent.Echo ||
+            keyEvent.Keycode != Key.F6)
+        {
+            return false;
+        }
+
+        _terrainWorld.CycleTerrainDebugView(keyEvent.ShiftPressed ? -1 : 1);
+        UpdateTerrainDebugOverlay();
+        return true;
     }
 
     private void SetPlayerLoadingState(bool active)
@@ -331,6 +441,13 @@ public partial class GameController : Node3D
             ClearProfilingLogs();
             ClearProfilingLogsOnReady = false;
         }
+    }
+
+    private bool IsTerrainDebugViewSelectorEnabled()
+    {
+        return EnableTerrainDebugViewSelector &&
+               OS.IsDebugBuild() &&
+               _terrainWorld != null;
     }
 
     private static void ClearProfilingLogs()

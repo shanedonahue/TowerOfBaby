@@ -47,7 +47,13 @@ public sealed class TerrainMesher
 
     public VoxelMeshBuildResult BuildMesh(VoxelChunkData data)
     {
-        return VoxelMesher.BuildMesh(data, _meshOptions);
+        VoxelMeshBuildResult mesh = VoxelMesher.BuildMesh(data, _meshOptions);
+        if (!mesh.HasGeometry || _meshOptions.ColorMode != VoxelMeshColorMode.MaterialTint)
+        {
+            return mesh;
+        }
+
+        return CreateSurfaceColorizer().BuildLitMesh(mesh, data);
     }
 
     public float SampleSurfaceHeight(float worldX, float worldZ)
@@ -66,5 +72,10 @@ public sealed class TerrainMesher
             _waterLevel,
             _shorelineFalloff,
             _waterBasinInfluence);
+    }
+
+    private TerrainSurfaceColorizer CreateSurfaceColorizer()
+    {
+        return new TerrainSurfaceColorizer(_config);
     }
 }
