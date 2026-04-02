@@ -87,6 +87,8 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
     [Export] public float ElbowOutwardBias = 0.24f;
     [Export] public float ElbowDownBias = 0.58f;
     [Export] public float ArmFollowSharpness = 18.0f;
+    [Export] public float WalkingHandForwardOffset = 0.07f;
+    [Export] public float WalkingHandForwardSpeed = 1.8f;
 
     [ExportGroup("Attack")]
     [Export] public float AttackCooldown = 0.58f;
@@ -493,6 +495,8 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
             PelvisHeight = PelvisHeight,
             TorsoHeight = TorsoHeight,
             ArmFollowSharpness = ArmFollowSharpness,
+            LocomotionHandForwardOffset = WalkingHandForwardOffset,
+            LocomotionHandForwardSpeed = WalkingHandForwardSpeed,
             AttackWindupTorsoTwistDegrees = AttackWindupTorsoTwistDegrees,
             AttackReleaseTorsoTwistDegrees = AttackReleaseTorsoTwistDegrees,
             AttackFollowThroughTorsoTwistDegrees = AttackFollowThroughTorsoTwistDegrees

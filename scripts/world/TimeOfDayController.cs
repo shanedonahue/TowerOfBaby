@@ -53,6 +53,7 @@ public partial class TimeOfDayController : Node
 
         float sunAngle = (TimeOfDay * Mathf.Tau) - (Mathf.Pi * 0.5f);
         float dayAmount = Mathf.Clamp(Mathf.Sin(sunAngle) * 0.5f + 0.5f, 0.0f, 1.0f);
+        float sunHeight = Mathf.Clamp(Mathf.Sin(sunAngle), 0.0f, 1.0f);
         float daylight = Mathf.SmoothStep(0.08f, 0.9f, dayAmount);
         float nightAmount = 1.0f - daylight;
         float dusk = 1.0f - Mathf.Abs((TimeOfDay - 0.75f) * 4.0f);
@@ -60,6 +61,14 @@ public partial class TimeOfDayController : Node
         float dawn = 1.0f - Mathf.Abs((TimeOfDay - 0.25f) * 4.0f);
         dawn = Mathf.Clamp(dawn, 0.0f, 1.0f);
         float horizonWarmth = Mathf.Max(dawn, dusk);
+        // Keep noon from stacking the brightest sun, sky ambient, and exposure values
+        // at the same time, which can make the terrain read as self-lit.
+        float middayGlare = Mathf.SmoothStep(0.72f, 0.98f, sunHeight);
+        float sunEnergyMax = Mathf.Lerp(1.75f, 1.52f, middayGlare);
+        float sunIndirectMax = Mathf.Lerp(0.35f, 0.29f, middayGlare);
+        float fillEnergyMax = Mathf.Lerp(0.22f, 0.18f, middayGlare);
+        float ambientSkyMax = Mathf.Lerp(0.72f, 0.63f, middayGlare);
+        float exposureMax = Mathf.Lerp(1.18f, 1.04f, middayGlare);
 
         _sunLight.Rotation = new Vector3(
             Mathf.Lerp(0.2f, -0.95f, dayAmount),
@@ -77,11 +86,11 @@ public partial class TimeOfDayController : Node
                 0.0f);
         }
 
-        _sunLight.LightEnergy = Mathf.Lerp(0.04f, 1.75f, daylight);
-        _sunLight.LightIndirectEnergy = Mathf.Lerp(0.02f, 0.35f, daylight);
+        _sunLight.LightEnergy = Mathf.Lerp(0.04f, sunEnergyMax, daylight);
+        _sunLight.LightIndirectEnergy = Mathf.Lerp(0.02f, sunIndirectMax, daylight);
         _sunLight.LightColor = new Color(0.92f, 0.95f, 1.0f).Lerp(new Color(1.0f, 0.86f, 0.62f), horizonWarmth * 0.9f);
 
-        _fillLight.LightEnergy = Mathf.Lerp(0.03f, 0.22f, daylight);
+        _fillLight.LightEnergy = Mathf.Lerp(0.03f, fillEnergyMax, daylight);
         _fillLight.LightColor = new Color(0.18f, 0.25f, 0.4f).Lerp(new Color(0.56f, 0.72f, 0.96f), daylight);
         if (_moonLight != null)
         {
@@ -90,8 +99,8 @@ public partial class TimeOfDayController : Node
             _moonLight.LightColor = new Color(0.62f, 0.72f, 0.95f);
         }
 
-        _environment.AmbientLightSkyContribution = Mathf.Lerp(0.18f, 0.72f, daylight);
-        _environment.TonemapExposure = Mathf.Lerp(0.38f, 1.18f, daylight);
+        _environment.AmbientLightSkyContribution = Mathf.Lerp(0.18f, ambientSkyMax, daylight);
+        _environment.TonemapExposure = Mathf.Lerp(0.38f, exposureMax, daylight);
         _environment.FogDensity = Mathf.Lerp(0.078f, 0.112f, 1.0f - daylight);
         _environment.FogDepthBegin = Mathf.Lerp(8.0f, 14.0f, daylight);
         _environment.FogDepthEnd = Mathf.Lerp(44.0f, 64.0f, daylight);

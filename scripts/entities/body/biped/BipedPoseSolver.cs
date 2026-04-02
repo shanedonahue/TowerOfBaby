@@ -83,7 +83,13 @@ public sealed class BipedPoseSolver
 
         SolveLeg(frame.LeftFoot, _bodyDefinition.LeftLeg, frame.Root.FacingDirection, supportUp, _rig.LeftUpperLeg, _rig.LeftLowerLeg, _rig.LeftFoot);
         SolveLeg(frame.RightFoot, _bodyDefinition.RightLeg, frame.Root.FacingDirection, supportUp, _rig.RightUpperLeg, _rig.RightLowerLeg, _rig.RightFoot);
-        SolveArms(torsoPosition, supportUp, attackState, delta);
+        float locomotionSpeed = Mathf.Max(planarVelocity.Length(), LocomotionMath.Flatten(frame.Root.DesiredVelocity).Length());
+        float locomotionHandBlend = Mathf.Clamp(
+            locomotionSpeed / Mathf.Max(0.01f, _bodyDefinition.LocomotionHandForwardSpeed),
+            0.0f,
+            1.0f);
+
+        SolveArms(torsoPosition, supportUp, attackState, delta, locomotionHandBlend);
     }
 
     private void ConfigureStaticMeshes()
@@ -163,10 +169,15 @@ public sealed class BipedPoseSolver
             footPosition + (up * (legDefinition.FootHeight * 0.5f)));
     }
 
-    private void SolveArms(Vector3 torsoPosition, Vector3 supportUp, AttackPresentationState attackState, float delta)
+    private void SolveArms(
+        Vector3 torsoPosition,
+        Vector3 supportUp,
+        AttackPresentationState attackState,
+        float delta,
+        float locomotionHandBlend)
     {
-        Vector3 leftTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.LeftArm, supportUp, attackState);
-        Vector3 rightTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.RightArm, supportUp, attackState);
+        Vector3 leftTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.LeftArm, supportUp, attackState, locomotionHandBlend);
+        Vector3 rightTarget = torsoPosition + GetHandTargetOffset(_bodyDefinition.RightArm, supportUp, attackState, locomotionHandBlend);
 
         float handBlend = 1.0f - Mathf.Exp(-Mathf.Max(0.01f, _bodyDefinition.ArmFollowSharpness) * delta);
         if (!_initialized || _leftHandPosition == Vector3.Zero)
@@ -200,9 +211,14 @@ public sealed class BipedPoseSolver
             _rig.RightHand);
     }
 
-    private Vector3 GetHandTargetOffset(BipedArmDefinition armDefinition, Vector3 supportUp, AttackPresentationState attackState)
+    private Vector3 GetHandTargetOffset(
+        BipedArmDefinition armDefinition,
+        Vector3 supportUp,
+        AttackPresentationState attackState,
+        float locomotionHandBlend)
     {
-        Vector3 relaxed = armDefinition.RelaxedHandOffset;
+        Vector3 relaxed = armDefinition.RelaxedHandOffset +
+            new Vector3(0.0f, 0.0f, _bodyDefinition.LocomotionHandForwardOffset * locomotionHandBlend);
         if (!attackState.Active)
         {
             return LocomotionMath.TransformBodyOffset(_torsoForward, supportUp, relaxed);
@@ -254,7 +270,8 @@ public sealed class BipedPoseSolver
 
         Vector3 right = LocomotionMath.GetRight(torsoForward, supportUp);
         Vector3 preferredBend =
-            (torsoForward * definition.ElbowForwardBias) +
+            // Neutral arms should trail behind the torso instead of breaking toward the chest.
+            (-torsoForward * definition.ElbowForwardBias) +
             (right * definition.ElbowOutwardBias * definition.Side.Sign()) -
             (supportUp * definition.ElbowDownBias);
         preferredBend = LocomotionMath.ProjectOntoPlane(preferredBend, direction);
