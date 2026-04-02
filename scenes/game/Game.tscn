@@ -1,7 +1,6 @@
 [gd_scene format=3 uid="uid://cxre1tomh4rx4"]
 
 [ext_resource type="PackedScene" path="res://scenes/terrain/TerrainWorld.tscn" id="1_world"]
-[ext_resource type="PackedScene" path="res://scenes/terrain/TerrainChunk.tscn" id="2_chunk"]
 [ext_resource type="PackedScene" path="res://scenes/characters/Humanoid.tscn" id="3_humanoid"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
@@ -50,7 +49,6 @@ TerrainWorldPath = NodePath("TerrainWorld")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)
 
 [node name="TerrainWorld" parent="." unique_id=710875367 instance=ExtResource("1_world")]
-ChunkScene = ExtResource("2_chunk")
 TrackedCharacterPath = NodePath("../Player")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1986201173]

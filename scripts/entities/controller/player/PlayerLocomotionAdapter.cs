@@ -409,7 +409,9 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
         Node collider = result.Count > 0
             ? result["collider"].AsGodotObject() as Node
             : null;
-        bool terrainHit = collider?.GetParent() is TerrainChunk;
+        bool terrainHit =
+            collider?.GetParent() is TerrainChunk ||
+            (collider?.IsInGroup("terrain_surface") ?? false);
 
         Vector3 hitPoint = terrainHit ? (Vector3)result["position"] : queryEnd;
         Vector3 hitNormal = terrainHit

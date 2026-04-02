@@ -1,33 +1,18 @@
 [gd_scene format=3]
 
 [ext_resource type="Script" path="res://scripts/terrain/TerrainWorld.cs" id="1_world"]
+[ext_resource type="Script" path="res://scripts/terrain/lod/TerrainLodManager.cs" id="2_lod"]
 
 [node name="TerrainWorld" type="Node3D"]
 script = ExtResource("1_world")
 PointsPerAxis = 18
 VoxelSize = 1.2
 BaseY = -12.0
-SearchRadius = 12
-MaxActiveColumns = 104
-WarmSearchRadiusPadding = 1
-MaxWarmColumns = 96
-GuaranteedColumnRadius = 1.8
-VerticalChunkCount = 3
-MaxLoadedChunks = 760
-RetentionPriorityWeight = 22.0
-RetentionDecayFactor = 0.9
-MaxChunkGenerationJobs = 4
-ForwardPriorityWeight = 52.0
-BehindViewerPenalty = 64.0
-ShoulderHalfAngleDegrees = 45.0
-ShoulderDistanceMultiplier = 0.7
-ShoulderPriorityMultiplier = 0.45
-StartupChunkGenerationJobs = 8
-StartupChunkActivationsPerFrame = 8
-StartupVisualChunkRebuildsPerFrame = 8
-StartupCollisionChunkRebuildsPerFrame = 4
-StartupWarmPriorityBias = 220.0
+Seed = 12345
 TerrainHeight = 10.0
 DetailHeight = 2.8
 CaveScale = 9.0
 CaveThreshold = 0.63
+
+[node name="TerrainLodManager" type="Node3D" parent="."]
+script = ExtResource("2_lod")

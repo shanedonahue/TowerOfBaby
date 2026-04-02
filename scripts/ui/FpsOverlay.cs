@@ -289,6 +289,27 @@ public partial class FpsOverlay : CanvasLayer
         {
             _detailBuilder.AppendLine("Terrain unavailable");
         }
+        else if (snapshot.SearchThrottleState == "retired")
+        {
+            _detailBuilder.AppendLine("Terrain runtime retired from active gameplay");
+            _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
+            _detailBuilder.AppendLine($"Preserved {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
+            _detailBuilder.AppendLine($"Retired {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
+            _detailBuilder.AppendLine($"Hook {TrimForOverlay(snapshot.TrackedCoverageStateSummary, 84)}");
+            _detailBuilder.AppendLine($"Scene {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
+        }
+        else if (snapshot.SearchThrottleState == "lod_blocks")
+        {
+            _detailBuilder.AppendLine(
+                $"Terrain init {snapshot.InitialLoadProgress * 100.0f:0}%  desired {snapshot.DesiredChunkCount}  visible {snapshot.ActiveChunkCount}  release {snapshot.ToReleaseCount}");
+            _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
+            _detailBuilder.AppendLine($"Viewer {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
+            _detailBuilder.AppendLine($"Lifecycle {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
+            _detailBuilder.AppendLine($"LOD {TrimForOverlay(snapshot.TrackedCoverageStateSummary, 84)}");
+            _detailBuilder.AppendLine($"Select {TrimForOverlay(snapshot.LastSelectedChunkSummary, 84)}");
+            _detailBuilder.AppendLine($"Latest {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
+            _detailBuilder.AppendLine($"Release {TrimForOverlay(snapshot.LastReleasedChunkSummary, 84)}");
+        }
         else
         {
             _detailBuilder.AppendLine(
