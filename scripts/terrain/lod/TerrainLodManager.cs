@@ -21,6 +21,8 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float BubbleMovePaddingFraction = 0.20f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float BlockReleaseHysteresisSeconds = 0.70f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float RefinedBlockReleaseExtraSeconds = 0.45f;
+    [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentPromotionsPerFrame = 2;
+    [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentDemotionsPerFrame = 1;
 
     [ExportGroup("Scheduler")]
     [Export(PropertyHint.Range, "1,16,1")] public int FieldBuildsPerFrame = 4;
@@ -32,6 +34,7 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
     private readonly HashSet<TerrainBlockId> _desiredBlocks = new();
     private readonly HashSet<TerrainBlockId> _refinedParents = new();
+    private readonly HashSet<TerrainBlockId> _targetRefinedParents = new();
     private readonly HashSet<TerrainBlockId> _startupBlocks = new();
     private readonly HashSet<TerrainBlockId> _startupSatisfiedBlocks = new();
     private readonly StringBuilder _debugBuilder = new();
@@ -45,6 +48,7 @@ public partial class TerrainLodManager : Node3D
     private TerrainWorld _terrainWorld = null!;
     private Node3D _trackedCharacter = null!;
     private TerrainBlockId _currentCenterParent;
+    private TerrainBlockId _targetCenterParent;
     private TerrainBlockId _currentViewerParent;
     private Vector3 _lastViewerPosition;
     private double _currentTimeSeconds;
@@ -60,6 +64,10 @@ public partial class TerrainLodManager : Node3D
     private int _currentBubbleParentCount;
     private int _currentCoarseBorderRadius;
     private int _currentRefinedSameLodBlockCount;
+    private int _lastPromotedParentCount;
+    private int _lastDemotedParentCount;
+    private int _pendingPromotionParentCount;
+    private int _pendingDemotionParentCount;
     private int _lastFieldBuildCount;
     private int _lastMeshBuildCount;
     private int _lastCommitCount;
@@ -186,42 +194,54 @@ public partial class TerrainLodManager : Node3D
     private void UpdateDesiredBlocks(Vector3 viewerPosition)
     {
         TerrainBlockId viewerParent = ComputeCenterParent(viewerPosition);
-        TerrainBlockId centerParent = ResolveSelectionCenterParent(viewerPosition, viewerParent);
-        HashSet<TerrainBlockId> refinedParents = BuildRefinedParents(centerParent);
+        TerrainBlockId targetCenterParent = ResolveSelectionCenterParent(viewerPosition, viewerParent);
+        HashSet<TerrainBlockId> requestedRefinedParents = BuildRefinedParents(targetCenterParent);
         int coarseBorderRadius = GetEffectiveCoarseBorderRadius();
-        HashSet<TerrainBlockId> desired = BuildDesiredSet(centerParent, refinedParents, coarseBorderRadius);
-        TerrainBlockId previousViewerParent = _currentViewerParent;
-        TerrainBlockId previousCenterParent = _currentCenterParent;
 
         _currentViewerParent = viewerParent;
-        _currentCenterParent = centerParent;
-        _lastDesiredBlockCount = desired.Count;
-        _currentBubbleParentCount = refinedParents.Count;
-        _currentCoarseBorderRadius = coarseBorderRadius;
-        _currentRefinedSameLodBlockCount = CountBlocksAtLod(desired, lod: 0);
         if (!_selectionInitialized)
         {
             _startupBlocks.Clear();
             _startupSatisfiedBlocks.Clear();
-            foreach (TerrainBlockId blockId in desired)
-            {
-                _startupBlocks.Add(blockId);
-            }
             _refinedParents.Clear();
-            foreach (TerrainBlockId parent in refinedParents)
+            _targetRefinedParents.Clear();
+            _currentCenterParent = targetCenterParent;
+            _targetCenterParent = targetCenterParent;
+            foreach (TerrainBlockId parent in requestedRefinedParents)
             {
                 _refinedParents.Add(parent);
+                _targetRefinedParents.Add(parent);
             }
             _selectionInitialized = true;
             _lastDesiredSetChangeCount = 0;
+            _lastPromotedParentCount = 0;
+            _lastDemotedParentCount = 0;
+            _pendingPromotionParentCount = 0;
+            _pendingDemotionParentCount = 0;
         }
-        else if (!_refinedParents.SetEquals(refinedParents))
+        else if (!_targetCenterParent.Equals(targetCenterParent) || !_targetRefinedParents.SetEquals(requestedRefinedParents))
         {
-            RecordRefinementHandoff(previousCenterParent, previousViewerParent, centerParent, viewerParent, refinedParents);
-            _refinedParents.Clear();
-            foreach (TerrainBlockId parent in refinedParents)
+            _targetCenterParent = targetCenterParent;
+            _targetRefinedParents.Clear();
+            foreach (TerrainBlockId parent in requestedRefinedParents)
             {
-                _refinedParents.Add(parent);
+                _targetRefinedParents.Add(parent);
+            }
+        }
+
+        ApplyRefinedParentTransitionBudget();
+
+        HashSet<TerrainBlockId> desired = BuildDesiredSet(_currentCenterParent, _refinedParents, coarseBorderRadius);
+        _lastDesiredBlockCount = desired.Count;
+        _currentBubbleParentCount = _refinedParents.Count;
+        _currentCoarseBorderRadius = coarseBorderRadius;
+        _currentRefinedSameLodBlockCount = CountBlocksAtLod(desired, lod: 0);
+
+        if (_startupBlocks.Count == 0)
+        {
+            foreach (TerrainBlockId blockId in desired)
+            {
+                _startupBlocks.Add(blockId);
             }
         }
 
@@ -273,10 +293,11 @@ public partial class TerrainLodManager : Node3D
 
         _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
         _lastSelectionSummary = BuildSelectionSummary(
-            centerParent,
+            _currentCenterParent,
+            _targetCenterParent,
             viewerParent,
             desired.Count,
-            refinedParents,
+            _refinedParents,
             _currentRefinedSameLodBlockCount,
             _hysteresisRetainedBlockCount,
             _lastDesiredSetChangeCount);
@@ -523,22 +544,22 @@ public partial class TerrainLodManager : Node3D
 
     private void RecordRefinementHandoff(
         TerrainBlockId previousCenterParent,
-        TerrainBlockId previousViewerParent,
         TerrainBlockId nextCenterParent,
-        TerrainBlockId nextViewerParent,
+        TerrainBlockId viewerParent,
         IReadOnlySet<TerrainBlockId> nextRefinedParents)
     {
+        HashSet<TerrainBlockId> previousRefinedParents = BuildRefinedParents(previousCenterParent);
         List<TerrainBlockId> added = new();
         foreach (TerrainBlockId parent in nextRefinedParents)
         {
-            if (!_refinedParents.Contains(parent))
+            if (!previousRefinedParents.Contains(parent))
             {
                 added.Add(parent);
             }
         }
 
         List<TerrainBlockId> removed = new();
-        foreach (TerrainBlockId parent in _refinedParents)
+        foreach (TerrainBlockId parent in previousRefinedParents)
         {
             if (!nextRefinedParents.Contains(parent))
             {
@@ -548,7 +569,7 @@ public partial class TerrainLodManager : Node3D
 
         _refinementHandoffCount++;
         _lastRefinementHandoffSummary =
-            $"handoff {_refinementHandoffCount} center {previousCenterParent} -> {nextCenterParent} raw {previousViewerParent} -> {nextViewerParent} " +
+            $"handoff {_refinementHandoffCount} center {previousCenterParent} -> {nextCenterParent} raw {viewerParent} target {_targetCenterParent} " +
             $"+{BuildBlockListSummary(added)} -{BuildBlockListSummary(removed)}";
     }
 
@@ -638,6 +659,112 @@ public partial class TerrainLodManager : Node3D
         return holdSeconds;
     }
 
+    private void ApplyRefinedParentTransitionBudget()
+    {
+        _lastPromotedParentCount = 0;
+        _lastDemotedParentCount = 0;
+
+        HashSet<TerrainBlockId> activeBubbleParents = BuildRefinedParents(_currentCenterParent);
+        List<TerrainBlockId> staleBoundaryParents = GetSortedSetDifference(_refinedParents, activeBubbleParents, farthestFirst: true);
+        if (staleBoundaryParents.Count > 0)
+        {
+            ApplyRefinedParentDemotions(staleBoundaryParents);
+            _pendingPromotionParentCount = 0;
+            _pendingDemotionParentCount = CountSetDifference(_refinedParents, activeBubbleParents);
+            return;
+        }
+
+        TerrainBlockId nextCenterParent = ComputeNextCenterStep(_currentCenterParent, _targetCenterParent);
+        HashSet<TerrainBlockId> nextBubbleParents = BuildRefinedParents(nextCenterParent);
+        List<TerrainBlockId> enteringBoundaryParents = GetSortedSetDifference(nextBubbleParents, _refinedParents, farthestFirst: false);
+        if (enteringBoundaryParents.Count > 0)
+        {
+            ApplyRefinedParentPromotions(enteringBoundaryParents);
+            _pendingPromotionParentCount = CountSetDifference(nextBubbleParents, _refinedParents);
+            _pendingDemotionParentCount = 0;
+            return;
+        }
+
+        if (!_currentCenterParent.Equals(nextCenterParent))
+        {
+            TerrainBlockId previousCenterParent = _currentCenterParent;
+            _currentCenterParent = nextCenterParent;
+            RecordRefinementHandoff(previousCenterParent, nextCenterParent, _currentViewerParent, nextBubbleParents);
+            _pendingPromotionParentCount = 0;
+            _pendingDemotionParentCount = CountSetDifference(_refinedParents, nextBubbleParents);
+            return;
+        }
+
+        _pendingPromotionParentCount = CountSetDifference(_targetRefinedParents, _refinedParents);
+        _pendingDemotionParentCount = CountSetDifference(_refinedParents, _targetRefinedParents);
+    }
+
+    private void ApplyRefinedParentPromotions(IReadOnlyList<TerrainBlockId> enteringBoundaryParents)
+    {
+        int promotionBudget = Mathf.Max(0, RefinedParentPromotionsPerFrame);
+        for (int i = 0; i < enteringBoundaryParents.Count && _lastPromotedParentCount < promotionBudget; i++)
+        {
+            _refinedParents.Add(enteringBoundaryParents[i]);
+            _lastPromotedParentCount++;
+        }
+    }
+
+    private void ApplyRefinedParentDemotions(IReadOnlyList<TerrainBlockId> leavingBoundaryParents)
+    {
+        int demotionBudget = Mathf.Max(0, RefinedParentDemotionsPerFrame);
+        for (int i = 0; i < leavingBoundaryParents.Count && _lastDemotedParentCount < demotionBudget; i++)
+        {
+            _refinedParents.Remove(leavingBoundaryParents[i]);
+            _lastDemotedParentCount++;
+        }
+    }
+
+    private List<TerrainBlockId> GetSortedSetDifference(
+        IReadOnlySet<TerrainBlockId> sourceSet,
+        IReadOnlySet<TerrainBlockId> excludeSet,
+        bool farthestFirst)
+    {
+        List<TerrainBlockId> pending = new();
+        foreach (TerrainBlockId parent in sourceSet)
+        {
+            if (!excludeSet.Contains(parent))
+            {
+                pending.Add(parent);
+            }
+        }
+
+        pending.Sort((a, b) => CompareRefinedParentTransitionPriority(a, b, farthestFirst));
+        return pending;
+    }
+
+    private static TerrainBlockId ComputeNextCenterStep(TerrainBlockId currentCenterParent, TerrainBlockId targetCenterParent)
+    {
+        if (currentCenterParent.Equals(targetCenterParent))
+        {
+            return currentCenterParent;
+        }
+
+        Vector3I delta = targetCenterParent.Index - currentCenterParent.Index;
+        Vector3I step = new(
+            Mathf.Clamp(delta.X, -1, 1),
+            Mathf.Clamp(delta.Y, -1, 1),
+            Mathf.Clamp(delta.Z, -1, 1));
+        return new TerrainBlockId(currentCenterParent.Lod, currentCenterParent.Index + step);
+    }
+
+    private int CompareRefinedParentTransitionPriority(TerrainBlockId a, TerrainBlockId b, bool farthestFirst)
+    {
+        float aDistance = TerrainMetrics.DistanceSquaredToBlock(_config, a, _lastViewerPosition);
+        float bDistance = TerrainMetrics.DistanceSquaredToBlock(_config, b, _lastViewerPosition);
+        int distanceCompare = aDistance.CompareTo(bDistance);
+        if (distanceCompare != 0)
+        {
+            return farthestFirst ? -distanceCompare : distanceCompare;
+        }
+
+        return CompareBlockIds(a, b);
+    }
+
     private bool HasReadySuccessorCoverage(TerrainBlockId outgoingBlockId)
     {
         List<TerrainBlockId> successors = GetDesiredSuccessors(outgoingBlockId);
@@ -698,6 +825,20 @@ public partial class TerrainLodManager : Node3D
         foreach (TerrainBlockId block in blocks)
         {
             if (block.Lod == lod)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountSetDifference(IReadOnlySet<TerrainBlockId> minuend, IReadOnlySet<TerrainBlockId> subtrahend)
+    {
+        int count = 0;
+        foreach (TerrainBlockId blockId in minuend)
+        {
+            if (!subtrahend.Contains(blockId))
             {
                 count++;
             }
@@ -843,9 +984,12 @@ public partial class TerrainLodManager : Node3D
         string viewerSummary = _trackedCharacter == null
             ? "viewer missing"
             : $"viewer {_lastViewerPosition.X:0.0},{_lastViewerPosition.Y:0.0},{_lastViewerPosition.Z:0.0}";
+        string centerSummary = _currentCenterParent.Equals(_targetCenterParent)
+            ? _currentCenterParent.ToString()
+            : $"{_currentCenterParent}->{_targetCenterParent}";
         string lodSummary =
             $"lod0 span {TerrainMetrics.GetBlockSpan(_config, 0):0.0}  lod1 span {TerrainMetrics.GetBlockSpan(_config, 1):0.0}  " +
-            $"raw {_currentViewerParent}  center {_currentCenterParent}  bubble_r {Mathf.Max(0, SameLodBubbleRadiusXZ)}  border_r {_currentCoarseBorderRadius}  move_pad {BubbleMovePaddingFraction:0.00}";
+            $"raw {_currentViewerParent}  center {centerSummary}  bubble_r {Mathf.Max(0, SameLodBubbleRadiusXZ)}  border_r {_currentCoarseBorderRadius}  move_pad {BubbleMovePaddingFraction:0.00}";
 
         return new TerrainWorldProfileSnapshot
         {
@@ -922,11 +1066,14 @@ public partial class TerrainLodManager : Node3D
 
         return
             $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
-            $"hold {_hysteresisRetainedBlockCount}  set/s {_blockSetChangeRatePerSecond:0.0}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
+            $"hold {_hysteresisRetainedBlockCount}  step +{_lastPromotedParentCount}/-{_lastDemotedParentCount}  " +
+            $"pending +{_pendingPromotionParentCount}/-{_pendingDemotionParentCount}  set/s {_blockSetChangeRatePerSecond:0.0}  " +
+            $"create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
     }
 
     private string BuildSelectionSummary(
         TerrainBlockId centerParent,
+        TerrainBlockId targetCenterParent,
         TerrainBlockId viewerParent,
         int desiredCount,
         IReadOnlyCollection<TerrainBlockId> refinedParents,
@@ -934,11 +1081,14 @@ public partial class TerrainLodManager : Node3D
         int retainedBlocks,
         int desiredSetChangeCount)
     {
+        string centerSummary = centerParent.Equals(targetCenterParent)
+            ? centerParent.ToString()
+            : $"{centerParent}->{targetCenterParent}";
         return
-            $"raw {viewerParent}  center {centerParent}  border {_currentCoarseBorderRadius}  desired {desiredCount}  " +
+            $"raw {viewerParent}  center {centerSummary}  border {_currentCoarseBorderRadius}  desired {desiredCount}  " +
             $"bubble {refinedParents.Count}p/{refinedSameLodBlockCount} lod0:{BuildBlockListSummary(refinedParents)}  " +
-            $"held {retainedBlocks}  changed {desiredSetChangeCount}  " +
-            "policy stable-bubble + delayed-shift + successor-held-release.";
+            $"held {retainedBlocks}  changed {desiredSetChangeCount}  pending +{_pendingPromotionParentCount}/-{_pendingDemotionParentCount}  " +
+            "policy stable-bubble + boundary-shift + successor-held-release.";
     }
 
     private static string BuildBlockListSummary(IReadOnlyCollection<TerrainBlockId> blockIds)
