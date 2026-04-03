@@ -8,6 +8,7 @@ namespace TowerOfBaby.UI;
 
 public partial class FpsOverlay : CanvasLayer
 {
+    private const Key ExpandToggleKey = Key.F1;
     private const float PanelWidth = 352.0f;
     private const int DetailTrimLength = 96;
 
@@ -89,18 +90,6 @@ public partial class FpsOverlay : CanvasLayer
         _currentFps = FrameMsToFps(_averageFrameMs);
         UpdateLatestFpsSample(_currentFps);
 
-        bool expanded = IsExpandPressed();
-        bool expansionChanged = expanded != _isExpanded;
-        if (expansionChanged)
-        {
-            _isExpanded = expanded;
-            _detailLabel.Visible = expanded;
-            if (expanded)
-            {
-                RefreshTelemetry(0.0, forceTextRefresh: true);
-            }
-        }
-
         if (_telemetryRefreshAccumulator >= TelemetryRefreshIntervalSeconds)
         {
             double telemetryElapsed = _telemetryRefreshAccumulator;
@@ -109,6 +98,23 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         UpdateOverlayState(_averageFrameMs, _worstFrameMs);
+    }
+
+    public override void _UnhandledInput(InputEvent @event)
+    {
+        if (@event is not InputEventKey keyEvent ||
+            !keyEvent.Pressed ||
+            keyEvent.Echo ||
+            keyEvent.Keycode != ExpandToggleKey)
+        {
+            return;
+        }
+
+        _isExpanded = !_isExpanded;
+        _detailLabel.Visible = _isExpanded;
+        RefreshTelemetry(0.0, forceTextRefresh: true);
+        UpdateOverlayState(_averageFrameMs, _worstFrameMs);
+        GetViewport().SetInputAsHandled();
     }
 
     private void BuildUi()
@@ -466,11 +472,6 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         return total / count;
-    }
-
-    private static bool IsExpandPressed()
-    {
-        return Input.IsKeyPressed(Key.Ctrl);
     }
 
     private ILocomotionTelemetrySource ResolveLocomotionTelemetrySource()

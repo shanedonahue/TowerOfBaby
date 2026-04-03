@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" path="res://scripts/terrain/TerrainWorld.cs" id="1_world"]
 [ext_resource type="Script" path="res://scripts/terrain/lod/TerrainLodManager.cs" id="2_lod"]
+[ext_resource type="Script" path="res://scripts/terrain/TerrainWaterSurface.cs" id="3_water"]
 
 [node name="TerrainWorld" type="Node3D"]
 script = ExtResource("1_world")
@@ -16,3 +17,6 @@ CaveThreshold = 0.63
 
 [node name="TerrainLodManager" type="Node3D" parent="."]
 script = ExtResource("2_lod")
+
+[node name="TerrainWaterSurface" type="Node3D" parent="."]
+script = ExtResource("3_water")
