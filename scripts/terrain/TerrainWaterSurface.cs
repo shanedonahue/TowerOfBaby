@@ -19,10 +19,10 @@ public partial class TerrainWaterSurface : Node3D
     [Export(PropertyHint.Range, "-0.250,0.250,0.001")] public float SurfaceLevelOffset = 0.02f;
 
     [ExportGroup("Water Color")]
-    [Export] public Color ShallowColor = new(0.11f, 0.37f, 0.48f, 1.0f);
-    [Export] public Color DeepColor = new(0.02f, 0.11f, 0.21f, 1.0f);
-    [Export] public Color ShoreColor = new(0.20f, 0.51f, 0.52f, 1.0f);
-    [Export] public Color FresnelColor = new(0.30f, 0.49f, 0.63f, 1.0f);
+    [Export] public Color ShallowColor = new(0.12f, 0.30f, 0.38f, 1.0f);
+    [Export] public Color DeepColor = new(0.03f, 0.08f, 0.14f, 1.0f);
+    [Export] public Color ShoreColor = new(0.19f, 0.36f, 0.38f, 1.0f);
+    [Export] public Color FresnelColor = new(0.20f, 0.34f, 0.46f, 1.0f);
 
     [ExportGroup("Water Shaping")]
     [Export(PropertyHint.Range, "0.1,8,0.05")] public float ShallowDepth = 1.6f;
@@ -32,14 +32,14 @@ public partial class TerrainWaterSurface : Node3D
     [Export(PropertyHint.Range, "0,1,0.01")] public float DeepAlpha = 0.88f;
 
     [ExportGroup("Lighting")]
-    [Export(PropertyHint.Range, "0,2,0.01")] public float FresnelStrength = 0.12f;
+    [Export(PropertyHint.Range, "0,2,0.01")] public float FresnelStrength = 0.08f;
     [Export(PropertyHint.Range, "0.5,8,0.05")] public float FresnelPower = 4.8f;
     [Export(PropertyHint.Range, "0,1,0.01")] public float SpecularStrength = 0.22f;
     [Export(PropertyHint.Range, "0,1,0.01")] public float Metallic = 0.0f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float RoughnessNear = 0.24f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float RoughnessFar = 0.14f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ShoreGlow = 0.03f;
-    [Export(PropertyHint.Range, "0,0.25,0.005")] public float MacroTintStrength = 0.05f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float RoughnessNear = 0.32f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float RoughnessFar = 0.22f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ShoreGlow = 0.00f;
+    [Export(PropertyHint.Range, "0,0.25,0.005")] public float MacroTintStrength = 0.03f;
 
     private TerrainWorld _terrainWorld = null!;
     private Node3D _followTarget = null!;

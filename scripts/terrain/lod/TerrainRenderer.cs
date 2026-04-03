@@ -8,24 +8,6 @@ public partial class TerrainRenderer : Node3D
 {
     private const string TerrainSurfaceGroup = "terrain_surface";
 
-    private static readonly StandardMaterial3D SharedTerrainMaterial = new()
-    {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
-        Roughness = 1.0f,
-        Metallic = 0.0f,
-        ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
-    };
-
-    private static readonly StandardMaterial3D SharedTerrainDebugMaterial = new()
-    {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
-        Roughness = 1.0f,
-        Metallic = 0.0f,
-        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
-    };
-
     private MeshInstance3D _meshInstance = null!;
     private StaticBody3D _body = null!;
     private CollisionShape3D _collision = null!;
@@ -40,7 +22,7 @@ public partial class TerrainRenderer : Node3D
 
     public static void ConfigureSharedSurfaceMaterial(float roughness)
     {
-        SharedTerrainMaterial.Roughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
+        TerrainSurfaceMaterialLibrary.ConfigureSharedSurfaceRoughness(roughness);
     }
 
     public override void _Ready()
@@ -150,8 +132,8 @@ public partial class TerrainRenderer : Node3D
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         _meshInstance.Mesh = mesh;
         _meshInstance.MaterialOverride = _debugView.UsesDiagnosticVertexColors()
-            ? SharedTerrainDebugMaterial
-            : SharedTerrainMaterial;
+            ? TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial
+            : TerrainSurfaceMaterialLibrary.LitVertexColorMaterial;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
         if (resetCollision)
         {

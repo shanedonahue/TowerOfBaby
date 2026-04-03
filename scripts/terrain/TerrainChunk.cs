@@ -25,41 +25,12 @@ public partial class TerrainChunk : Node3D
     public const string EditedDetailRegionRequestId = "__edited_detail_payload";
     public const string EditedDetailRegionReason = "edited_detail";
 
-    private static readonly StandardMaterial3D SharedTerrainMaterial = new()
-    {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
-        Roughness = 1.0f,
-        Metallic = 0.0f,
-        ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
-    };
-
-    private static readonly StandardMaterial3D SharedTerrainTintMaterial = new()
-    {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
-        Roughness = 1.0f,
-        Metallic = 0.0f,
-        ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
-    };
-
-    private static readonly StandardMaterial3D SharedTerrainDebugVertexColorMaterial = new()
-    {
-        VertexColorUseAsAlbedo = true,
-        AlbedoColor = Colors.White,
-        Roughness = 1.0f,
-        Metallic = 0.0f,
-        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded
-    };
-
     [Export] public int PointsPerAxis = 18;
     [Export] public float VoxelSize = 1.2f;
 
     public static void ConfigureSharedSurfaceMaterial(float roughness)
     {
-        float clampedRoughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
-        SharedTerrainMaterial.Roughness = clampedRoughness;
-        SharedTerrainTintMaterial.Roughness = clampedRoughness;
+        TerrainSurfaceMaterialLibrary.ConfigureSharedSurfaceRoughness(roughness);
     }
 
     public Vector3I ChunkKey { get; private set; }
@@ -818,12 +789,12 @@ public partial class TerrainChunk : Node3D
     {
         if (_visualDebugMode.UsesDiagnosticVertexColors())
         {
-            return SharedTerrainDebugVertexColorMaterial;
+            return TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial;
         }
 
         return _terrainVertexTintEnabled
-            ? SharedTerrainTintMaterial
-            : SharedTerrainMaterial;
+            ? TerrainSurfaceMaterialLibrary.TintedLitVertexColorMaterial
+            : TerrainSurfaceMaterialLibrary.LitVertexColorMaterial;
     }
 
     private void RefreshMaterialFlags()

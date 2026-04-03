@@ -5,6 +5,24 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
+    private const float ShadeFactorMin = 0.88f;
+    private const float ShadeFactorMax = 1.06f;
+    private const float ShadeFactorFlatBonus = 0.02f;
+    private const float ShadeFactorPeakBonus = 0.03f;
+    private const float ShadeFactorWetPenalty = 0.06f;
+    // Keep cliffs distinctly darker than flats for now; revisit these only after an in-engine visual check.
+    private const float ShadeFactorCliffBasePenalty = 0.04f;
+    private const float ShadeFactorCliffBreakupPenalty = 0.12f;
+    private const float PlateauLightBlendStrength = 0.06f;
+    private const float SnowDustHighlightBlendStrength = 0.08f;
+    private const float ShoreColorBlendStrength = 0.16f;
+    private const float SaturationBoostBase = 1.02f;
+    private const float DominantBiomeSaturationBoost = 0.06f;
+    private const float CanyonSaturationBoost = 0.03f;
+    private const float SwampSaturationBoost = 0.02f;
+    private const float CliffSaturationBoost = 0.03f;
+    private const float PeakSaturationReduction = 0.04f;
+
     private static readonly Color[] SlopeBandPalette =
     {
         new(0.17f, 0.42f, 0.16f, 1.0f),
@@ -25,44 +43,44 @@ public sealed class TerrainSurfaceColorizer
         new(0.92f, 0.92f, 0.96f, 1.0f)
     };
 
-    private static readonly Color PlainsSurfaceColor = new(0.40f, 0.59f, 0.24f, 1.0f);
-    private static readonly Color RockySurfaceColor = new(0.55f, 0.55f, 0.45f, 1.0f);
-    private static readonly Color CanyonSurfaceColor = new(0.80f, 0.44f, 0.22f, 1.0f);
-    private static readonly Color SwampSurfaceColor = new(0.22f, 0.48f, 0.35f, 1.0f);
-    private static readonly Color VolcanicSurfaceColor = new(0.43f, 0.24f, 0.19f, 1.0f);
+    private static readonly Color PlainsSurfaceColor = new(0.24f, 0.34f, 0.16f, 1.0f);
+    private static readonly Color RockySurfaceColor = new(0.40f, 0.39f, 0.32f, 1.0f);
+    private static readonly Color CanyonSurfaceColor = new(0.55f, 0.34f, 0.20f, 1.0f);
+    private static readonly Color SwampSurfaceColor = new(0.16f, 0.27f, 0.22f, 1.0f);
+    private static readonly Color VolcanicSurfaceColor = new(0.25f, 0.18f, 0.16f, 1.0f);
 
-    private static readonly Color PlainsRockColor = new(0.47f, 0.48f, 0.39f, 1.0f);
-    private static readonly Color RockyRockColor = new(0.39f, 0.44f, 0.49f, 1.0f);
-    private static readonly Color CanyonRockColor = new(0.58f, 0.40f, 0.30f, 1.0f);
-    private static readonly Color SwampRockColor = new(0.30f, 0.38f, 0.34f, 1.0f);
-    private static readonly Color VolcanicRockColor = new(0.24f, 0.24f, 0.27f, 1.0f);
+    private static readonly Color PlainsRockColor = new(0.34f, 0.28f, 0.20f, 1.0f);
+    private static readonly Color RockyRockColor = new(0.31f, 0.33f, 0.35f, 1.0f);
+    private static readonly Color CanyonRockColor = new(0.43f, 0.31f, 0.24f, 1.0f);
+    private static readonly Color SwampRockColor = new(0.22f, 0.27f, 0.24f, 1.0f);
+    private static readonly Color VolcanicRockColor = new(0.19f, 0.19f, 0.21f, 1.0f);
 
-    private static readonly Color PlainsAccentColor = new(0.74f, 0.80f, 0.33f, 1.0f);
+    private static readonly Color PlainsAccentColor = new(0.42f, 0.50f, 0.22f, 1.0f);
     private static readonly Color RockyAccentColor = new(0.50f, 0.60f, 0.64f, 1.0f);
     private static readonly Color CanyonAccentColor = new(0.86f, 0.50f, 0.28f, 1.0f);
     private static readonly Color SwampAccentColor = new(0.22f, 0.57f, 0.48f, 1.0f);
     private static readonly Color VolcanicAccentColor = new(0.72f, 0.31f, 0.24f, 1.0f);
 
-    private static readonly Color PlainsWetColor = new(0.37f, 0.50f, 0.25f, 1.0f);
+    private static readonly Color PlainsWetColor = new(0.20f, 0.29f, 0.18f, 1.0f);
     private static readonly Color RockyWetColor = new(0.29f, 0.37f, 0.34f, 1.0f);
     private static readonly Color CanyonWetColor = new(0.43f, 0.35f, 0.24f, 1.0f);
     private static readonly Color SwampWetColor = new(0.18f, 0.42f, 0.35f, 1.0f);
     private static readonly Color VolcanicWetColor = new(0.22f, 0.23f, 0.25f, 1.0f);
 
-    private static readonly Color HighlandDustColor = new(0.76f, 0.74f, 0.69f, 1.0f);
+    private static readonly Color HighlandDustColor = new(0.60f, 0.56f, 0.50f, 1.0f);
     private static readonly Color SnowDustColor = new(0.95f, 0.97f, 1.0f, 1.0f);
-    private static readonly Color ShoreColor = new(0.71f, 0.63f, 0.41f, 1.0f);
-    private static readonly Color MacroWarmColor = new(0.82f, 0.58f, 0.35f, 1.0f);
-    private static readonly Color MacroCoolColor = new(0.31f, 0.48f, 0.63f, 1.0f);
-    private static readonly Color MacroLushColor = new(0.28f, 0.57f, 0.39f, 1.0f);
-    private static readonly Color MacroDryColor = new(0.73f, 0.52f, 0.29f, 1.0f);
+    private static readonly Color ShoreColor = new(0.63f, 0.57f, 0.42f, 1.0f);
+    private static readonly Color MacroWarmColor = new(0.60f, 0.42f, 0.26f, 1.0f);
+    private static readonly Color MacroCoolColor = new(0.25f, 0.38f, 0.49f, 1.0f);
+    private static readonly Color MacroLushColor = new(0.20f, 0.38f, 0.26f, 1.0f);
+    private static readonly Color MacroDryColor = new(0.58f, 0.42f, 0.24f, 1.0f);
     private static readonly Color SlopeMeadowColor = new(0.56f, 0.66f, 0.31f, 1.0f);
     private static readonly Color WetLowlandColor = new(0.22f, 0.39f, 0.34f, 1.0f);
-    private static readonly Color CliffShadowColor = new(0.19f, 0.23f, 0.29f, 1.0f);
-    private static readonly Color CliffHighlightColor = new(0.57f, 0.52f, 0.47f, 1.0f);
-    private static readonly Color PeakRockColor = new(0.78f, 0.80f, 0.83f, 1.0f);
-    private static readonly Color PeakSnowColor = new(0.98f, 0.99f, 1.0f, 1.0f);
-    private static readonly Color FlatWarmLightColor = new(0.91f, 0.86f, 0.72f, 1.0f);
+    private static readonly Color CliffShadowColor = new(0.15f, 0.17f, 0.19f, 1.0f);
+    private static readonly Color CliffHighlightColor = new(0.42f, 0.38f, 0.34f, 1.0f);
+    private static readonly Color PeakRockColor = new(0.62f, 0.64f, 0.67f, 1.0f);
+    private static readonly Color PeakSnowColor = new(0.93f, 0.95f, 0.97f, 1.0f);
+    private static readonly Color FlatWarmLightColor = new(0.72f, 0.67f, 0.56f, 1.0f);
 
     private readonly int _seed;
     private readonly float _terrainHeight;
@@ -266,30 +284,30 @@ public sealed class TerrainSurfaceColorizer
         color = color.Lerp(slopeColor, slopeBlend * 0.82f);
         color = color.Lerp(cliffColor, cliffBlend);
         color = color.Lerp(wetColor, wetLowlandBlend * (0.60f + (wetPatch * 0.25f)));
-        color = color.Lerp(ShoreColor, shoreBlend * 0.28f);
+        color = color.Lerp(ShoreColor, shoreBlend * ShoreColorBlendStrength);
         color = color.Lerp(HighlandDustColor, uplandBlend * 0.18f);
         color = color.Lerp(peakColor, peakBlend * (0.35f + (flatBlend * 0.20f)));
 
         Color macroCompositeTint = macroGroundTint.Lerp(macroRegionTint, 0.5f + (macroAccent * 0.2f));
         color = color.Lerp(macroCompositeTint, 0.06f + (flatBlend * 0.08f) + (cliffBlend * 0.03f));
 
-        float shadeFactor = Mathf.Lerp(0.90f, 1.16f, macroShade);
-        shadeFactor += flatBlend * 0.05f;
-        shadeFactor += peakBlend * 0.05f;
-        shadeFactor -= wetLowlandBlend * 0.06f;
-        shadeFactor -= cliffBlend * (0.04f + ((1.0f - cliffBreakup) * 0.12f));
+        float shadeFactor = Mathf.Lerp(ShadeFactorMin, ShadeFactorMax, macroShade);
+        shadeFactor += flatBlend * ShadeFactorFlatBonus;
+        shadeFactor += peakBlend * ShadeFactorPeakBonus;
+        shadeFactor -= wetLowlandBlend * ShadeFactorWetPenalty;
+        shadeFactor -= cliffBlend * (ShadeFactorCliffBasePenalty + ((1.0f - cliffBreakup) * ShadeFactorCliffBreakupPenalty));
         color = ScaleColor(color, shadeFactor);
 
         float plateauLift = flatBlend * (0.06f + (uplandBlend * 0.06f));
-        color = color.Lerp(FlatWarmLightColor, plateauLift * 0.14f);
-        color = color.Lerp(PeakSnowColor, snowDustBlend * 0.22f);
+        color = color.Lerp(FlatWarmLightColor, plateauLift * PlateauLightBlendStrength);
+        color = color.Lerp(PeakSnowColor, snowDustBlend * SnowDustHighlightBlendStrength);
 
-        float saturationBoost = 1.10f +
-                                (dominantWeight * 0.12f) +
-                                (biome.CanyonWeight * 0.06f) +
-                                (biome.SwampWeight * 0.04f) +
-                                (cliffBlend * 0.06f) -
-                                (peakBlend * 0.04f);
+        float saturationBoost = SaturationBoostBase +
+                                (dominantWeight * DominantBiomeSaturationBoost) +
+                                (biome.CanyonWeight * CanyonSaturationBoost) +
+                                (biome.SwampWeight * SwampSaturationBoost) +
+                                (cliffBlend * CliffSaturationBoost) -
+                                (peakBlend * PeakSaturationReduction);
         color = SaturateColor(color, saturationBoost);
         return ClampColor(color);
     }
