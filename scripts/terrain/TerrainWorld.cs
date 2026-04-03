@@ -45,6 +45,7 @@ public partial class TerrainWorld : Node3D
     public override void _Ready()
     {
         AddToGroup(TerrainWorldGroup);
+        TerrainSurfaceMaterialLibrary.ConfigureSharedWaterLevel(WaterLevel);
         _lodManager = GetNodeOrNull<TerrainLodManager>("TerrainLodManager");
         if (_lodManager == null)
         {

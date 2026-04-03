@@ -133,7 +133,7 @@ public partial class TerrainRenderer : Node3D
         _meshInstance.Mesh = mesh;
         _meshInstance.MaterialOverride = _debugView.UsesDiagnosticVertexColors()
             ? TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial
-            : TerrainSurfaceMaterialLibrary.LitVertexColorMaterial;
+            : TerrainSurfaceMaterialLibrary.TintedLitSurfaceMaterial;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
         if (resetCollision)
         {

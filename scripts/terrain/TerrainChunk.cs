@@ -169,7 +169,6 @@ public partial class TerrainChunk : Node3D
     private CollisionShape3D _collision = null!;
     private VoxelChunkData _data = null!;
     private ArrayMesh _mesh = null!;
-    private StandardMaterial3D _biomeDebugMaterial = null!;
     private bool _terrainVertexTintEnabled;
     private bool _biomeDebugTintEnabled;
     private bool _biomeDebugTintRequested;
@@ -769,23 +768,38 @@ public partial class TerrainChunk : Node3D
             return;
         }
 
-        StandardMaterial3D baseMaterial = ResolveBaseSurfaceMaterial();
+        Material baseMaterial = ResolveBaseSurfaceMaterial();
         if (!_biomeDebugTintEnabled || _visualDebugMode != TerrainVisualDebugMode.Lit)
         {
             _meshInstance.SetSurfaceOverrideMaterial(0, baseMaterial);
             return;
         }
 
-        _biomeDebugMaterial ??= (StandardMaterial3D)baseMaterial.Duplicate();
-        _biomeDebugMaterial.VertexColorUseAsAlbedo = baseMaterial.VertexColorUseAsAlbedo;
-        _biomeDebugMaterial.Roughness = baseMaterial.Roughness;
-        _biomeDebugMaterial.Metallic = baseMaterial.Metallic;
-        _biomeDebugMaterial.ShadingMode = baseMaterial.ShadingMode;
-        _biomeDebugMaterial.AlbedoColor = baseMaterial.AlbedoColor.Lerp(BiomeSample.DebugColor, 0.2f);
-        _meshInstance.SetSurfaceOverrideMaterial(0, _biomeDebugMaterial);
+        Material debugMaterial = (Material)baseMaterial.Duplicate();
+        if (debugMaterial is ShaderMaterial shaderMaterial)
+        {
+            shaderMaterial.ResourceLocalToScene = true;
+            shaderMaterial.SetShaderParameter("material_tint", Colors.White.Lerp(BiomeSample.DebugColor, 0.2f));
+            _meshInstance.SetSurfaceOverrideMaterial(0, shaderMaterial);
+            return;
+        }
+
+        if (debugMaterial is StandardMaterial3D standardMaterial &&
+            baseMaterial is StandardMaterial3D baseStandardMaterial)
+        {
+            standardMaterial.VertexColorUseAsAlbedo = baseStandardMaterial.VertexColorUseAsAlbedo;
+            standardMaterial.Roughness = baseStandardMaterial.Roughness;
+            standardMaterial.Metallic = baseStandardMaterial.Metallic;
+            standardMaterial.ShadingMode = baseStandardMaterial.ShadingMode;
+            standardMaterial.AlbedoColor = baseStandardMaterial.AlbedoColor.Lerp(BiomeSample.DebugColor, 0.2f);
+            _meshInstance.SetSurfaceOverrideMaterial(0, standardMaterial);
+            return;
+        }
+
+        _meshInstance.SetSurfaceOverrideMaterial(0, baseMaterial);
     }
 
-    private StandardMaterial3D ResolveBaseSurfaceMaterial()
+    private Material ResolveBaseSurfaceMaterial()
     {
         if (_visualDebugMode.UsesDiagnosticVertexColors())
         {
@@ -793,8 +807,8 @@ public partial class TerrainChunk : Node3D
         }
 
         return _terrainVertexTintEnabled
-            ? TerrainSurfaceMaterialLibrary.TintedLitVertexColorMaterial
-            : TerrainSurfaceMaterialLibrary.LitVertexColorMaterial;
+            ? TerrainSurfaceMaterialLibrary.TintedLitSurfaceMaterial
+            : TerrainSurfaceMaterialLibrary.LitSurfaceMaterial;
     }
 
     private void RefreshMaterialFlags()
