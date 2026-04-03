@@ -555,12 +555,18 @@ public partial class TerrainChunk : Node3D
             arrays[(int)Mesh.ArrayType.Normal] = meshBuild.Normals;
             arrays[(int)Mesh.ArrayType.TexUV] = meshBuild.Uvs;
             arrays[(int)Mesh.ArrayType.Color] = meshBuild.Colors;
+            Mesh.ArrayFormat surfaceFormat = 0;
+            if (meshBuild.HasBiomeWeights)
+            {
+                arrays[(int)Mesh.ArrayType.Custom0] = meshBuild.BiomeWeights;
+                surfaceFormat = (Mesh.ArrayFormat)((int)Mesh.ArrayCustomFormat.RgbaFloat << (int)Mesh.ArrayFormat.FormatCustom0Shift);
+            }
             if (meshBuild.HasTangents)
             {
                 arrays[(int)Mesh.ArrayType.Tangent] = meshBuild.Tangents;
             }
 
-            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, null, null, surfaceFormat);
         }
 
         _mesh = mesh;

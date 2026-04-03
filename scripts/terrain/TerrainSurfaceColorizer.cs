@@ -159,11 +159,14 @@ public sealed class TerrainSurfaceColorizer
         }
 
         Color[] litColors = new Color[mesh.Colors.Length];
+        float[] biomeWeights = new float[mesh.Colors.Length * 4];
         Vector3 origin = data.Origin;
         for (int i = 0; i < litColors.Length; i++)
         {
             Vector3 worldPosition = origin + mesh.Vertices[i];
-            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], mesh.Colors[i]);
+            TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
+            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], mesh.Colors[i], biome);
+            WriteBiomeWeights(biomeWeights, i * 4, biome);
         }
 
         return new VoxelMeshBuildResult(
@@ -171,6 +174,7 @@ public sealed class TerrainSurfaceColorizer
             mesh.Normals,
             mesh.Uvs,
             litColors,
+            biomeWeights,
             mesh.Tangents,
             mesh.NormalDebugMismatchCount,
             mesh.TotalTriangleCount,
@@ -199,7 +203,11 @@ public sealed class TerrainSurfaceColorizer
         };
     }
 
-    private Color ResolveLitColor(Vector3 worldPosition, Vector3 normal, Color baseMaterialColor)
+    private Color ResolveLitColor(
+        Vector3 worldPosition,
+        Vector3 normal,
+        Color baseMaterialColor,
+        TerrainBiomeSample biome)
     {
         Vector3 safeNormal = normal.LengthSquared() > 0.000001f
             ? normal.Normalized()
@@ -220,7 +228,6 @@ public sealed class TerrainSurfaceColorizer
             _shorelineFalloff * 1.65f,
             Mathf.Abs(worldPosition.Y - _waterLevel))) * flatBlend;
 
-        TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
         float dominantWeight = GetDominantBiomeWeight(biome);
         float macroTint = NoiseToUnit(_macroTintNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
         float macroShade = NoiseToUnit(_macroShadeNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
@@ -310,6 +317,14 @@ public sealed class TerrainSurfaceColorizer
                                 (peakBlend * PeakSaturationReduction);
         color = SaturateColor(color, saturationBoost);
         return ClampColor(color);
+    }
+
+    private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)
+    {
+        destination[offset] = biome.PlainsWeight;
+        destination[offset + 1] = biome.RockyWeight;
+        destination[offset + 2] = biome.CanyonWeight;
+        destination[offset + 3] = biome.SwampWeight;
     }
 
     private static Color ResolveSlopeBandColor(Vector3 normal)

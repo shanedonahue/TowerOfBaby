@@ -5,14 +5,33 @@ namespace TowerOfBaby.Terrain;
 internal static class TerrainSurfaceMaterialLibrary
 {
     private const string TerrainTriplanarShaderPath = "res://shaders/terrain/TerrainTriplanar.gdshader";
-    private const string GrassAlbedoPath = "res://assets/terrain/textures/grass/forrest_ground_01_diff_4k.png";
-    private const string GrassNormalPath = "res://assets/terrain/textures/grass/forrest_ground_01_nor_gl_4k.png";
-    private const string DirtAlbedoPath = "res://assets/terrain/textures/dirt/dirt_floor_diff_4k.png";
-    private const string DirtNormalPath = "res://assets/terrain/textures/dirt/dirt_floor_nor_gl_4k.png";
-    private const string RockAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_02_diff_4k.png";
-    private const string RockNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_02_nor_gl_4k.png";
-    private const string SandAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_rocks_02_diff_4k.png";
-    private const string SandNormalPath = "res://assets/terrain/textures/sand/coast_sand_rocks_02_nor_gl_4k.png";
+
+    private const string GrassLushAlbedoPath = "res://assets/terrain/textures/grass/forrest_ground_01_diff_4k.png";
+    private const string GrassLushNormalPath = "res://assets/terrain/textures/grass/forrest_ground_01_nor_gl_4k.png";
+    private const string GrassPathAlbedoPath = "res://assets/terrain/textures/grass/grass_path_2_diff_4k.png";
+    private const string GrassPathNormalPath = "res://assets/terrain/textures/grass/grass_path_2_nor_gl_4k.png";
+    private const string GrassDryAlbedoPath = "res://assets/terrain/textures/grass/grass_path_3_diff_4k.png";
+    private const string GrassDryNormalPath = "res://assets/terrain/textures/grass/grass_path_3_nor_gl_4k.png";
+
+    private const string DirtRegularAlbedoPath = "res://assets/terrain/textures/dirt/dirt_floor_diff_4k.png";
+    private const string DirtRegularNormalPath = "res://assets/terrain/textures/dirt/dirt_floor_nor_gl_4k.png";
+    private const string DirtMudAlbedoPath = "res://assets/terrain/textures/dirt/brown_mud_diff_4k.png";
+    private const string DirtMudNormalPath = "res://assets/terrain/textures/dirt/brown_mud_nor_gl_4k.png";
+    private const string DirtCrackedAlbedoPath = "res://assets/terrain/textures/dirt/cracked_red_ground_diff_4k.png";
+    private const string DirtCrackedNormalPath = "res://assets/terrain/textures/dirt/cracked_red_ground_nor_gl_4k.png";
+
+    private const string RockCliffAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_02_diff_4k.png";
+    private const string RockCliffNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_02_nor_gl_4k.png";
+    private const string RockGravelAlbedoPath = "res://assets/terrain/textures/rock/rocky_gravel_diff_4k.png";
+    private const string RockGravelNormalPath = "res://assets/terrain/textures/rock/rocky_gravel_nor_gl_4k.png";
+    private const string RockMossyAlbedoPath = "res://assets/terrain/textures/rock/mossy_rock_diff_4k.png";
+    private const string RockMossyNormalPath = "res://assets/terrain/textures/rock/mossy_rock_nor_gl_4k.png";
+
+    private const string SandShoreAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_rocks_02_diff_4k.png";
+    private const string SandShoreNormalPath = "res://assets/terrain/textures/sand/coast_sand_rocks_02_nor_gl_4k.png";
+    private const string SandCoastAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_01_diff_4k.png";
+    private const string SandCoastNormalPath = "res://assets/terrain/textures/sand/coast_sand_01_nor_gl_4k.png";
+
     private const float DefaultTextureTilingScale = 0.18f;
     private const float DefaultBlendSharpness = 3.4f;
     private const float DefaultGrassSlopeMax = 0.18f;
@@ -22,6 +41,7 @@ internal static class TerrainSurfaceMaterialLibrary
     private const float DefaultNormalDetailMaxDistance = 72.0f;
     private const float DefaultFlatNormalSkipSlope = 0.12f;
     private const float DefaultDistantModeStart = 140.0f;
+    private const float DefaultBiomeVariationScale = 0.022f;
 
     private static readonly StandardMaterial3D SharedLitVertexColorFallbackMaterial = CreateLitVertexColorMaterial();
     private static readonly StandardMaterial3D SharedTintedLitVertexColorFallbackMaterial = CreateLitVertexColorMaterial();
@@ -137,69 +157,100 @@ internal static class TerrainSurfaceMaterialLibrary
             return;
         }
 
-        if (!TryLoadTexture(GrassAlbedoPath, out Texture2D grassAlbedo) ||
-            !TryLoadTexture(GrassNormalPath, out Texture2D grassNormal) ||
-            !TryLoadTexture(DirtAlbedoPath, out Texture2D dirtAlbedo) ||
-            !TryLoadTexture(DirtNormalPath, out Texture2D dirtNormal) ||
-            !TryLoadTexture(RockAlbedoPath, out Texture2D rockAlbedo) ||
-            !TryLoadTexture(RockNormalPath, out Texture2D rockNormal) ||
-            !TryLoadTexture(SandAlbedoPath, out Texture2D sandAlbedo) ||
-            !TryLoadTexture(SandNormalPath, out Texture2D sandNormal))
+        if (!TryLoadTexture(GrassLushAlbedoPath, out Texture2D grassLushAlbedo) ||
+            !TryLoadTexture(GrassLushNormalPath, out Texture2D grassLushNormal) ||
+            !TryLoadTexture(GrassPathAlbedoPath, out Texture2D grassPathAlbedo) ||
+            !TryLoadTexture(GrassPathNormalPath, out Texture2D grassPathNormal) ||
+            !TryLoadTexture(GrassDryAlbedoPath, out Texture2D grassDryAlbedo) ||
+            !TryLoadTexture(GrassDryNormalPath, out Texture2D grassDryNormal) ||
+            !TryLoadTexture(DirtRegularAlbedoPath, out Texture2D dirtRegularAlbedo) ||
+            !TryLoadTexture(DirtRegularNormalPath, out Texture2D dirtRegularNormal) ||
+            !TryLoadTexture(DirtMudAlbedoPath, out Texture2D dirtMudAlbedo) ||
+            !TryLoadTexture(DirtMudNormalPath, out Texture2D dirtMudNormal) ||
+            !TryLoadTexture(DirtCrackedAlbedoPath, out Texture2D dirtCrackedAlbedo) ||
+            !TryLoadTexture(DirtCrackedNormalPath, out Texture2D dirtCrackedNormal) ||
+            !TryLoadTexture(RockCliffAlbedoPath, out Texture2D rockCliffAlbedo) ||
+            !TryLoadTexture(RockCliffNormalPath, out Texture2D rockCliffNormal) ||
+            !TryLoadTexture(RockGravelAlbedoPath, out Texture2D rockGravelAlbedo) ||
+            !TryLoadTexture(RockGravelNormalPath, out Texture2D rockGravelNormal) ||
+            !TryLoadTexture(RockMossyAlbedoPath, out Texture2D rockMossyAlbedo) ||
+            !TryLoadTexture(RockMossyNormalPath, out Texture2D rockMossyNormal) ||
+            !TryLoadTexture(SandShoreAlbedoPath, out Texture2D sandShoreAlbedo) ||
+            !TryLoadTexture(SandShoreNormalPath, out Texture2D sandShoreNormal) ||
+            !TryLoadTexture(SandCoastAlbedoPath, out Texture2D sandCoastAlbedo) ||
+            !TryLoadTexture(SandCoastNormalPath, out Texture2D sandCoastNormal))
         {
-            WarnMissingTerrainMaterialResources("Terrain triplanar textures missing; using vertex-color fallback.");
+            WarnMissingTerrainMaterialResources("Terrain biome texture variants missing; using vertex-color fallback.");
             return;
         }
 
-        _sharedLitSurfaceMaterial = CreateTriplanarMaterial(
-            terrainShader,
-            grassAlbedo,
-            grassNormal,
-            dirtAlbedo,
-            dirtNormal,
-            rockAlbedo,
-            rockNormal,
-            sandAlbedo,
-            sandNormal,
-            vertexTintStrength: 0.0f);
-        _sharedTintedLitSurfaceMaterial = CreateTriplanarMaterial(
-            terrainShader,
-            grassAlbedo,
-            grassNormal,
-            dirtAlbedo,
-            dirtNormal,
-            rockAlbedo,
-            rockNormal,
-            sandAlbedo,
-            sandNormal,
-            vertexTintStrength: DefaultVertexTintStrength);
+        TerrainTextureSet textures = new(
+            grassLushAlbedo,
+            grassLushNormal,
+            grassPathAlbedo,
+            grassPathNormal,
+            grassDryAlbedo,
+            grassDryNormal,
+            dirtRegularAlbedo,
+            dirtRegularNormal,
+            dirtMudAlbedo,
+            dirtMudNormal,
+            dirtCrackedAlbedo,
+            dirtCrackedNormal,
+            rockCliffAlbedo,
+            rockCliffNormal,
+            rockGravelAlbedo,
+            rockGravelNormal,
+            rockMossyAlbedo,
+            rockMossyNormal,
+            sandShoreAlbedo,
+            sandShoreNormal,
+            sandCoastAlbedo,
+            sandCoastNormal);
+
+        _sharedLitSurfaceMaterial = CreateTriplanarMaterial(terrainShader, textures, vertexTintStrength: 0.0f);
+        _sharedTintedLitSurfaceMaterial = CreateTriplanarMaterial(terrainShader, textures, vertexTintStrength: DefaultVertexTintStrength);
         ApplySharedSurfaceSettings();
     }
 
     private static ShaderMaterial CreateTriplanarMaterial(
         Shader terrainShader,
-        Texture2D grassAlbedo,
-        Texture2D grassNormal,
-        Texture2D dirtAlbedo,
-        Texture2D dirtNormal,
-        Texture2D rockAlbedo,
-        Texture2D rockNormal,
-        Texture2D sandAlbedo,
-        Texture2D sandNormal,
+        TerrainTextureSet textures,
         float vertexTintStrength)
     {
         ShaderMaterial material = new()
         {
             Shader = terrainShader
         };
-        material.SetShaderParameter("grass_albedo", grassAlbedo);
-        material.SetShaderParameter("grass_normal", grassNormal);
-        material.SetShaderParameter("dirt_albedo", dirtAlbedo);
-        material.SetShaderParameter("dirt_normal", dirtNormal);
-        material.SetShaderParameter("rock_albedo", rockAlbedo);
-        material.SetShaderParameter("rock_normal", rockNormal);
-        material.SetShaderParameter("sand_albedo", sandAlbedo);
-        material.SetShaderParameter("sand_normal", sandNormal);
+
+        material.SetShaderParameter("grass_lush_albedo", textures.GrassLushAlbedo);
+        material.SetShaderParameter("grass_lush_normal", textures.GrassLushNormal);
+        material.SetShaderParameter("grass_path_albedo", textures.GrassPathAlbedo);
+        material.SetShaderParameter("grass_path_normal", textures.GrassPathNormal);
+        material.SetShaderParameter("grass_dry_albedo", textures.GrassDryAlbedo);
+        material.SetShaderParameter("grass_dry_normal", textures.GrassDryNormal);
+
+        material.SetShaderParameter("dirt_regular_albedo", textures.DirtRegularAlbedo);
+        material.SetShaderParameter("dirt_regular_normal", textures.DirtRegularNormal);
+        material.SetShaderParameter("dirt_mud_albedo", textures.DirtMudAlbedo);
+        material.SetShaderParameter("dirt_mud_normal", textures.DirtMudNormal);
+        material.SetShaderParameter("dirt_cracked_albedo", textures.DirtCrackedAlbedo);
+        material.SetShaderParameter("dirt_cracked_normal", textures.DirtCrackedNormal);
+
+        material.SetShaderParameter("rock_cliff_albedo", textures.RockCliffAlbedo);
+        material.SetShaderParameter("rock_cliff_normal", textures.RockCliffNormal);
+        material.SetShaderParameter("rock_gravel_albedo", textures.RockGravelAlbedo);
+        material.SetShaderParameter("rock_gravel_normal", textures.RockGravelNormal);
+        material.SetShaderParameter("rock_mossy_albedo", textures.RockMossyAlbedo);
+        material.SetShaderParameter("rock_mossy_normal", textures.RockMossyNormal);
+
+        material.SetShaderParameter("sand_shore_albedo", textures.SandShoreAlbedo);
+        material.SetShaderParameter("sand_shore_normal", textures.SandShoreNormal);
+        material.SetShaderParameter("sand_coast_albedo", textures.SandCoastAlbedo);
+        material.SetShaderParameter("sand_coast_normal", textures.SandCoastNormal);
+
         material.SetShaderParameter("sand_height_blend", DefaultSandHeightBlend);
+        material.SetShaderParameter("biome_variation_scale", DefaultBiomeVariationScale);
         material.SetShaderParameter("vertex_tint_strength", vertexTintStrength);
         material.SetShaderParameter("material_tint", Colors.White);
         return material;
@@ -251,4 +302,28 @@ internal static class TerrainSurfaceMaterialLibrary
         GD.PushWarning(message);
         _warnedMissingTerrainMaterialResources = true;
     }
+
+    private readonly record struct TerrainTextureSet(
+        Texture2D GrassLushAlbedo,
+        Texture2D GrassLushNormal,
+        Texture2D GrassPathAlbedo,
+        Texture2D GrassPathNormal,
+        Texture2D GrassDryAlbedo,
+        Texture2D GrassDryNormal,
+        Texture2D DirtRegularAlbedo,
+        Texture2D DirtRegularNormal,
+        Texture2D DirtMudAlbedo,
+        Texture2D DirtMudNormal,
+        Texture2D DirtCrackedAlbedo,
+        Texture2D DirtCrackedNormal,
+        Texture2D RockCliffAlbedo,
+        Texture2D RockCliffNormal,
+        Texture2D RockGravelAlbedo,
+        Texture2D RockGravelNormal,
+        Texture2D RockMossyAlbedo,
+        Texture2D RockMossyNormal,
+        Texture2D SandShoreAlbedo,
+        Texture2D SandShoreNormal,
+        Texture2D SandCoastAlbedo,
+        Texture2D SandCoastNormal);
 }

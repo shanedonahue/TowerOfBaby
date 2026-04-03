@@ -18,6 +18,7 @@ public readonly record struct VoxelMeshBuildResult(
     Vector3[] Normals,
     Vector2[] Uvs,
     Color[] Colors,
+    float[] BiomeWeights,
     float[] Tangents,
     int NormalDebugMismatchCount,
     int TotalTriangleCount,
@@ -34,6 +35,7 @@ public readonly record struct VoxelMeshBuildResult(
             Array.Empty<Vector2>(),
             Array.Empty<Color>(),
             Array.Empty<float>(),
+            Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
             TotalTriangleCount: 0,
             UsedDetailBrick: false,
@@ -43,6 +45,7 @@ public readonly record struct VoxelMeshBuildResult(
             DetailCellCount: 0);
 
     public bool HasGeometry => Vertices.Length > 0;
+    public bool HasBiomeWeights => BiomeWeights.Length > 0;
     public bool HasTangents => Tangents.Length > 0;
 }
 
@@ -145,6 +148,7 @@ public static class VoxelMesher
                 Array.Empty<Vector2>(),
                 Array.Empty<Color>(),
                 Array.Empty<float>(),
+                Array.Empty<float>(),
                 NormalDebugMismatchCount: 0,
                 TotalTriangleCount: 0,
                 UsedDetailBrick: detailBrick != null,
@@ -159,6 +163,7 @@ public static class VoxelMesher
             scratch.Normals.ToArray(),
             scratch.Uvs.ToArray(),
             scratch.Colors.ToArray(),
+            Array.Empty<float>(),
             options.GenerateTangents
                 ? scratch.Tangents.ToArray()
                 : Array.Empty<float>(),

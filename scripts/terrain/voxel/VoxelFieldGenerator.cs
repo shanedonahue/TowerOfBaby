@@ -46,10 +46,15 @@ public sealed class VoxelFieldGenerator
     private const float WaterBasinBlendScale = 0.40f;
     private const float WaterBasinDepthScale = 0.52f;
     private const float WaterSubmergedBasinBoostScale = 0.20f;
+    private const float WaterBroadShorelineFadeMultiplier = 2.65f;
+    private const float WaterCoastalPlainBlendScale = 0.24f;
+    private const float WaterCoastalPlainHeightScale = 0.18f;
     private const float WaterSwampShelfBoostScale = 0.34f;
     private const float WaterPlainsShelfBoostScale = 0.10f;
     private const float WaterRockyShelfReductionScale = 0.14f;
     private const float WaterCanyonShelfReductionScale = 0.24f;
+    private const float WaterRockyCoastalPlainReductionScale = 0.12f;
+    private const float WaterCanyonCoastalPlainReductionScale = 0.16f;
     private const float WaterCanyonBasinDepthScale = 0.38f;
     private const float WaterSwampBasinDepthReductionScale = 0.18f;
     private const float WaterSwampNearWaterBlendScale = 0.48f;
@@ -73,6 +78,14 @@ public sealed class VoxelFieldGenerator
     private const float MacroQuietTerrainOffsetScale = -0.06f;
     private const float MacroDramaticRidgeBoostScale = 0.22f;
     private const float MacroDramaticDetailBoostScale = 0.26f;
+    private const float MacroGreenLowlandBlendScale = 0.24f;
+    private const float MacroGreenLowlandTerrainScale = 0.48f;
+    private const float MacroGreenLowlandOffsetScale = -0.12f;
+    private const float MacroDryUplandBlendScale = 0.22f;
+    private const float MacroDryUplandTerrainScale = 0.82f;
+    private const float MacroDryUplandOffsetScale = 0.10f;
+    private const float MacroRockyRidgeHeightScale = 0.12f;
+    private const float MacroRockyRidgeCliffScale = 0.09f;
 
     private const float ContinentHeightScale = 1.45f;
     private const float MountainRidgeHeightScale = 1.15f;
@@ -521,11 +534,23 @@ public sealed class VoxelFieldGenerator
             (_terrainHeight * MacroQuietTerrainOffsetScale);
         terrain = Mathf.Lerp(terrain, quietTerrainTarget, macroRegion.QuietTerrainBlend);
 
+        float greenLowlandTarget =
+            ((continent - 0.5f) * (_terrainHeight * MacroGreenLowlandTerrainScale)) +
+            (_terrainHeight * MacroGreenLowlandOffsetScale);
+        terrain = Mathf.Lerp(terrain, greenLowlandTarget, macroRegion.GreenLowlandRegion * MacroGreenLowlandBlendScale);
+
+        float dryUplandTarget =
+            ((continent - 0.38f) * (_terrainHeight * MacroDryUplandTerrainScale)) +
+            (_terrainHeight * MacroDryUplandOffsetScale);
+        terrain = Mathf.Lerp(terrain, dryUplandTarget, macroRegion.DryUplandRegion * MacroDryUplandBlendScale);
+
         terrain += rollingMask * plains * (_terrainHeight * PlainsBroadRollHeightScale * biome.PlainsWeight * macroRegion.RollingStrength);
         terrain += ridgeWalls * mountains * (_terrainHeight * RockyCliffHeightScale * biome.RockyWeight * (0.65f + (biome.Ruggedness * 0.35f)) * macroRegion.RidgeStrength);
         terrain -= valleyMask * foothillMountainMask * (_terrainHeight * CanyonValleyCarveHeightScale * biome.CanyonWeight * macroRegion.ValleyStrength);
         terrain += harshDetail * _detailHeight * (VolcanicMicroReliefScale * biome.VolcanicWeight * activityBoost * macroRegion.DetailStrength);
         terrain += peakMask * (_terrainHeight * VolcanicPeakHeightScale * biome.VolcanicWeight * (0.6f + (biome.Activity * 0.4f)) * macroRegion.RidgeStrength);
+        terrain += ridge * mountains * (_terrainHeight * MacroRockyRidgeHeightScale * macroRegion.RockyRidgeRegion);
+        terrain += ridgeWalls * foothillMountainMask * (_terrainHeight * MacroRockyRidgeCliffScale * macroRegion.RockyRidgeRegion);
 
         float canyonTerraceStep = Mathf.Max(_terrainHeight * CanyonTerraceStepScale, 1.0f);
         float canyonTerraced = Mathf.Round(terrain / canyonTerraceStep) * canyonTerraceStep;
@@ -570,6 +595,10 @@ public sealed class VoxelFieldGenerator
             _shorelineFalloff,
             _shorelineFalloff * WaterShorelineFadeMultiplier,
             shorelineDistance);
+        float broadShorelineMask = 1.0f - Mathf.SmoothStep(
+            _shorelineFalloff * 1.10f,
+            _shorelineFalloff * WaterBroadShorelineFadeMultiplier,
+            shorelineDistance);
         float submergedMask = 1.0f - Mathf.SmoothStep(
             _waterLevel - (_shorelineFalloff * WaterSubmergedFadeMultiplier),
             _waterLevel + (_shorelineFalloff * 0.25f),
@@ -577,6 +606,19 @@ public sealed class VoxelFieldGenerator
 
         float basinMask = Mathf.SmoothStep(WaterBasinThresholdMin, WaterBasinThresholdMax, basinNoise);
         float basinStrength = lowlandMask * basinMask * _waterBasinInfluence;
+
+        float coastalPlainBlend =
+            broadShorelineMask *
+            lowlandMask *
+            (
+                WaterCoastalPlainBlendScale +
+                (biome.PlainsWeight * 0.18f) +
+                (biome.SwampWeight * 0.12f) -
+                (biome.RockyWeight * WaterRockyCoastalPlainReductionScale) -
+                (biome.CanyonWeight * WaterCanyonCoastalPlainReductionScale));
+        coastalPlainBlend = Mathf.Clamp(coastalPlainBlend, 0.0f, 1.0f);
+        float coastalPlainTarget = _waterLevel + (_shorelineFalloff * WaterCoastalPlainHeightScale);
+        terrain = Mathf.Lerp(terrain, coastalPlainTarget, coastalPlainBlend);
 
         float shorelineShelfBlend =
             shorelineMask *
@@ -683,8 +725,52 @@ public sealed class VoxelFieldGenerator
             MacroValleyStrengthFloor,
             1.12f);
 
-        float lowlandFlattenStrength = 1.0f + (quietRegion * MacroLowlandFlattenBoostScale);
-        float quietTerrainBlend = quietRegion * lowlandMask * MacroQuietTerrainBlendScale;
+        float greenLowlandRegion = Mathf.Clamp(
+            quietRegion *
+            lowlandMask *
+            plains *
+            (0.40f + (biome.PlainsWeight * 0.45f) + (biome.SwampWeight * 0.15f)) *
+            (0.40f + (biome.Moisture * 0.60f)),
+            0.0f,
+            1.0f);
+
+        float dryUplandRegion = Mathf.Clamp(
+            landPresence *
+            (1.0f - lowlandMask) *
+            (0.28f + (contrastRegion * 0.72f)) *
+            (0.35f + ((biome.RockyWeight + biome.CanyonWeight) * 0.65f)) *
+            (0.35f + ((1.0f - biome.Moisture) * 0.65f)),
+            0.0f,
+            1.0f);
+
+        float rockyRidgeRegion = Mathf.Clamp(
+            contrastRegion *
+            rangeShoulderMask *
+            (0.40f + (ruggedBiome * 0.60f)) *
+            Mathf.Lerp(0.82f, 1.12f, biome.RockyWeight + (biome.VolcanicWeight * 0.25f)),
+            0.0f,
+            1.0f);
+
+        ridgeStrength = Mathf.Clamp(ridgeStrength * Mathf.Lerp(1.0f, 1.18f, rockyRidgeRegion), MacroRidgeStrengthFloor, 1.42f);
+        ridgeWallStrength = Mathf.Clamp(ridgeWallStrength * Mathf.Lerp(1.0f, 1.16f, rockyRidgeRegion), MacroRidgeWallStrengthFloor, 1.30f);
+        rollingStrength = Mathf.Clamp(
+            rollingStrength *
+            Mathf.Lerp(1.0f, 1.12f, greenLowlandRegion) *
+            Mathf.Lerp(1.0f, 1.06f, dryUplandRegion),
+            MacroRollingStrengthFloor,
+            1.08f);
+        detailStrength = Mathf.Clamp(
+            detailStrength *
+            Mathf.Lerp(1.0f, 0.70f, greenLowlandRegion) *
+            Mathf.Lerp(1.0f, 1.10f, Mathf.Clamp(dryUplandRegion + (rockyRidgeRegion * 0.5f), 0.0f, 1.0f)),
+            MacroDetailStrengthFloor,
+            1.38f);
+        float lowlandFlattenStrength = 1.0f + (quietRegion * MacroLowlandFlattenBoostScale) + (greenLowlandRegion * 0.20f);
+        float quietTerrainBlend = Mathf.Clamp(
+            (quietRegion * lowlandMask * MacroQuietTerrainBlendScale) +
+            (greenLowlandRegion * 0.10f),
+            0.0f,
+            0.55f);
 
         return new MacroTerrainRegionSample(
             dramaticRegion,
@@ -696,7 +782,10 @@ public sealed class VoxelFieldGenerator
             detailStrength,
             valleyStrength,
             lowlandFlattenStrength,
-            quietTerrainBlend);
+            quietTerrainBlend,
+            greenLowlandRegion,
+            dryUplandRegion,
+            rockyRidgeRegion);
     }
 
     private MountainRangeMaskSample SampleMountainRangeMask(Vector2 warped)
@@ -811,5 +900,8 @@ public sealed class VoxelFieldGenerator
         float DetailStrength,
         float ValleyStrength,
         float LowlandFlattenStrength,
-        float QuietTerrainBlend);
+        float QuietTerrainBlend,
+        float GreenLowlandRegion,
+        float DryUplandRegion,
+        float RockyRidgeRegion);
 }

@@ -15,6 +15,7 @@ public partial class TerrainRenderer : Node3D
     private Vector3[] _normals = System.Array.Empty<Vector3>();
     private Vector2[] _uvs = System.Array.Empty<Vector2>();
     private Color[] _baseColors = System.Array.Empty<Color>();
+    private float[] _biomeWeights = System.Array.Empty<float>();
     private float[] _tangents = System.Array.Empty<float>();
     private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
 
@@ -68,6 +69,7 @@ public partial class TerrainRenderer : Node3D
         _normals = meshBuild.Normals;
         _uvs = meshBuild.Uvs;
         _baseColors = meshBuild.Colors;
+        _biomeWeights = meshBuild.BiomeWeights;
         _tangents = meshBuild.Tangents;
         ApplyCachedVisuals(surfaceColorizer, resetCollision: true);
     }
@@ -106,6 +108,7 @@ public partial class TerrainRenderer : Node3D
         _normals = System.Array.Empty<Vector3>();
         _uvs = System.Array.Empty<Vector2>();
         _baseColors = System.Array.Empty<Color>();
+        _biomeWeights = System.Array.Empty<float>();
         _tangents = System.Array.Empty<float>();
         _meshInstance.Mesh = null;
         _meshInstance.MaterialOverride = null;
@@ -124,12 +127,18 @@ public partial class TerrainRenderer : Node3D
         arrays[(int)Mesh.ArrayType.Normal] = _normals;
         arrays[(int)Mesh.ArrayType.TexUV] = _uvs;
         arrays[(int)Mesh.ArrayType.Color] = BuildRenderColors(surfaceColorizer);
+        Mesh.ArrayFormat surfaceFormat = 0;
+        if (_biomeWeights.Length > 0)
+        {
+            arrays[(int)Mesh.ArrayType.Custom0] = _biomeWeights;
+            surfaceFormat = (Mesh.ArrayFormat)((int)Mesh.ArrayCustomFormat.RgbaFloat << (int)Mesh.ArrayFormat.FormatCustom0Shift);
+        }
         if (_tangents.Length > 0)
         {
             arrays[(int)Mesh.ArrayType.Tangent] = _tangents;
         }
 
-        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, null, null, surfaceFormat);
         _meshInstance.Mesh = mesh;
         _meshInstance.MaterialOverride = _debugView.UsesDiagnosticVertexColors()
             ? TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial

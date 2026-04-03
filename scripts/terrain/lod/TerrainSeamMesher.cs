@@ -115,6 +115,7 @@ public static class TerrainSeamMesher
             uvs.ToArray(),
             colors.ToArray(),
             Array.Empty<float>(),
+            Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
             TotalTriangleCount: vertices.Count / 3,
             UsedDetailBrick: false,

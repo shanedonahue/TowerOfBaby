@@ -10,6 +10,8 @@ public sealed class TerrainBiomeClassifier
     private readonly FastNoiseLite _activityNoise;
     private readonly FastNoiseLite _warpNoiseX;
     private readonly FastNoiseLite _warpNoiseZ;
+    private readonly FastNoiseLite _macroFertilityNoise;
+    private readonly FastNoiseLite _macroAridityNoise;
 
     public TerrainBiomeClassifier(int seed)
     {
@@ -54,6 +56,20 @@ public sealed class TerrainBiomeClassifier
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
             Frequency = 0.0026f
         };
+
+        _macroFertilityNoise = new FastNoiseLite
+        {
+            Seed = seed + 619,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+            Frequency = 0.00105f
+        };
+
+        _macroAridityNoise = new FastNoiseLite
+        {
+            Seed = seed + 653,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
+            Frequency = 0.00118f
+        };
     }
 
     public TerrainBiomeSample SampleChunk(Vector3I chunkKey, TerrainWorldSettings settings)
@@ -85,35 +101,69 @@ public sealed class TerrainBiomeClassifier
         float moisture = NoiseToUnit(_moistureNoise.GetNoise2D(sampleX, sampleZ));
         float ruggedness = Mathf.Pow(Mathf.Abs(_ruggedNoise.GetNoise2D(sampleX, sampleZ)), 0.82f);
         float activity = NoiseToUnit(_activityNoise.GetNoise2D(sampleX, sampleZ));
+        float fertilityRegionNoise = NoiseToUnit(_macroFertilityNoise.GetNoise2D(sampleX, sampleZ));
+        float aridityRegionNoise = NoiseToUnit(_macroAridityNoise.GetNoise2D(sampleX, sampleZ));
 
-        float temperateBand = Mathf.Clamp(1.0f - (Mathf.Abs(heat - 0.55f) * 1.75f), 0.0f, 1.0f);
         float lowRuggedness = 1.0f - ruggedness;
         float dry = 1.0f - moisture;
+        float fertileLowlandRegion =
+            Mathf.SmoothStep(0.46f, 0.78f, fertilityRegionNoise) *
+            (0.35f + (lowRuggedness * 0.65f));
+        float aridUplandRegion =
+            Mathf.SmoothStep(0.44f, 0.78f, aridityRegionNoise) *
+            (0.35f + (dry * 0.65f));
+
+        float climateMoisture = Mathf.Clamp(
+            moisture +
+            (fertileLowlandRegion * 0.18f) -
+            (aridUplandRegion * 0.20f),
+            0.0f,
+            1.0f);
+        float climateHeat = Mathf.Clamp(
+            heat +
+            (aridUplandRegion * 0.10f) -
+            (fertileLowlandRegion * 0.05f),
+            0.0f,
+            1.0f);
+
+        float temperateBand = Mathf.Clamp(1.0f - (Mathf.Abs(climateHeat - 0.55f) * 1.75f), 0.0f, 1.0f);
+        dry = 1.0f - climateMoisture;
+        float ruggedRegion = aridUplandRegion * (0.30f + (ruggedness * 0.70f));
+        float plainsBias = Mathf.Clamp(0.78f + (fertileLowlandRegion * 0.92f) - (ruggedRegion * 0.18f), 0.25f, 1.90f);
+        float rockyBias = Mathf.Clamp(0.82f + (ruggedRegion * 0.88f) - (fertileLowlandRegion * 0.18f), 0.30f, 2.05f);
+        float canyonBias = Mathf.Clamp(0.74f + (aridUplandRegion * 1.10f) - (fertileLowlandRegion * 0.16f), 0.25f, 2.10f);
+        float swampBias = Mathf.Clamp(0.72f + (fertileLowlandRegion * 0.80f) - (aridUplandRegion * 0.34f), 0.20f, 1.90f);
+        float volcanicBias = Mathf.Clamp(0.86f + (ruggedRegion * 0.18f) + (aridUplandRegion * 0.14f), 0.35f, 1.50f);
 
         float plainsWeight =
             lowRuggedness *
-            (0.35f + (moisture * 0.65f)) *
-            (0.30f + (temperateBand * 0.70f));
+            (0.35f + (climateMoisture * 0.65f)) *
+            (0.30f + (temperateBand * 0.70f)) *
+            plainsBias;
 
         float rockyWeight =
             ruggedness *
             (0.45f + (dry * 0.55f)) *
-            (1.0f - (activity * 0.45f));
+            (1.0f - (activity * 0.45f)) *
+            rockyBias;
 
         float canyonWeight =
             ruggedness *
             dry *
-            (0.30f + (heat * 0.70f));
+            (0.30f + (climateHeat * 0.70f)) *
+            canyonBias;
 
         float swampWeight =
-            moisture *
+            climateMoisture *
             lowRuggedness *
-            (0.30f + ((1.0f - heat) * 0.70f));
+            (0.30f + ((1.0f - climateHeat) * 0.70f)) *
+            swampBias;
 
         float volcanicWeight =
             activity *
             (0.30f + (ruggedness * 0.70f)) *
-            (0.25f + (heat * 0.75f));
+            (0.25f + (climateHeat * 0.75f)) *
+            volcanicBias;
 
         return TerrainBiomeSample.CreateNormalized(
             plainsWeight,
@@ -121,8 +171,8 @@ public sealed class TerrainBiomeClassifier
             canyonWeight,
             swampWeight,
             volcanicWeight,
-            heat,
-            moisture,
+            climateHeat,
+            climateMoisture,
             ruggedness,
             activity);
     }
