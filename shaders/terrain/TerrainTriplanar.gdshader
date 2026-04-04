@@ -31,7 +31,7 @@ uniform float texture_tiling_scale = 0.18;
 uniform float blend_sharpness = 3.4;
 uniform float grass_slope_max = 0.18;
 uniform float rock_slope_start = 0.56;
-uniform float sand_height_blend = 2.25;
+uniform float sand_height_blend = 3.2;
 uniform float water_level = -2.6;
 uniform float terrain_roughness = 1.0;
 uniform float biome_variation_scale = 0.022;
@@ -259,7 +259,7 @@ void get_grass_variants(int dominant_biome, out int variant_a, out int variant_b
 
     if (dominant_biome == BIOME_SWAMP) {
         variant_a = GRASS_LUSH;
-        variant_b = GRASS_DRY;
+        variant_b = GRASS_PATH;
         return;
     }
 
@@ -276,7 +276,7 @@ void get_grass_variants(int dominant_biome, out int variant_a, out int variant_b
 void get_dirt_variants(int dominant_biome, out int variant_a, out int variant_b) {
     if (dominant_biome == BIOME_ROCKY) {
         variant_a = DIRT_REGULAR;
-        variant_b = DIRT_CRACKED;
+        variant_b = DIRT_REGULAR;
         return;
     }
 
@@ -294,7 +294,7 @@ void get_dirt_variants(int dominant_biome, out int variant_a, out int variant_b)
 
     if (dominant_biome == BIOME_VOLCANIC) {
         variant_a = DIRT_CRACKED;
-        variant_b = DIRT_MUD;
+        variant_b = DIRT_REGULAR;
         return;
     }
 
@@ -323,12 +323,12 @@ void get_rock_variants(int dominant_biome, out int variant_a, out int variant_b)
 
     if (dominant_biome == BIOME_VOLCANIC) {
         variant_a = ROCK_CLIFF;
-        variant_b = ROCK_MOSSY;
+        variant_b = ROCK_GRAVEL;
         return;
     }
 
-    variant_a = ROCK_GRAVEL;
-    variant_b = ROCK_MOSSY;
+    variant_a = ROCK_MOSSY;
+    variant_b = ROCK_GRAVEL;
 }
 
 void get_sand_variants(int dominant_biome, out int variant_a, out int variant_b) {

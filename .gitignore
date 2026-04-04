@@ -5,7 +5,7 @@
 .mono/
 bin/
 obj/
-assets/terrain/textures/
+assets/
 .vscode/
 *.user
 *.tmp
