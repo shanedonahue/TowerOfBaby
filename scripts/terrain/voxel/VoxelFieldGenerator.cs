@@ -22,12 +22,12 @@ public readonly record struct TerrainSurfaceColumnSample(
 public sealed class VoxelFieldGenerator
 {
     private const float TerrainWarpFrequency = 0.0100f;
-    private const float TerrainWarpStrength = 22.0f;
+    private const float TerrainWarpStrength = 16.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
-    private const float MountainHeightScale = 0.90f;
-    private const float HillHeightScale = 0.22f;
-    private const float DetailContributionScale = 0.38f;
+    private const float MountainHeightScale = 0.72f;
+    private const float HillHeightScale = 0.16f;
+    private const float DetailContributionScale = 0.24f;
     private const float SwampVegetationBias = 0.60f;
     private const float WaterShorelineFadeMultiplier = 1.85f;
     private const float WaterSubmergedFadeMultiplier = 1.75f;
@@ -98,14 +98,14 @@ public sealed class VoxelFieldGenerator
         {
             Seed = seed + 59,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0240f
+            Frequency = 0.0180f
         };
 
         _detailNoise = new FastNoiseLite
         {
             Seed = seed + 101,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0950f
+            Frequency = 0.0700f
         };
 
         _warpNoiseX = new FastNoiseLite

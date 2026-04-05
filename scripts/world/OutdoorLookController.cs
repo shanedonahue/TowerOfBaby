@@ -16,8 +16,8 @@ public partial class OutdoorLookController : Node
 
     [ExportGroup("Sun Lighting")]
     [Export] public Color SunColor = new(1.0f, 0.96f, 0.86f, 1.0f);
-    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.55f;
-    [Export(PropertyHint.Range, "0,4,0.01")] public float SunIndirectEnergy = 0.08f;
+    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.38f;
+    [Export(PropertyHint.Range, "0,4,0.01")] public float SunIndirectEnergy = 0.11f;
     [Export] public bool EnableSunShadows = true;
 
     [ExportGroup("Sky")]
@@ -28,16 +28,16 @@ public partial class OutdoorLookController : Node
     [Export(PropertyHint.Range, "0,90,0.1")] public float SunDiscAngle = 18.0f;
 
     [ExportGroup("Environment")]
-    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.26f;
-    [Export(PropertyHint.Range, "0,3,0.01")] public float TonemapExposure = 1.0f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.34f;
+    [Export(PropertyHint.Range, "0,3,0.01")] public float TonemapExposure = 0.98f;
     [Export] public bool ForceLegacyImageEffectsOff = true;
 
     [ExportGroup("Atmosphere")]
-    [Export(PropertyHint.Range, "0,1,0.001")] public float FogDensity = 0.022f;
-    [Export(PropertyHint.Range, "0,512,1")] public float FogDepthBegin = 110.0f;
-    [Export(PropertyHint.Range, "1,512,1")] public float FogDepthEnd = 420.0f;
-    [Export(PropertyHint.Range, "0.1,8,0.01")] public float FogDepthCurve = 1.15f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float FogAerialPerspective = 0.58f;
+    [Export(PropertyHint.Range, "0,1,0.001")] public float FogDensity = 0.026f;
+    [Export(PropertyHint.Range, "0,512,1")] public float FogDepthBegin = 95.0f;
+    [Export(PropertyHint.Range, "1,512,1")] public float FogDepthEnd = 360.0f;
+    [Export(PropertyHint.Range, "0.1,8,0.01")] public float FogDepthCurve = 1.08f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float FogAerialPerspective = 0.62f;
     [Export(PropertyHint.Range, "0,1,0.01")] public float FogSkyAffect = 0.72f;
     [Export(PropertyHint.Range, "0,1,0.01")] public float FogSunScatter = 0.05f;
 

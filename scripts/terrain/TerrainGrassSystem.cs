@@ -1,7 +1,10 @@
 using System;
-using Godot;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
+using Godot;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -18,6 +21,8 @@ public partial class TerrainGrassSystem : Node3D
     private const float SelectiveGrassDensityScale = 0.65f;
     private const float GrassMaterialSampleInset = 0.18f;
     private const float TerrainSurfaceQueryCellSizeMin = 0.5f;
+    private const string GrassDebugLogPrefix = "[TerrainGrass]";
+    private const string GrassDebugLogRelativePath = "user://profiling/terrain_grass_latest.log";
 
     [ExportGroup("Nodes")]
     [Export] public NodePath TerrainLodManagerPath = new("../TerrainLodManager");
@@ -80,7 +85,7 @@ public partial class TerrainGrassSystem : Node3D
     [Export] public bool CastGrassShadows;
 
     [ExportGroup("Debug")]
-    [Export] public bool EnableDebugLogging = true;
+    [Export] public bool EnableDebugLogging = false;
     [Export(PropertyHint.Range, "0.2,10,0.1")] public float DebugLogIntervalSeconds = 1.5f;
     [Export] public bool DebugForceFallbackMaterial;
     [Export] public bool DebugBypassPlacementFilters;
@@ -90,9 +95,11 @@ public partial class TerrainGrassSystem : Node3D
     private readonly Dictionary<ulong, GrassPatchSkipEntry> _skippedPatchBuilds = new();
     private readonly Queue<TerrainRenderer> _pendingBuilds = new();
     private readonly HashSet<ulong> _pendingBuildIds = new();
+    private readonly object _debugLogLock = new();
 
     private TerrainWorld _terrainWorld = null!;
     private TerrainLodManager _lodManager = null!;
+    private StreamWriter _debugLogWriter = null!;
     private ArrayMesh _grassMesh = null!;
     private ShaderMaterial _grassShaderMaterial = null!;
     private StandardMaterial3D _fallbackMaterial = null!;
@@ -108,6 +115,7 @@ public partial class TerrainGrassSystem : Node3D
     private float _debugLogCountdown;
     private bool _warnedMissingShader;
     private bool _warnedMissingTexture;
+    private bool _warnedDebugLogFailure;
     private bool _usingFallbackMaterial;
     private int _lastScannedRendererCount;
     private int _lastEligibleRendererCount;
@@ -182,6 +190,7 @@ public partial class TerrainGrassSystem : Node3D
 
     public override void _ExitTree()
     {
+        CloseDebugLogWriter();
         ClearAllPatches();
         _skippedPatchBuilds.Clear();
         _pendingBuilds.Clear();
@@ -1345,6 +1354,98 @@ public partial class TerrainGrassSystem : Node3D
             $"last {_lastBuiltInstanceCount} {materialMode}/{filterMode}  {TrimDebug(_lastBuildOutcome, 84)}";
     }
 
+    private bool EnsureDebugLogWriter()
+    {
+        if (_debugLogWriter != null)
+        {
+            return true;
+        }
+
+        try
+        {
+            string rootPath = ProjectSettings.GlobalizePath("user://profiling");
+            Directory.CreateDirectory(rootPath);
+            string logPath = ProjectSettings.GlobalizePath(GrassDebugLogRelativePath);
+            _debugLogWriter = new StreamWriter(
+                new FileStream(logPath, FileMode.Create, System.IO.FileAccess.Write, FileShare.ReadWrite),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+            {
+                AutoFlush = true
+            };
+
+            lock (_debugLogLock)
+            {
+                _debugLogWriter.WriteLine(
+                    $"{GrassDebugLogPrefix} event=session_begin utc={DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)} path=\"{logPath}\"");
+            }
+
+            _warnedDebugLogFailure = false;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            _debugLogWriter?.Dispose();
+            _debugLogWriter = null;
+            if (!_warnedDebugLogFailure)
+            {
+                GD.PushWarning(
+                    $"TerrainGrassSystem could not open grass debug log at {GrassDebugLogRelativePath}: {exception.Message}");
+                _warnedDebugLogFailure = true;
+            }
+
+            return false;
+        }
+    }
+
+    private void CloseDebugLogWriter()
+    {
+        if (_debugLogWriter == null)
+        {
+            return;
+        }
+
+        try
+        {
+            lock (_debugLogLock)
+            {
+                _debugLogWriter.WriteLine(
+                    $"{GrassDebugLogPrefix} event=session_end utc={DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)}");
+                _debugLogWriter.Dispose();
+            }
+        }
+        finally
+        {
+            _debugLogWriter = null;
+        }
+    }
+
+    private void WriteDebugLogLine(string line)
+    {
+        if (!EnsureDebugLogWriter())
+        {
+            return;
+        }
+
+        try
+        {
+            lock (_debugLogLock)
+            {
+                _debugLogWriter!.WriteLine(line);
+            }
+        }
+        catch (Exception exception)
+        {
+            if (!_warnedDebugLogFailure)
+            {
+                GD.PushWarning(
+                    $"TerrainGrassSystem could not write grass debug log at {GrassDebugLogRelativePath}: {exception.Message}");
+                _warnedDebugLogFailure = true;
+            }
+
+            CloseDebugLogWriter();
+        }
+    }
+
     private void RefreshActiveMaterial()
     {
         _usingFallbackMaterial = DebugForceFallbackMaterial || _grassShader == null || _grassTexture == null;
@@ -1381,6 +1482,7 @@ public partial class TerrainGrassSystem : Node3D
     {
         if (!EnableDebugLogging)
         {
+            CloseDebugLogWriter();
             return;
         }
 
@@ -1391,7 +1493,8 @@ public partial class TerrainGrassSystem : Node3D
         }
 
         _debugLogCountdown = Mathf.Max(0.2f, DebugLogIntervalSeconds);
-        GD.Print($"[TerrainGrass] {GetDebugSummary()}");
+        WriteDebugLogLine(
+            $"{GrassDebugLogPrefix} event=summary utc={DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)} {GetDebugSummary()}");
     }
 
     private void AccumulateRendererRejection(GrassTrackingState trackingState)

@@ -10,14 +10,14 @@ public sealed class TerrainSurfaceColorizer
     private const float CliffBreakupTintBlendScale = 0.06f;
     private const float AccentTintBlendScale = 0.045f;
     private const float BiomeIdentityTintScale = 0.15f;
-    private const float ShadeFactorMin = 0.88f;
+    private const float ShadeFactorMin = 0.93f;
     private const float ShadeFactorMax = 1.06f;
     private const float ShadeFactorFlatBonus = 0.02f;
     private const float ShadeFactorPeakBonus = 0.03f;
-    private const float ShadeFactorWetPenalty = 0.06f;
+    private const float ShadeFactorWetPenalty = 0.03f;
     // Keep cliffs distinctly darker than flats for now; revisit these only after an in-engine visual check.
-    private const float ShadeFactorCliffBasePenalty = 0.04f;
-    private const float ShadeFactorCliffBreakupPenalty = 0.12f;
+    private const float ShadeFactorCliffBasePenalty = 0.015f;
+    private const float ShadeFactorCliffBreakupPenalty = 0.045f;
     private const float PlateauLightBlendStrength = 0.06f;
     private const float SnowDustHighlightBlendStrength = 0.08f;
     private const float ShoreColorBlendStrength = 0.16f;
