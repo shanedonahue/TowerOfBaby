@@ -5,11 +5,11 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
-    private const float MacroTintBlendScale = 0.5f;
-    private const float WetTintBlendScale = 0.5f;
-    private const float CliffBreakupTintBlendScale = 0.5f;
-    private const float AccentTintBlendScale = 0.5f;
-    private const float BiomeIdentityTintScale = 0.5f;
+    private const float MacroTintBlendScale = 0.15f;
+    private const float WetTintBlendScale = 0.15f;
+    private const float CliffBreakupTintBlendScale = 0.15f;
+    private const float AccentTintBlendScale = 0.15f;
+    private const float BiomeIdentityTintScale = 0.15f;
     private const float ShadeFactorMin = 0.88f;
     private const float ShadeFactorMax = 1.06f;
     private const float ShadeFactorFlatBonus = 0.02f;

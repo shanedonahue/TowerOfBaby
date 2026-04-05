@@ -43,10 +43,10 @@ public partial class OutdoorLookController : Node
 
     [ExportGroup("Terrain Material")]
     [Export(PropertyHint.Range, "0,1,0.01")] public float TerrainRoughness = 1.0f;
-    [Export(PropertyHint.Range, "0.02,1,0.01")] public float TerrainTextureTilingScale = 0.18f;
-    [Export(PropertyHint.Range, "0.5,8,0.1")] public float TerrainBlendSharpness = 3.4f;
-    [Export(PropertyHint.Range, "0,0.6,0.01")] public float TerrainGrassSlopeMax = 0.18f;
-    [Export(PropertyHint.Range, "0.1,1,0.01")] public float TerrainRockSlopeStart = 0.56f;
+    [Export(PropertyHint.Range, "0.02,1,0.01")] public float TerrainTextureTilingScale = 0.32f;
+    [Export(PropertyHint.Range, "0.5,8,0.1")] public float TerrainBlendSharpness = 3.5f;
+    [Export(PropertyHint.Range, "0,0.6,0.01")] public float TerrainGrassSlopeMax = 0.40f;
+    [Export(PropertyHint.Range, "0.1,1,0.01")] public float TerrainRockSlopeStart = 0.38f;
     [Export(PropertyHint.Range, "8,256,1")] public float TerrainNormalDetailMaxDistance = 72.0f;
     [Export(PropertyHint.Range, "0,0.5,0.01")] public float TerrainFlatNormalSkipSlope = 0.12f;
     [Export(PropertyHint.Range, "16,512,1")] public float TerrainDistantModeStart = 140.0f;
