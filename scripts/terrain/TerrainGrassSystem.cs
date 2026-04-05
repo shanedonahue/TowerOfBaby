@@ -7,14 +7,15 @@ public partial class TerrainGrassSystem : Node3D
 {
     private const string GrassPatchNodeName = "GrassPatch";
     private const string GrassShaderPath = "res://shaders/terrain/TerrainGrass.gdshader";
-    private const string GrassTexturePath = "res://textures/terrain/grass_blades.svg";
+    // The instanced grass path expects an alpha-cutout blade atlas, so keep it bound to the simple clump sheet.
+    private const string GrassTexturePath = "res://assets/terrain/textures/grass/grass_clump_atlas.png";
     private const float Tau = Mathf.Pi * 2.0f;
 
     [ExportGroup("Nodes")]
     [Export] public NodePath TerrainLodManagerPath = new("../TerrainLodManager");
 
     [ExportGroup("Distribution")]
-    [Export(PropertyHint.Range, "0.25,16,0.25")] public float DensityPerSquareMeter = 4.25f;
+    [Export(PropertyHint.Range, "0.25,16,0.25")] public float DensityPerSquareMeter = 6.25f;
     [Export(PropertyHint.Range, "0,75,1")] public float MaxSlopeDegrees = 38.0f;
     [Export(PropertyHint.Range, "0,4,0.05")] public float MinHeightAboveWater = 0.35f;
     [Export(PropertyHint.Range, "0,48,0.25")] public float HighlandFadeStart = 16.0f;
@@ -24,13 +25,36 @@ public partial class TerrainGrassSystem : Node3D
     [Export(PropertyHint.Range, "128,12000,64")] public int MaxInstancesPerPatch = 2800;
     [Export(PropertyHint.Range, "0.00,0.25,0.005")] public float PlacementLift = 0.02f;
 
+    [ExportGroup("Clumping")]
+    [Export(PropertyHint.Range, "0.001,0.2,0.001")] public float ClumpNoiseFrequency = 0.017f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMin = 0.28f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMax = 0.50f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDensityFloor = 0.58f;
+    [Export(PropertyHint.Range, "0.001,0.35,0.001")] public float ClumpDetailFrequency = 0.072f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailStrength = 0.06f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMin = 0.28f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMax = 0.50f;
+    [Export(PropertyHint.Range, "1,2,0.05")] public float ShoreDensityBoost = 1.12f;
+    [Export(PropertyHint.Range, "0.5,16,0.25")] public float ShoreDensityBoostRange = 4.5f;
+
     [ExportGroup("Blade Shape")]
-    [Export(PropertyHint.Range, "0.2,3,0.05")] public float BladeHeight = 0.78f;
-    [Export(PropertyHint.Range, "0.05,1,0.01")] public float BladeWidth = 0.16f;
-    [Export(PropertyHint.Range, "0.3,2,0.05")] public float ScaleMin = 0.55f;
-    [Export(PropertyHint.Range, "0.5,3,0.05")] public float ScaleMax = 0.90f;
-    [Export] public Color BladeColorMin = new(35.0f / 255.0f, 97.0f / 255.0f, 53.0f / 255.0f, 1.0f);
-    [Export] public Color BladeColorMax = new(137.0f / 255.0f, 148.0f / 255.0f, 80.0f / 255.0f, 1.0f);
+    [Export(PropertyHint.Range, "0.2,3,0.05")] public float BladeHeight = 0.80f;
+    [Export(PropertyHint.Range, "0.05,1,0.01")] public float BladeWidth = 0.28f;
+    [Export(PropertyHint.Range, "0.3,2,0.05")] public float ScaleMin = 0.52f;
+    [Export(PropertyHint.Range, "0.5,3,0.05")] public float ScaleMax = 0.96f;
+    [Export(PropertyHint.Range, "0.3,2,0.05")] public float HeightVariationMin = 0.60f;
+    [Export(PropertyHint.Range, "0.3,2,0.05")] public float HeightVariationMax = 1.40f;
+    [Export(PropertyHint.Range, "0.3,2,0.05")] public float WidthVariationMin = 0.70f;
+    [Export(PropertyHint.Range, "0.3,2,0.05")] public float WidthVariationMax = 1.30f;
+    [Export(PropertyHint.Range, "0,0.6,0.01")] public float LeanVariationRadians = 0.20f;
+    [Export(PropertyHint.Range, "1,8,1")] public int BladeAtlasColumns = 4;
+    [Export(PropertyHint.Range, "1,8,1")] public int BladeAtlasRows = 1;
+    [Export(PropertyHint.Range, "1,64,1")] public int BladeAtlasFrameCount = 4;
+    [Export(PropertyHint.Range, "0,0.5,0.01")] public float WidthScaleJitter = 0.08f;
+    [Export(PropertyHint.Range, "0,0.5,0.01")] public float HeightScaleJitter = 0.08f;
+    [Export(PropertyHint.Range, "0,20,0.25")] public float MaxTiltDegrees = 4.0f;
+    [Export] public Color BladeColorMin = new(0.35f, 0.45f, 0.25f, 1.0f);
+    [Export] public Color BladeColorMax = new(0.25f, 0.50f, 0.30f, 1.0f);
 
     [ExportGroup("Wind")]
     [Export(PropertyHint.Range, "0,1,0.01")] public float WindStrength = 0.16f;
@@ -43,6 +67,8 @@ public partial class TerrainGrassSystem : Node3D
     [Export(PropertyHint.Range, "0,64,1")] public float FadeDistance = 10.0f;
     [Export(PropertyHint.Range, "1,8,1")] public int PatchesBuiltPerFrame = 1;
     [Export(PropertyHint.Range, "0.05,1,0.05")] public float SyncIntervalSeconds = 0.2f;
+    [Export(PropertyHint.Range, "0.5,1,0.01")] public float GrassRoughness = 0.96f;
+    [Export(PropertyHint.Range, "0.05,0.5,0.01")] public float GrassAlphaScissorThreshold = 0.18f;
     [Export] public bool CastGrassShadows;
 
     [ExportGroup("Debug")]
@@ -64,6 +90,8 @@ public partial class TerrainGrassSystem : Node3D
     private Material _activeGrassMaterial = null!;
     private Shader _grassShader = null!;
     private Texture2D _grassTexture = null!;
+    private FastNoiseLite _clumpNoise = null!;
+    private FastNoiseLite _clumpDetailNoise = null!;
     private long _settingsSignature;
     private float _syncCountdown;
     private float _debugLogCountdown;
@@ -85,11 +113,25 @@ public partial class TerrainGrassSystem : Node3D
     private int _lastRejectedDensityCount;
     private string _lastBuildOutcome = "waiting_for_renderers";
 
+    private const float ThinTallTypeHeight = 1.18f;
+    private const float ThinTallTypeWidth = 0.84f;
+    private const float ThinTallTypeLean = 1.00f;
+    private const float ThinTallMoistureBias = 0.04f;
+    private const float ShortDenseTypeHeight = 0.82f;
+    private const float ShortDenseTypeWidth = 1.18f;
+    private const float ShortDenseTypeLean = 0.72f;
+    private const float ShortDenseMoistureBias = -0.02f;
+    private const float CurvedTypeHeight = 0.98f;
+    private const float CurvedTypeWidth = 0.96f;
+    private const float CurvedTypeLean = 1.55f;
+    private const float CurvedMoistureBias = 0.01f;
+
     public override void _Ready()
     {
         _terrainWorld = GetParent() as TerrainWorld;
         _lodManager = ResolveLodManager();
         EnsureResources();
+        UpdateClumpNoiseGenerators();
         UpdateMaterialParameters();
         _settingsSignature = BuildSettingsSignature();
         _syncCountdown = 0.0f;
@@ -101,6 +143,7 @@ public partial class TerrainGrassSystem : Node3D
         _terrainWorld ??= GetParent() as TerrainWorld;
         _lodManager ??= ResolveLodManager();
         EnsureResources();
+        UpdateClumpNoiseGenerators();
         UpdateMaterialParameters();
 
         long currentSignature = BuildSettingsSignature();
@@ -244,6 +287,7 @@ public partial class TerrainGrassSystem : Node3D
         }
 
         Vector3[] normals = renderer.Normals;
+        Color[] terrainColors = renderer.BaseColors;
         float slopeLimitDot = Mathf.Cos(Mathf.DegToRad(Mathf.Clamp(MaxSlopeDegrees, 0.0f, 89.0f)));
         float highlandStart = Mathf.Max(0.0f, HighlandFadeStart);
         float highlandEnd = Mathf.Max(highlandStart + 0.01f, HighlandFadeEnd);
@@ -314,8 +358,14 @@ public partial class TerrainGrassSystem : Node3D
             float slopeFactor = DebugBypassPlacementFilters
                 ? 1.0f
                 : Mathf.SmoothStep(slopeLimitDot, 1.0f, upDot);
+            float clumpDensityFactor = DebugBypassPlacementFilters
+                ? 1.0f
+                : ComputeClumpDensityFactor(centroidWorld, heightAboveWater, lowlandFactor, slopeFactor);
+            float shoreProximity = ComputeShoreProximity(heightAboveWater);
+            float moisture = ComputeMoistureFactor(lowlandFactor, slopeFactor, shoreProximity);
+            Color triangleTerrainColor = ResolveTriangleTerrainColor(terrainColors, triangle);
             float triangleArea = twiceArea * 0.5f;
-            float expectedInstances = triangleArea * DensityPerSquareMeter * lowlandFactor * slopeFactor * distanceDensityFactor;
+            float expectedInstances = triangleArea * DensityPerSquareMeter * lowlandFactor * slopeFactor * clumpDensityFactor * distanceDensityFactor;
             int instanceCount = Mathf.FloorToInt(expectedInstances);
             if (random.Randf() < (expectedInstances - instanceCount))
             {
@@ -332,17 +382,43 @@ public partial class TerrainGrassSystem : Node3D
             {
                 Vector3 position = SampleTriangle(a, b, c, random) + (surfaceNormal * PlacementLift);
                 float scale = random.RandfRange(Mathf.Min(ScaleMin, ScaleMax), Mathf.Max(ScaleMin, ScaleMax));
+                ResolveGrassType(random, out float typeHeightScale, out float typeWidthScale, out float typeLeanScale, out float moistureBias);
+                float widthVariation = random.RandfRange(Mathf.Min(WidthVariationMin, WidthVariationMax), Mathf.Max(WidthVariationMin, WidthVariationMax));
+                float heightVariation = random.RandfRange(Mathf.Min(HeightVariationMin, HeightVariationMax), Mathf.Max(HeightVariationMin, HeightVariationMax));
+                float widthScale = scale * widthVariation * typeWidthScale * (1.0f + random.RandfRange(-WidthScaleJitter, WidthScaleJitter));
+                float heightScale = scale * heightVariation * typeHeightScale * (1.0f + random.RandfRange(-HeightScaleJitter, HeightScaleJitter));
                 Vector3 scaleVector = new(
-                    BladeWidth * scale,
-                    BladeHeight * scale,
-                    BladeWidth * scale);
+                    BladeWidth * Mathf.Max(0.1f, widthScale),
+                    BladeHeight * Mathf.Max(0.1f, heightScale),
+                    BladeWidth * Mathf.Max(0.1f, widthScale));
 
-                Basis basis = new Basis(Vector3.Up, random.RandfRange(0.0f, Tau));
+                Basis basis = Basis.Identity;
+                basis = basis.Rotated(Vector3.Up, random.RandfRange(0.0f, Tau));
+                float maxTiltRadians = Mathf.DegToRad(Mathf.Max(0.0f, MaxTiltDegrees));
+                float leanVariation = Mathf.Max(0.0f, LeanVariationRadians) * typeLeanScale;
+                if (leanVariation > 0.0001f)
+                {
+                    basis = basis.Rotated(basis.X.Normalized(), random.RandfRange(-leanVariation, leanVariation));
+                    basis = basis.Rotated(basis.Z.Normalized(), random.RandfRange(-leanVariation, leanVariation));
+                }
+                if (maxTiltRadians > 0.0001f)
+                {
+                    basis = basis.Rotated(basis.X.Normalized(), random.RandfRange(-maxTiltRadians, maxTiltRadians));
+                    basis = basis.Rotated(basis.Z.Normalized(), random.RandfRange(-maxTiltRadians, maxTiltRadians));
+                }
                 basis = basis.Scaled(scaleVector);
 
                 transforms.Add(new Transform3D(basis, position));
-                colors.Add(BladeColorMin.Lerp(BladeColorMax, random.Randf()));
-                customData.Add(new Color(random.Randf(), random.Randf(), random.Randf(), 1.0f));
+                float instanceMoisture = Mathf.Clamp(moisture + moistureBias + random.RandfRange(-0.10f, 0.10f), 0.0f, 1.0f);
+                colors.Add(ResolveGrassColor(triangleTerrainColor, instanceMoisture));
+                int atlasFrameCount = ResolveAtlasFrameCount();
+                int atlasFrame = atlasFrameCount > 1
+                    ? random.RandiRange(0, atlasFrameCount - 1)
+                    : 0;
+                float atlasFrameOffset = atlasFrameCount > 1
+                    ? (atlasFrame + 0.5f) / atlasFrameCount
+                    : 0.0f;
+                customData.Add(new Color(random.Randf(), random.Randf(), random.Randf(), atlasFrameOffset));
             }
 
             if (transforms.Count >= MaxInstancesPerPatch)
@@ -390,7 +466,9 @@ public partial class TerrainGrassSystem : Node3D
             VisibilityRangeEnd = RenderDistance,
             VisibilityRangeEndMargin = FadeDistance,
             VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self,
-            ExtraCullMargin = (BladeHeight * Mathf.Max(ScaleMin, ScaleMax)) + (WindStrength * 3.0f)
+            ExtraCullMargin = (BladeHeight * ResolveMaxHeightScale()) +
+                (BladeWidth * ResolveMaxWidthScale()) +
+                (WindStrength * 4.0f)
         };
 
         _lastTriangleCount = triangleCount;
@@ -536,14 +614,15 @@ public partial class TerrainGrassSystem : Node3D
 
     private StandardMaterial3D BuildFallbackMaterial()
     {
+        bool canUseTextureFallback = _grassTexture != null && ResolveAtlasFrameCount() <= 1;
         StandardMaterial3D material = new()
         {
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
             VertexColorUseAsAlbedo = true,
-            Roughness = 1.0f,
-            AlphaScissorThreshold = 0.35f
+            Roughness = GrassRoughness,
+            AlphaScissorThreshold = GrassAlphaScissorThreshold
         };
-        if (_grassTexture != null)
+        if (canUseTextureFallback)
         {
             material.AlbedoTexture = _grassTexture;
             material.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor;
@@ -568,8 +647,17 @@ public partial class TerrainGrassSystem : Node3D
             _grassShaderMaterial.SetShaderParameter("blade_texture", _grassTexture);
             if (_fallbackMaterial != null)
             {
-                _fallbackMaterial.AlbedoTexture = _grassTexture;
-                _fallbackMaterial.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor;
+                // StandardMaterial cannot crop atlas frames, so keep the fallback as a plain debug proxy.
+                if (ResolveAtlasFrameCount() <= 1)
+                {
+                    _fallbackMaterial.AlbedoTexture = _grassTexture;
+                    _fallbackMaterial.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor;
+                }
+                else
+                {
+                    _fallbackMaterial.AlbedoTexture = null;
+                    _fallbackMaterial.Transparency = BaseMaterial3D.TransparencyEnum.Disabled;
+                }
             }
         }
         else if (_fallbackMaterial != null)
@@ -583,8 +671,15 @@ public partial class TerrainGrassSystem : Node3D
         _grassShaderMaterial.SetShaderParameter("wind_speed", WindSpeed);
         _grassShaderMaterial.SetShaderParameter("wind_frequency", WindFrequency);
         _grassShaderMaterial.SetShaderParameter("top_bend_power", WindTopBias);
+        _grassShaderMaterial.SetShaderParameter("atlas_columns", (float)Mathf.Max(1, BladeAtlasColumns));
+        _grassShaderMaterial.SetShaderParameter("atlas_rows", (float)Mathf.Max(1, BladeAtlasRows));
+        _grassShaderMaterial.SetShaderParameter("atlas_frame_count", (float)ResolveAtlasFrameCount());
+        _grassShaderMaterial.SetShaderParameter("roughness", GrassRoughness);
+        _grassShaderMaterial.SetShaderParameter("alpha_scissor_threshold", GrassAlphaScissorThreshold);
         if (_fallbackMaterial != null)
         {
+            _fallbackMaterial.Roughness = GrassRoughness;
+            _fallbackMaterial.AlphaScissorThreshold = GrassAlphaScissorThreshold;
             _fallbackMaterial.AlbedoColor = DebugFallbackColor;
         }
 
@@ -593,60 +688,252 @@ public partial class TerrainGrassSystem : Node3D
 
     private static ArrayMesh BuildGrassBladeMesh()
     {
-        Vector3[] vertices =
-        {
-            new(-0.5f, 0.0f, 0.0f),
-            new(0.5f, 0.0f, 0.0f),
-            new(0.5f, 1.0f, 0.0f),
-            new(-0.5f, 0.0f, 0.0f),
-            new(0.5f, 1.0f, 0.0f),
-            new(-0.5f, 1.0f, 0.0f),
+        List<Vector3> vertices = new();
+        List<Vector2> uvs = new();
+        List<Vector3> normals = new();
 
-            new(0.0f, 0.0f, -0.5f),
-            new(0.0f, 0.0f, 0.5f),
-            new(0.0f, 1.0f, 0.5f),
-            new(0.0f, 0.0f, -0.5f),
-            new(0.0f, 1.0f, 0.5f),
-            new(0.0f, 1.0f, -0.5f)
-        };
+        AddGrassPlane(
+            vertices,
+            uvs,
+            normals,
+            new Vector3(-0.5f, 0.0f, 0.0f),
+            new Vector3(0.5f, 0.0f, 0.0f),
+            new Vector3(-0.26f, 0.58f, 0.0f),
+            new Vector3(0.26f, 0.58f, 0.0f),
+            new Vector3(-0.08f, 1.0f, 0.0f),
+            new Vector3(0.08f, 1.0f, 0.0f));
 
-        Vector2[] uvs =
-        {
-            new(0.0f, 1.0f),
-            new(1.0f, 1.0f),
-            new(1.0f, 0.0f),
-            new(0.0f, 1.0f),
-            new(1.0f, 0.0f),
-            new(0.0f, 0.0f),
-
-            new(0.0f, 1.0f),
-            new(1.0f, 1.0f),
-            new(1.0f, 0.0f),
-            new(0.0f, 1.0f),
-            new(1.0f, 0.0f),
-            new(0.0f, 0.0f)
-        };
-
-        Vector3[] normals = new Vector3[vertices.Length];
-        for (int i = 0; i < normals.Length; i++)
-        {
-            normals[i] = Vector3.Up;
-        }
+        AddGrassPlane(
+            vertices,
+            uvs,
+            normals,
+            new Vector3(0.0f, 0.0f, -0.5f),
+            new Vector3(0.0f, 0.0f, 0.5f),
+            new Vector3(0.0f, 0.58f, -0.26f),
+            new Vector3(0.0f, 0.58f, 0.26f),
+            new Vector3(0.0f, 1.0f, -0.08f),
+            new Vector3(0.0f, 1.0f, 0.08f));
 
         Godot.Collections.Array arrays = new();
         arrays.Resize((int)Mesh.ArrayType.Max);
-        arrays[(int)Mesh.ArrayType.Vertex] = vertices;
-        arrays[(int)Mesh.ArrayType.Normal] = normals;
-        arrays[(int)Mesh.ArrayType.TexUV] = uvs;
+        arrays[(int)Mesh.ArrayType.Vertex] = vertices.ToArray();
+        arrays[(int)Mesh.ArrayType.Normal] = normals.ToArray();
+        arrays[(int)Mesh.ArrayType.TexUV] = uvs.ToArray();
 
         ArrayMesh mesh = new();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         return mesh;
     }
 
+    private static void AddGrassPlane(
+        List<Vector3> vertices,
+        List<Vector2> uvs,
+        List<Vector3> normals,
+        Vector3 baseLeft,
+        Vector3 baseRight,
+        Vector3 midLeft,
+        Vector3 midRight,
+        Vector3 tipLeft,
+        Vector3 tipRight)
+    {
+        AddGrassTriangle(vertices, uvs, normals, baseLeft, baseRight, midRight, new(0.0f, 1.0f), new(1.0f, 1.0f), new(1.0f, 0.42f));
+        AddGrassTriangle(vertices, uvs, normals, baseLeft, midRight, midLeft, new(0.0f, 1.0f), new(1.0f, 0.42f), new(0.0f, 0.42f));
+        AddGrassTriangle(vertices, uvs, normals, midLeft, midRight, tipRight, new(0.0f, 0.42f), new(1.0f, 0.42f), new(1.0f, 0.0f));
+        AddGrassTriangle(vertices, uvs, normals, midLeft, tipRight, tipLeft, new(0.0f, 0.42f), new(1.0f, 0.0f), new(0.0f, 0.0f));
+    }
+
+    private static void AddGrassTriangle(
+        List<Vector3> vertices,
+        List<Vector2> uvs,
+        List<Vector3> normals,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector2 uvA,
+        Vector2 uvB,
+        Vector2 uvC)
+    {
+        vertices.Add(a);
+        vertices.Add(b);
+        vertices.Add(c);
+        uvs.Add(uvA);
+        uvs.Add(uvB);
+        uvs.Add(uvC);
+        normals.Add(ComputeGrassVertexNormal(a));
+        normals.Add(ComputeGrassVertexNormal(b));
+        normals.Add(ComputeGrassVertexNormal(c));
+    }
+
+    private static Vector3 ComputeGrassVertexNormal(Vector3 vertex)
+    {
+        Vector3 lateral = new(vertex.X * 0.18f, 2.8f, vertex.Z * 0.18f);
+        if (lateral.LengthSquared() <= 0.0001f)
+        {
+            return Vector3.Up;
+        }
+
+        return lateral.Normalized();
+    }
+
+    private void UpdateClumpNoiseGenerators()
+    {
+        int seed = _terrainWorld?.Seed ?? 12345;
+
+        _clumpNoise ??= new FastNoiseLite();
+        _clumpNoise.Seed = seed + 881;
+        _clumpNoise.NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth;
+        _clumpNoise.Frequency = Mathf.Max(0.0001f, ClumpNoiseFrequency);
+
+        _clumpDetailNoise ??= new FastNoiseLite();
+        _clumpDetailNoise.Seed = seed + 919;
+        _clumpDetailNoise.NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin;
+        _clumpDetailNoise.Frequency = Mathf.Max(0.0001f, ClumpDetailFrequency);
+    }
+
+    private int ResolveAtlasFrameCount()
+    {
+        int atlasColumns = Mathf.Max(1, BladeAtlasColumns);
+        int atlasRows = Mathf.Max(1, BladeAtlasRows);
+        int atlasCapacity = atlasColumns * atlasRows;
+        return Mathf.Clamp(BladeAtlasFrameCount, 1, atlasCapacity);
+    }
+
+    private float ResolveMaxHeightScale()
+    {
+        float scale = Mathf.Max(ScaleMin, ScaleMax);
+        float variation = Mathf.Max(HeightVariationMin, HeightVariationMax);
+        return scale * variation * (1.0f + HeightScaleJitter) * Mathf.Max(ThinTallTypeHeight, Mathf.Max(ShortDenseTypeHeight, CurvedTypeHeight));
+    }
+
+    private float ResolveMaxWidthScale()
+    {
+        float scale = Mathf.Max(ScaleMin, ScaleMax);
+        float variation = Mathf.Max(WidthVariationMin, WidthVariationMax);
+        return scale * variation * (1.0f + WidthScaleJitter) * Mathf.Max(ThinTallTypeWidth, Mathf.Max(ShortDenseTypeWidth, CurvedTypeWidth));
+    }
+
+    private float ComputeClumpDensityFactor(
+        Vector3 worldPosition,
+        float heightAboveWater,
+        float lowlandFactor,
+        float slopeFactor)
+    {
+        if (_clumpNoise == null)
+        {
+            return 1.0f;
+        }
+
+        float patchThresholdMin = Mathf.Clamp(ClumpThresholdMin, 0.0f, 0.99f);
+        float patchThresholdMax = Mathf.Clamp(ClumpThresholdMax, patchThresholdMin + 0.01f, 1.0f);
+        float patchNoise = NoiseToUnit(_clumpNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
+        float patchMask = Mathf.SmoothStep(patchThresholdMin, patchThresholdMax, patchNoise);
+        float clumpMask = Mathf.Lerp(Mathf.Clamp(ClumpDensityFloor, 0.0f, 1.0f), 1.0f, patchMask);
+
+        if (_clumpDetailNoise != null && ClumpDetailStrength > 0.001f)
+        {
+            float detailThresholdMin = Mathf.Clamp(ClumpDetailThresholdMin, 0.0f, 0.99f);
+            float detailThresholdMax = Mathf.Clamp(ClumpDetailThresholdMax, detailThresholdMin + 0.01f, 1.0f);
+            float detailNoise = NoiseToUnit(_clumpDetailNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
+            float detailMask = Mathf.SmoothStep(detailThresholdMin, detailThresholdMax, detailNoise);
+            float detailFloor = Mathf.Clamp(1.0f - ClumpDetailStrength, 0.0f, 1.0f);
+            clumpMask *= Mathf.Lerp(detailFloor, 1.0f, detailMask);
+        }
+
+        float shoreStart = Mathf.Max(0.0f, MinHeightAboveWater);
+        float shoreEnd = shoreStart + Mathf.Max(0.05f, ShoreDensityBoostRange);
+        float shoreProximity = 1.0f - Mathf.SmoothStep(shoreStart, shoreEnd, heightAboveWater);
+        float shoreBoost = Mathf.Lerp(1.0f, Mathf.Max(1.0f, ShoreDensityBoost), shoreProximity);
+
+        float plainsBias = Mathf.Lerp(0.94f, 1.10f, Mathf.Clamp(slopeFactor, 0.0f, 1.0f));
+        float lowlandBias = Mathf.Lerp(0.92f, 1.06f, Mathf.Clamp(lowlandFactor, 0.0f, 1.0f));
+        float terrainBias = Mathf.Min(1.4f, plainsBias * lowlandBias * shoreBoost);
+        return clumpMask * terrainBias;
+    }
+
+    private float ComputeShoreProximity(float heightAboveWater)
+    {
+        float shoreStart = Mathf.Max(0.0f, MinHeightAboveWater);
+        float shoreEnd = shoreStart + Mathf.Max(0.05f, ShoreDensityBoostRange);
+        return 1.0f - Mathf.SmoothStep(shoreStart, shoreEnd, heightAboveWater);
+    }
+
+    private static float ComputeMoistureFactor(float lowlandFactor, float slopeFactor, float shoreProximity)
+    {
+        return Mathf.Clamp((lowlandFactor * 0.5f) + (shoreProximity * 0.35f) + (slopeFactor * 0.15f), 0.0f, 1.0f);
+    }
+
+    private static Color ResolveTriangleTerrainColor(Color[] terrainColors, int triangleStart)
+    {
+        if (terrainColors == null || terrainColors.Length < triangleStart + 3)
+        {
+            return Colors.White;
+        }
+
+        Color averaged = new(
+            (terrainColors[triangleStart].R + terrainColors[triangleStart + 1].R + terrainColors[triangleStart + 2].R) / 3.0f,
+            (terrainColors[triangleStart].G + terrainColors[triangleStart + 1].G + terrainColors[triangleStart + 2].G) / 3.0f,
+            (terrainColors[triangleStart].B + terrainColors[triangleStart + 1].B + terrainColors[triangleStart + 2].B) / 3.0f,
+            1.0f);
+        return new Color(
+            Mathf.Clamp(averaged.R, 0.0f, 1.0f),
+            Mathf.Clamp(averaged.G, 0.0f, 1.0f),
+            Mathf.Clamp(averaged.B, 0.0f, 1.0f),
+            1.0f);
+    }
+
+    private Color ResolveGrassColor(Color terrainColor, float moisture)
+    {
+        Color grassColor = BladeColorMin.Lerp(BladeColorMax, Mathf.Clamp(moisture, 0.0f, 1.0f));
+        Color modulated = MultiplyColors(grassColor, terrainColor);
+        Color blended = terrainColor.Lerp(modulated, 0.5f);
+        return new Color(
+            Mathf.Clamp(blended.R, 0.0f, 1.0f),
+            Mathf.Clamp(blended.G, 0.0f, 1.0f),
+            Mathf.Clamp(blended.B, 0.0f, 1.0f),
+            1.0f);
+    }
+
+    private static Color MultiplyColors(Color a, Color b)
+    {
+        return new Color(a.R * b.R, a.G * b.G, a.B * b.B, a.A * b.A);
+    }
+
+    private static void ResolveGrassType(
+        RandomNumberGenerator random,
+        out float heightScale,
+        out float widthScale,
+        out float leanScale,
+        out float moistureBias)
+    {
+        float selector = random.Randf();
+        if (selector < 0.34f)
+        {
+            heightScale = ThinTallTypeHeight;
+            widthScale = ThinTallTypeWidth;
+            leanScale = ThinTallTypeLean;
+            moistureBias = ThinTallMoistureBias;
+            return;
+        }
+
+        if (selector < 0.68f)
+        {
+            heightScale = ShortDenseTypeHeight;
+            widthScale = ShortDenseTypeWidth;
+            leanScale = ShortDenseTypeLean;
+            moistureBias = ShortDenseMoistureBias;
+            return;
+        }
+
+        heightScale = CurvedTypeHeight;
+        widthScale = CurvedTypeWidth;
+        leanScale = CurvedTypeLean;
+        moistureBias = CurvedMoistureBias;
+    }
+
     private long BuildSettingsSignature()
     {
         ulong hash = 1469598103934665603UL;
+        HashCombine(ref hash, _terrainWorld?.Seed ?? 0);
         HashCombine(ref hash, DensityPerSquareMeter);
         HashCombine(ref hash, MaxSlopeDegrees);
         HashCombine(ref hash, MinHeightAboveWater);
@@ -656,12 +943,35 @@ public partial class TerrainGrassSystem : Node3D
         HashCombine(ref hash, MaxGrassLod);
         HashCombine(ref hash, MaxInstancesPerPatch);
         HashCombine(ref hash, PlacementLift);
+        HashCombine(ref hash, ClumpNoiseFrequency);
+        HashCombine(ref hash, ClumpThresholdMin);
+        HashCombine(ref hash, ClumpThresholdMax);
+        HashCombine(ref hash, ClumpDensityFloor);
+        HashCombine(ref hash, ClumpDetailFrequency);
+        HashCombine(ref hash, ClumpDetailStrength);
+        HashCombine(ref hash, ClumpDetailThresholdMin);
+        HashCombine(ref hash, ClumpDetailThresholdMax);
+        HashCombine(ref hash, ShoreDensityBoost);
+        HashCombine(ref hash, ShoreDensityBoostRange);
         HashCombine(ref hash, BladeHeight);
         HashCombine(ref hash, BladeWidth);
         HashCombine(ref hash, ScaleMin);
         HashCombine(ref hash, ScaleMax);
+        HashCombine(ref hash, HeightVariationMin);
+        HashCombine(ref hash, HeightVariationMax);
+        HashCombine(ref hash, WidthVariationMin);
+        HashCombine(ref hash, WidthVariationMax);
+        HashCombine(ref hash, LeanVariationRadians);
+        HashCombine(ref hash, BladeAtlasColumns);
+        HashCombine(ref hash, BladeAtlasRows);
+        HashCombine(ref hash, BladeAtlasFrameCount);
+        HashCombine(ref hash, WidthScaleJitter);
+        HashCombine(ref hash, HeightScaleJitter);
+        HashCombine(ref hash, MaxTiltDegrees);
         HashCombine(ref hash, RenderDistance);
         HashCombine(ref hash, FadeDistance);
+        HashCombine(ref hash, GrassRoughness);
+        HashCombine(ref hash, GrassAlphaScissorThreshold);
         HashCombine(ref hash, CastGrassShadows);
         HashCombine(ref hash, BladeColorMin);
         HashCombine(ref hash, BladeColorMax);
@@ -713,6 +1023,11 @@ public partial class TerrainGrassSystem : Node3D
         float weightB = sqrtR1 * (1.0f - r2);
         float weightC = sqrtR1 * r2;
         return (a * weightA) + (b * weightB) + (c * weightC);
+    }
+
+    private static float NoiseToUnit(float value)
+    {
+        return Mathf.Clamp((value + 1.0f) * 0.5f, 0.0f, 1.0f);
     }
 
     public string GetDebugSummary()

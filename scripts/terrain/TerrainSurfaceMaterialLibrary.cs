@@ -8,31 +8,31 @@ internal static class TerrainSurfaceMaterialLibrary
 
     // Texture slots are semantic terrain roles; keep them bound to curated 2k assets only so the
     // runtime keeps the existing material/shader footprint while we retune biome appearance.
-    private const string GrassLushAlbedoPath = "res://assets/terrain/textures_2k/grass/forrest_ground_01_diff_2k.png";
-    private const string GrassLushNormalPath = "res://assets/terrain/textures_2k/grass/forrest_ground_01_nor_gl_2k.png";
-    private const string GrassPathAlbedoPath = "res://assets/terrain/textures_2k/grass/grass_path_3_diff_2k.png";
-    private const string GrassPathNormalPath = "res://assets/terrain/textures_2k/grass/grass_path_3_nor_gl_2k.png";
-    private const string GrassDryAlbedoPath = "res://assets/terrain/textures_2k/grass/grass_path_2_diff_2k.png";
-    private const string GrassDryNormalPath = "res://assets/terrain/textures_2k/grass/grass_path_2_nor_gl_2k.png";
+    private const string GrassLushAlbedoPath = "res://assets/terrain/textures/grass/forrest_ground_01_diff_2k.png";
+    private const string GrassLushNormalPath = "res://assets/terrain/textures/grass/forrest_ground_01_nor_gl_2k.png";
+    private const string GrassPathAlbedoPath = "res://assets/terrain/textures/grass/grass_path_3_diff_2k.png";
+    private const string GrassPathNormalPath = "res://assets/terrain/textures/grass/grass_path_3_nor_gl_2k.png";
+    private const string GrassDryAlbedoPath = "res://assets/terrain/textures/grass/grass_path_2_diff_2k.png";
+    private const string GrassDryNormalPath = "res://assets/terrain/textures/grass/grass_path_2_nor_gl_2k.png";
 
-    private const string DirtRegularAlbedoPath = "res://assets/terrain/textures_2k/dirt/dirt_diff_2k.png";
-    private const string DirtRegularNormalPath = "res://assets/terrain/textures_2k/dirt/dirt_nor_gl_2k.png";
-    private const string DirtMudAlbedoPath = "res://assets/terrain/textures_2k/dirt/brown_mud_diff_2k.png";
-    private const string DirtMudNormalPath = "res://assets/terrain/textures_2k/dirt/brown_mud_nor_gl_2k.png";
-    private const string DirtCrackedAlbedoPath = "res://assets/terrain/textures_2k/dirt/cracked_red_ground_diff_2k.png";
-    private const string DirtCrackedNormalPath = "res://assets/terrain/textures_2k/dirt/cracked_red_ground_nor_gl_2k.png";
+    private const string DirtRegularAlbedoPath = "res://assets/terrain/textures/dirt/dirt_diff_2k.png";
+    private const string DirtRegularNormalPath = "res://assets/terrain/textures/dirt/dirt_nor_gl_2k.png";
+    private const string DirtMudAlbedoPath = "res://assets/terrain/textures/dirt/brown_mud_diff_2k.png";
+    private const string DirtMudNormalPath = "res://assets/terrain/textures/dirt/brown_mud_nor_gl_2k.png";
+    private const string DirtCrackedAlbedoPath = "res://assets/terrain/textures/dirt/cracked_red_ground_diff_2k.png";
+    private const string DirtCrackedNormalPath = "res://assets/terrain/textures/dirt/cracked_red_ground_nor_gl_2k.png";
 
-    private const string RockCliffAlbedoPath = "res://assets/terrain/textures_2k/rock/rocky_terrain_03_diff_2k.png";
-    private const string RockCliffNormalPath = "res://assets/terrain/textures_2k/rock/rocky_terrain_03_nor_gl_2k.png";
-    private const string RockGravelAlbedoPath = "res://assets/terrain/textures_2k/rock/rocky_terrain_diff_2k.png";
-    private const string RockGravelNormalPath = "res://assets/terrain/textures_2k/rock/rocky_terrain_nor_gl_2k.png";
-    private const string RockMossyAlbedoPath = "res://assets/terrain/textures_2k/rock/mossy_rock_diff_2k.png";
-    private const string RockMossyNormalPath = "res://assets/terrain/textures_2k/rock/mossy_rock_nor_gl_2k.png";
+    private const string RockCliffAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_03_diff_2k.png";
+    private const string RockCliffNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_03_nor_gl_2k.png";
+    private const string RockGravelAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_diff_2k.png";
+    private const string RockGravelNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_nor_gl_2k.png";
+    private const string RockMossyAlbedoPath = "res://assets/terrain/textures/rock/mossy_rock_diff_2k.png";
+    private const string RockMossyNormalPath = "res://assets/terrain/textures/rock/mossy_rock_nor_gl_2k.png";
 
-    private const string SandShoreAlbedoPath = "res://assets/terrain/textures_2k/sand/coast_sand_04_diff_2k.png";
-    private const string SandShoreNormalPath = "res://assets/terrain/textures_2k/sand/coast_sand_04_nor_gl_2k.png";
-    private const string SandCoastAlbedoPath = "res://assets/terrain/textures_2k/sand/coast_sand_02_diff_2k.png";
-    private const string SandCoastNormalPath = "res://assets/terrain/textures_2k/sand/coast_sand_02_nor_gl_2k.png";
+    private const string SandShoreAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_04_diff_2k.png";
+    private const string SandShoreNormalPath = "res://assets/terrain/textures/sand/coast_sand_04_nor_gl_2k.png";
+    private const string SandCoastAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_02_diff_2k.png";
+    private const string SandCoastNormalPath = "res://assets/terrain/textures/sand/coast_sand_02_nor_gl_2k.png";
 
     private const float DefaultTextureTilingScale = 0.18f;
     private const float DefaultBlendSharpness = 3.4f;

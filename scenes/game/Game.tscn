@@ -4,7 +4,7 @@
 [ext_resource type="PackedScene" path="res://scenes/characters/Humanoid.tscn" id="3_humanoid"]
 [ext_resource type="Script" uid="uid://djlq206ilib4b" path="res://scripts/game/GameController.cs" id="4_root"]
 [ext_resource type="Script" uid="uid://b6kgr5k6w5bj2" path="res://scripts/ui/FpsOverlay.cs" id="5_fps"]
-[ext_resource type="Script" path="res://scripts/world/OutdoorLookController.cs" id="6_look"]
+[ext_resource type="Script" uid="uid://sk18b0hqnatk" path="res://scripts/world/OutdoorLookController.cs" id="6_look"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.23, 0.55, 0.9, 1)
@@ -29,8 +29,8 @@ fog_sun_scatter = 0.05
 fog_density = 0.032
 fog_aerial_perspective = 0.68
 fog_sky_affect = 0.78
-fog_depth_begin = 72.0
 fog_depth_curve = 1.35
+fog_depth_begin = 72.0
 fog_depth_end = 340.0
 
 [node name="Game" type="Node3D" unique_id=239808047]
@@ -47,7 +47,7 @@ TrackedCharacterPath = NodePath("../Player")
 environment = SubResource("Environment_main")
 
 [node name="SunLight" type="DirectionalLight3D" parent="." unique_id=126458690]
-transform = Transform3D(0.9223053, -0.18688592, 0.33826998, 0, 0.87529933, 0.48358154, -0.38646206, -0.4460098, 0.8072932, 0, 35, 0)
+transform = Transform3D(0.82903755, -0.41556132, 0.37417302, 0, 0.66913056, 0.7431448, -0.55919284, -0.61609507, 0.55473435, 0, 35, 0)
 light_color = Color(1, 0.95, 0.84, 1)
 light_energy = 1.35
 light_indirect_energy = 0.1
