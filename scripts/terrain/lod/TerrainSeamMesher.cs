@@ -61,9 +61,9 @@ public static class TerrainSeamMesher
         float voxelSize = TerrainMetrics.GetVoxelSize(config, blockId.Lod);
         float planeEpsilon = Mathf.Max(0.0005f, voxelSize * 0.001f);
         float quantizeStep = Mathf.Max(0.0005f, voxelSize * 0.01f);
-        float faceInset = Mathf.Max(0.0025f, voxelSize * 0.015f);
-        float surfaceInset = Mathf.Max(0.005f, voxelSize * 0.06f);
-        float skirtDepth = Mathf.Max(0.01f, voxelSize * 0.08f);
+        float faceInset = Mathf.Max(0.0015f, voxelSize * 0.0075f);
+        float surfaceInset = Mathf.Max(0.0025f, voxelSize * 0.028f);
+        float skirtDepth = Mathf.Max(0.005f, voxelSize * 0.038f);
 
         List<Vector3> vertices = new();
         List<Vector3> normals = new();
@@ -73,9 +73,8 @@ public static class TerrainSeamMesher
         TerrainSeamFace generatedFaces = TerrainSeamFace.None;
         int quadCount = 0;
 
-        // Current seam strategy: use a very small skirt because the mixed-LOD issue here is
-        // a T-junction raster crack, not a wide missing chunk. Keep the skirt tucked slightly
-        // under the fine surface so it does not show up as a dark border at grazing angles.
+        // Mixed-LOD seams are mostly raster T-junctions, not wide holes. Keep the skirt tiny,
+        // feather it under the surface, and avoid a single flat wall so the seam stays hidden.
         foreach (TerrainSeamFace face in EnumerateFaces(requestedFaces))
         {
             List<BoundaryEdge> boundaryEdges = CollectBoundaryEdgesForFace(
@@ -93,8 +92,16 @@ public static class TerrainSeamMesher
             Vector3 faceDirection = GetFaceNormal(face);
             foreach (BoundaryEdge edge in boundaryEdges)
             {
-                AddSkirtQuad(vertices, normals, uvs, colors, edge, faceDirection, faceInset, surfaceInset, skirtDepth);
-                quadCount++;
+                quadCount += AddSkirtQuad(
+                    vertices,
+                    normals,
+                    uvs,
+                    colors,
+                    edge,
+                    faceDirection,
+                    faceInset,
+                    surfaceInset,
+                    skirtDepth);
             }
         }
 
@@ -315,7 +322,7 @@ public static class TerrainSeamMesher
             : Vector3.Up;
     }
 
-    private static void AddSkirtQuad(
+    private static int AddSkirtQuad(
         List<Vector3> vertices,
         List<Vector3> normals,
         List<Vector2> uvs,
@@ -326,18 +333,90 @@ public static class TerrainSeamMesher
         float surfaceInset,
         float skirtDepth)
     {
-        Vector3 startNormal = ResolveSeamNormal(edge.StartNormal, faceDirection);
-        Vector3 endNormal = ResolveSeamNormal(edge.EndNormal, faceDirection);
-        Vector3 topInsetA = (faceDirection * faceInset) + (startNormal * (surfaceInset * 0.35f));
-        Vector3 topInsetB = (faceDirection * faceInset) + (endNormal * (surfaceInset * 0.35f));
-        Vector3 bottomOffsetA = (faceDirection * skirtDepth) - (startNormal * surfaceInset);
-        Vector3 bottomOffsetB = (faceDirection * skirtDepth) - (endNormal * surfaceInset);
+        Vector3 topNormalA = ResolveSeamNormal(edge.StartNormal, faceDirection, 0.28f);
+        Vector3 topNormalB = ResolveSeamNormal(edge.EndNormal, faceDirection, 0.28f);
+        Vector3 midNormalA = ResolveSeamNormal(edge.StartNormal, faceDirection, 0.62f);
+        Vector3 midNormalB = ResolveSeamNormal(edge.EndNormal, faceDirection, 0.62f);
+        Vector3 bottomNormalA = ResolveSeamNormal(edge.StartNormal, faceDirection, 0.82f);
+        Vector3 bottomNormalB = ResolveSeamNormal(edge.EndNormal, faceDirection, 0.82f);
 
-        Vector3 a = edge.Start - topInsetA;
-        Vector3 b = edge.End - topInsetB;
-        Vector3 c = edge.End + bottomOffsetB;
-        Vector3 d = edge.Start + bottomOffsetA;
+        Vector3 topA = edge.Start
+            - (faceDirection * faceInset)
+            - (topNormalA * (surfaceInset * 0.16f));
+        Vector3 topB = edge.End
+            - (faceDirection * faceInset)
+            - (topNormalB * (surfaceInset * 0.16f));
 
+        Vector3 midA = edge.Start
+            + (faceDirection * (faceInset * 0.12f))
+            - (midNormalA * (surfaceInset * 0.58f));
+        Vector3 midB = edge.End
+            + (faceDirection * (faceInset * 0.12f))
+            - (midNormalB * (surfaceInset * 0.58f));
+
+        Vector3 bottomA = edge.Start
+            - (faceDirection * (faceInset * 0.22f))
+            - (bottomNormalA * ((surfaceInset * 1.08f) + skirtDepth));
+        Vector3 bottomB = edge.End
+            - (faceDirection * (faceInset * 0.22f))
+            - (bottomNormalB * ((surfaceInset * 1.08f) + skirtDepth));
+
+        AddDoubleSidedQuad(
+            vertices,
+            normals,
+            uvs,
+            colors,
+            topA,
+            topB,
+            midB,
+            midA,
+            topNormalA,
+            topNormalB,
+            midNormalB,
+            midNormalA,
+            edge.StartColor,
+            edge.EndColor,
+            edge.EndColor,
+            edge.StartColor);
+        AddDoubleSidedQuad(
+            vertices,
+            normals,
+            uvs,
+            colors,
+            midA,
+            midB,
+            bottomB,
+            bottomA,
+            midNormalA,
+            midNormalB,
+            bottomNormalB,
+            bottomNormalA,
+            edge.StartColor,
+            edge.EndColor,
+            edge.EndColor,
+            edge.StartColor);
+
+        return 2;
+    }
+
+    private static void AddDoubleSidedQuad(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<Color> colors,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector3 d,
+        Vector3 normalA,
+        Vector3 normalB,
+        Vector3 normalC,
+        Vector3 normalD,
+        Color colorA,
+        Color colorB,
+        Color colorC,
+        Color colorD)
+    {
         AddTriangle(
             vertices,
             normals,
@@ -346,12 +425,12 @@ public static class TerrainSeamMesher
             a,
             b,
             c,
-            startNormal,
-            endNormal,
-            endNormal,
-            edge.StartColor,
-            edge.EndColor,
-            edge.EndColor);
+            normalA,
+            normalB,
+            normalC,
+            colorA,
+            colorB,
+            colorC);
         AddTriangle(
             vertices,
             normals,
@@ -360,12 +439,12 @@ public static class TerrainSeamMesher
             a,
             c,
             d,
-            startNormal,
-            endNormal,
-            startNormal,
-            edge.StartColor,
-            edge.EndColor,
-            edge.StartColor);
+            normalA,
+            normalC,
+            normalD,
+            colorA,
+            colorC,
+            colorD);
 
         AddTriangle(
             vertices,
@@ -375,12 +454,12 @@ public static class TerrainSeamMesher
             c,
             b,
             a,
-            endNormal,
-            endNormal,
-            startNormal,
-            edge.EndColor,
-            edge.EndColor,
-            edge.StartColor);
+            normalC,
+            normalB,
+            normalA,
+            colorC,
+            colorB,
+            colorA);
         AddTriangle(
             vertices,
             normals,
@@ -389,12 +468,12 @@ public static class TerrainSeamMesher
             d,
             c,
             a,
-            startNormal,
-            endNormal,
-            startNormal,
-            edge.StartColor,
-            edge.EndColor,
-            edge.StartColor);
+            normalD,
+            normalC,
+            normalA,
+            colorD,
+            colorC,
+            colorA);
     }
 
     private static void AddTriangle(
@@ -446,7 +525,7 @@ public static class TerrainSeamMesher
         };
     }
 
-    private static Vector3 ResolveSeamNormal(Vector3 boundaryNormal, Vector3 faceDirection)
+    private static Vector3 ResolveSeamNormal(Vector3 boundaryNormal, Vector3 faceDirection, float faceSuppression)
     {
         if (boundaryNormal.LengthSquared() <= 0.000001f)
         {
@@ -454,16 +533,37 @@ public static class TerrainSeamMesher
         }
 
         Vector3 normalized = boundaryNormal.Normalized();
-        if (Mathf.Abs(normalized.Dot(faceDirection)) > 0.92f)
+        float faceComponent = normalized.Dot(faceDirection);
+        Vector3 surfaceBiased = normalized - (faceDirection * faceComponent * Mathf.Clamp(faceSuppression, 0.0f, 1.0f));
+        if (surfaceBiased.LengthSquared() <= 0.000001f)
         {
-            Vector3 blended = (normalized - (faceDirection * 0.35f)).Normalized();
-            if (blended.LengthSquared() > 0.000001f)
-            {
-                return blended;
-            }
+            surfaceBiased = normalized - (faceDirection * faceComponent);
         }
 
-        return normalized;
+        if (surfaceBiased.LengthSquared() <= 0.000001f)
+        {
+            Vector3 fallback = faceDirection.Cross(Vector3.Up);
+            if (fallback.LengthSquared() <= 0.000001f)
+            {
+                fallback = faceDirection.Cross(Vector3.Right);
+            }
+
+            surfaceBiased = fallback.LengthSquared() > 0.000001f
+                ? fallback.Normalized()
+                : -faceDirection;
+        }
+
+        float alignment = Mathf.SmoothStep(0.15f, 0.95f, Mathf.Abs(faceComponent));
+        Vector3 blended = normalized.Lerp(surfaceBiased.Normalized(), Mathf.Lerp(faceSuppression * 0.35f, faceSuppression, alignment));
+        if (blended.LengthSquared() <= 0.000001f)
+        {
+            return surfaceBiased.Normalized();
+        }
+
+        Vector3 resolved = blended.Normalized();
+        return resolved.Dot(normalized) < 0.0f
+            ? -resolved
+            : resolved;
     }
 
     private readonly record struct QuantizedVector(int X, int Y, int Z) : IComparable<QuantizedVector>
