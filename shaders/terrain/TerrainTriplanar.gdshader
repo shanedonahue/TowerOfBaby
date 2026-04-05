@@ -9,9 +9,9 @@ uniform sampler2D rock_albedo : source_color, repeat_enable, filter_linear_mipma
 uniform sampler2D rock_normal : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
 
 uniform float texture_tiling_scale = 0.32;
-uniform float blend_sharpness = 3.5;
-uniform float grass_slope_max = 0.34;
-uniform float rock_slope_start = 0.32;
+uniform float blend_sharpness = 3.0;
+uniform float grass_slope_max = 0.28;
+uniform float rock_slope_start = 0.42;
 uniform float water_level = -2.6;
 uniform float terrain_roughness = 1.0;
 uniform float vertex_tint_strength = 0.06;

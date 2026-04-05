@@ -5,29 +5,15 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
-    private const float MacroTintBlendScale = 0.03f;
-    private const float WetTintBlendScale = 0.05f;
-    private const float CliffBreakupTintBlendScale = 0.04f;
-    private const float AccentTintBlendScale = 0.025f;
-    private const float BiomeIdentityTintScale = 0.08f;
-    private const float ShadeFactorMin = 0.94f;
-    private const float ShadeFactorMax = 1.06f;
-    private const float ShadeFactorFlatBonus = 0.02f;
-    private const float ShadeFactorPeakBonus = 0.03f;
-    private const float ShadeFactorWetPenalty = 0.03f;
-    // Keep cliffs distinctly darker than flats for now; revisit these only after an in-engine visual check.
-    private const float ShadeFactorCliffBasePenalty = 0.012f;
-    private const float ShadeFactorCliffBreakupPenalty = 0.038f;
-    private const float PlateauLightBlendStrength = 0.06f;
-    private const float SnowDustHighlightBlendStrength = 0.08f;
-    private const float ShoreColorBlendStrength = 0.16f;
-    private const float SlopeMeadowTintBlendStrength = 0.04f;
-    private const float SaturationBoostBase = 1.0f;
-    private const float DominantBiomeSaturationBoost = 0.008f;
-    private const float CanyonSaturationBoost = 0.004f;
-    private const float SwampSaturationBoost = 0.0025f;
-    private const float CliffSaturationBoost = 0.004f;
-    private const float PeakSaturationReduction = 0.04f;
+    private const float HeightTintStrength = 0.055f;
+    private const float LowlandTintStrength = 0.045f;
+    private const float ShoreTintStrength = 0.085f;
+    private const float ShoreBrightenStrength = 0.10f;
+    private const float BiomeTintStrength = 0.075f;
+    private const float SlopeDarkeningMax = 0.085f;
+    private const bool EnableMeadowBoost = true;
+    private const float MeadowTintStrength = 0.16f;
+    private const float MeadowSaturationBoost = 0.12f;
 
     private static readonly Color[] SlopeBandPalette =
     {
@@ -49,44 +35,17 @@ public sealed class TerrainSurfaceColorizer
         new(0.92f, 0.92f, 0.96f, 1.0f)
     };
 
-    private static readonly Color PlainsSurfaceColor = new(0.24f, 0.34f, 0.16f, 1.0f);
-    private static readonly Color RockySurfaceColor = new(0.40f, 0.39f, 0.32f, 1.0f);
-    private static readonly Color CanyonSurfaceColor = new(0.55f, 0.34f, 0.20f, 1.0f);
-    private static readonly Color SwampSurfaceColor = new(0.16f, 0.27f, 0.22f, 1.0f);
-    private static readonly Color VolcanicSurfaceColor = new(0.25f, 0.18f, 0.16f, 1.0f);
+    private static readonly Color WarmLowHeightTint = new(0.78f, 0.69f, 0.57f, 1.0f);
+    private static readonly Color CoolHighHeightTint = new(0.72f, 0.82f, 0.93f, 1.0f);
+    private static readonly Color LowlandTint = new(0.71f, 0.79f, 0.60f, 1.0f);
+    private static readonly Color ShoreTint = new(0.91f, 0.85f, 0.69f, 1.0f);
+    private static readonly Color MeadowBoostColor = new(0.56f, 0.81f, 0.34f, 1.0f);
 
-    private static readonly Color PlainsRockColor = new(0.34f, 0.28f, 0.20f, 1.0f);
-    private static readonly Color RockyRockColor = new(0.31f, 0.33f, 0.35f, 1.0f);
-    private static readonly Color CanyonRockColor = new(0.43f, 0.31f, 0.24f, 1.0f);
-    private static readonly Color SwampRockColor = new(0.22f, 0.27f, 0.24f, 1.0f);
-    private static readonly Color VolcanicRockColor = new(0.19f, 0.19f, 0.21f, 1.0f);
-
-    private static readonly Color PlainsAccentColor = new(0.42f, 0.50f, 0.22f, 1.0f);
-    private static readonly Color RockyAccentColor = new(0.50f, 0.60f, 0.64f, 1.0f);
-    private static readonly Color CanyonAccentColor = new(0.86f, 0.50f, 0.28f, 1.0f);
-    private static readonly Color SwampAccentColor = new(0.22f, 0.57f, 0.48f, 1.0f);
-    private static readonly Color VolcanicAccentColor = new(0.72f, 0.31f, 0.24f, 1.0f);
-
-    private static readonly Color PlainsWetColor = new(0.20f, 0.29f, 0.18f, 1.0f);
-    private static readonly Color RockyWetColor = new(0.29f, 0.37f, 0.34f, 1.0f);
-    private static readonly Color CanyonWetColor = new(0.43f, 0.35f, 0.24f, 1.0f);
-    private static readonly Color SwampWetColor = new(0.18f, 0.42f, 0.35f, 1.0f);
-    private static readonly Color VolcanicWetColor = new(0.22f, 0.23f, 0.25f, 1.0f);
-
-    private static readonly Color HighlandDustColor = new(0.60f, 0.56f, 0.50f, 1.0f);
-    private static readonly Color SnowDustColor = new(0.95f, 0.97f, 1.0f, 1.0f);
-    private static readonly Color ShoreColor = new(0.63f, 0.57f, 0.42f, 1.0f);
-    private static readonly Color MacroWarmColor = new(0.60f, 0.42f, 0.26f, 1.0f);
-    private static readonly Color MacroCoolColor = new(0.25f, 0.38f, 0.49f, 1.0f);
-    private static readonly Color MacroLushColor = new(0.20f, 0.38f, 0.26f, 1.0f);
-    private static readonly Color MacroDryColor = new(0.58f, 0.42f, 0.24f, 1.0f);
-    private static readonly Color SlopeMeadowColor = new(0.56f, 0.66f, 0.31f, 1.0f);
-    private static readonly Color WetLowlandColor = new(0.22f, 0.39f, 0.34f, 1.0f);
-    private static readonly Color CliffShadowColor = new(0.15f, 0.17f, 0.19f, 1.0f);
-    private static readonly Color CliffHighlightColor = new(0.42f, 0.38f, 0.34f, 1.0f);
-    private static readonly Color PeakRockColor = new(0.62f, 0.64f, 0.67f, 1.0f);
-    private static readonly Color PeakSnowColor = new(0.93f, 0.95f, 0.97f, 1.0f);
-    private static readonly Color FlatWarmLightColor = new(0.72f, 0.67f, 0.56f, 1.0f);
+    private static readonly Color PlainsBiomeTint = new(0.59f, 0.77f, 0.45f, 1.0f);
+    private static readonly Color RockyBiomeTint = new(0.66f, 0.69f, 0.72f, 1.0f);
+    private static readonly Color CanyonBiomeTint = new(0.87f, 0.64f, 0.44f, 1.0f);
+    private static readonly Color SwampBiomeTint = new(0.47f, 0.72f, 0.63f, 1.0f);
+    private static readonly Color VolcanicBiomeTint = new(0.77f, 0.58f, 0.54f, 1.0f);
 
     private readonly int _seed;
     private readonly float _terrainHeight;
@@ -98,12 +57,6 @@ public sealed class TerrainSurfaceColorizer
     private readonly float _waterBasinInfluence;
     private readonly float _baseY;
     private readonly TerrainBiomeClassifier _biomeClassifier;
-    private readonly FastNoiseLite _macroTintNoise;
-    private readonly FastNoiseLite _macroShadeNoise;
-    private readonly FastNoiseLite _macroBiomeNoise;
-    private readonly FastNoiseLite _macroAccentNoise;
-    private readonly FastNoiseLite _wetPatchNoise;
-    private readonly FastNoiseLite _cliffBreakupNoise;
     private VoxelFieldGenerator _fieldGenerator = null!;
 
     public TerrainSurfaceColorizer(TerrainConfig config)
@@ -119,42 +72,6 @@ public sealed class TerrainSurfaceColorizer
         _baseY = config.BaseY;
 
         _biomeClassifier = new TerrainBiomeClassifier(_seed);
-        _macroTintNoise = new FastNoiseLite
-        {
-            Seed = _seed + 641,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.00185f
-        };
-        _macroShadeNoise = new FastNoiseLite
-        {
-            Seed = _seed + 683,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0036f
-        };
-        _macroBiomeNoise = new FastNoiseLite
-        {
-            Seed = _seed + 719,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.00105f
-        };
-        _macroAccentNoise = new FastNoiseLite
-        {
-            Seed = _seed + 743,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0064f
-        };
-        _wetPatchNoise = new FastNoiseLite
-        {
-            Seed = _seed + 761,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0044f
-        };
-        _cliffBreakupNoise = new FastNoiseLite
-        {
-            Seed = _seed + 797,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.017f
-        };
     }
 
     public VoxelMeshBuildResult BuildLitMesh(VoxelMeshBuildResult mesh, VoxelChunkData data)
@@ -218,113 +135,50 @@ public sealed class TerrainSurfaceColorizer
         Vector3 safeNormal = normal.LengthSquared() > 0.000001f
             ? normal.Normalized()
             : Vector3.Up;
+
         float slope = 1.0f - Mathf.Clamp(safeNormal.Dot(Vector3.Up), 0.0f, 1.0f);
-        float flatBlend = 1.0f - Mathf.SmoothStep(0.10f, 0.34f, slope);
-        float slopeBlend = Mathf.SmoothStep(0.08f, 0.42f, slope) *
-                           (1.0f - (Mathf.SmoothStep(0.34f, 0.72f, slope) * 0.45f));
-        float cliffBlend = Mathf.SmoothStep(0.24f, 0.72f, slope);
-        float sheerBlend = Mathf.SmoothStep(0.44f, 0.88f, slope);
+        float flatness = 1.0f - Mathf.SmoothStep(0.10f, 0.42f, slope);
+        float slopeDarkening = Mathf.SmoothStep(0.12f, 0.78f, slope);
         float height01 = NormalizeHeight(worldPosition.Y);
         float lowlandBlend = 1.0f - Mathf.SmoothStep(0.16f, 0.42f, height01);
-        float uplandBlend = Mathf.SmoothStep(0.56f, 0.84f, height01);
-        float peakBlend = Mathf.SmoothStep(0.76f, 0.96f, height01);
-        float snowDustBlend = peakBlend * flatBlend;
         float shoreBlend = (1.0f - Mathf.SmoothStep(
             _shorelineFalloff * 0.35f,
-            _shorelineFalloff * 1.65f,
-            Mathf.Abs(worldPosition.Y - _waterLevel))) * flatBlend;
+            _shorelineFalloff * 1.7f,
+            Mathf.Abs(worldPosition.Y - _waterLevel))) * (0.45f + (flatness * 0.55f));
 
         float dominantWeight = GetDominantBiomeWeight(biome);
-        float macroTint = NoiseToUnit(_macroTintNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
-        float macroShade = NoiseToUnit(_macroShadeNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
-        float macroBiome = NoiseToUnit(_macroBiomeNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
-        float macroAccent = NoiseToUnit(_macroAccentNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
-        float wetPatch = NoiseToUnit(_wetPatchNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
-        float cliffBreakup = NoiseToUnit(_cliffBreakupNoise.GetNoise3D(
-            worldPosition.X,
-            worldPosition.Y * 1.8f,
-            worldPosition.Z));
+        Color color = baseMaterialColor;
 
-        float wetLowlandBlend = flatBlend * Mathf.Clamp(
-            (lowlandBlend * (0.28f + (biome.Moisture * 0.36f) + (biome.SwampWeight * 0.34f))) +
-            (shoreBlend * 0.55f) +
-            (wetPatch * lowlandBlend * 0.06f),
-            0.0f,
-            1.0f);
-
-        Color biomeSurfaceColor = BuildBiomeSurfaceColor(biome);
-        Color biomeRockColor = BuildBiomeRockColor(biome);
-        Color biomeAccentColor = BuildBiomeAccentColor(biome);
-        Color biomeWetColor = BuildBiomeWetColor(biome);
-        Color macroGroundTint = MacroCoolColor.Lerp(MacroWarmColor, macroTint);
-        Color macroRegionTint = MacroLushColor.Lerp(MacroDryColor, macroBiome);
-        Color cliffStrataColor = CliffShadowColor.Lerp(
-            CliffHighlightColor,
-            Mathf.SmoothStep(0.18f, 0.86f, cliffBreakup));
-
-        Color flatColor = baseMaterialColor.Lerp(biomeSurfaceColor, 0.58f);
-        flatColor = flatColor.Lerp(biomeAccentColor, (0.18f + (macroBiome * 0.12f)) * AccentTintBlendScale);
-        flatColor = flatColor.Lerp(macroGroundTint, (0.10f + (flatBlend * 0.08f)) * MacroTintBlendScale);
-        flatColor = flatColor.Lerp(biome.DebugColor, dominantWeight * 0.10f * BiomeIdentityTintScale);
-
-        Color slopeColor = baseMaterialColor.Lerp(
-            biomeSurfaceColor.Lerp(biomeRockColor, 0.42f + (biome.Ruggedness * 0.20f)),
-            0.72f);
-        slopeColor = slopeColor.Lerp(
-            SlopeMeadowColor,
-            biome.PlainsWeight * SlopeMeadowTintBlendStrength * (1.0f - cliffBlend));
-        slopeColor = slopeColor.Lerp(biomeAccentColor, (0.12f + (macroAccent * 0.08f)) * AccentTintBlendScale);
-        slopeColor = slopeColor.Lerp(macroRegionTint, 0.08f * MacroTintBlendScale);
-
-        Color cliffColor = baseMaterialColor.Lerp(biomeRockColor, 0.84f);
-        cliffColor = cliffColor.Lerp(CliffShadowColor, 0.28f + (sheerBlend * 0.18f));
-        cliffColor = cliffColor.Lerp(cliffStrataColor, (0.22f + (cliffBlend * 0.18f)) * CliffBreakupTintBlendScale);
-        cliffColor = cliffColor.Lerp(
-            biomeAccentColor,
-            ((biome.CanyonWeight * 0.12f) + (biome.VolcanicWeight * 0.10f)) * AccentTintBlendScale);
-        cliffColor = cliffColor.Lerp(PeakRockColor, uplandBlend * (0.08f + (peakBlend * 0.18f)));
-
-        Color wetColor = biomeSurfaceColor.Lerp(biomeWetColor, 0.68f);
-        wetColor = wetColor.Lerp(WetLowlandColor, (0.26f + (wetPatch * 0.18f)) * WetTintBlendScale);
-        wetColor = wetColor.Lerp(MacroCoolColor, (0.18f + (biome.Moisture * 0.12f)) * MacroTintBlendScale);
-        wetColor = wetColor.Lerp(ShoreColor, shoreBlend * 0.12f);
-
-        Color peakColor = biomeRockColor.Lerp(PeakRockColor, 0.42f + (peakBlend * 0.18f));
-        peakColor = peakColor.Lerp(HighlandDustColor, uplandBlend * 0.22f);
-        peakColor = peakColor.Lerp(PeakSnowColor, snowDustBlend * 0.72f);
-
-        Color color = flatColor;
-        color = color.Lerp(slopeColor, slopeBlend * 0.82f);
-        color = color.Lerp(cliffColor, cliffBlend);
-        color = color.Lerp(wetColor, wetLowlandBlend * ((0.60f + (wetPatch * 0.25f)) * WetTintBlendScale));
-        color = color.Lerp(ShoreColor, shoreBlend * ShoreColorBlendStrength);
-        color = color.Lerp(HighlandDustColor, uplandBlend * 0.18f);
-        color = color.Lerp(peakColor, peakBlend * (0.35f + (flatBlend * 0.20f)));
-
-        Color macroCompositeTint = macroGroundTint.Lerp(macroRegionTint, 0.5f + (macroAccent * 0.2f));
+        Color heightTint = WarmLowHeightTint.Lerp(CoolHighHeightTint, height01);
+        color = color.Lerp(heightTint, HeightTintStrength);
+        color = color.Lerp(LowlandTint, lowlandBlend * LowlandTintStrength);
+        color = color.Lerp(ShoreTint, shoreBlend * ShoreTintStrength);
         color = color.Lerp(
-            macroCompositeTint,
-            (0.06f + (flatBlend * 0.08f) + (cliffBlend * 0.03f)) * MacroTintBlendScale);
+            BuildBiomeHueTint(biome),
+            (0.35f + (dominantWeight * 0.65f)) * BiomeTintStrength);
 
-        float shadeFactor = Mathf.Lerp(ShadeFactorMin, ShadeFactorMax, macroShade);
-        shadeFactor += flatBlend * ShadeFactorFlatBonus;
-        shadeFactor += peakBlend * ShadeFactorPeakBonus;
-        shadeFactor -= wetLowlandBlend * ShadeFactorWetPenalty;
-        shadeFactor -= cliffBlend * (ShadeFactorCliffBasePenalty + ((1.0f - cliffBreakup) * ShadeFactorCliffBreakupPenalty));
-        color = ScaleColor(color, shadeFactor);
+        color = ScaleColor(color, 1.0f - (slopeDarkening * SlopeDarkeningMax));
+        color = color.Lerp(Colors.White, shoreBlend * ShoreBrightenStrength);
 
-        float plateauLift = flatBlend * (0.06f + (uplandBlend * 0.06f));
-        color = color.Lerp(FlatWarmLightColor, plateauLift * PlateauLightBlendStrength);
-        color = color.Lerp(PeakSnowColor, snowDustBlend * SnowDustHighlightBlendStrength);
+        float meadowBlend = EnableMeadowBoost
+            ? ComputeMeadowBoost(flatness, shoreBlend, biome)
+            : 0.0f;
+        if (meadowBlend > 0.0f)
+        {
+            color = color.Lerp(MeadowBoostColor, meadowBlend * MeadowTintStrength);
+            color = SaturateColor(color, 1.0f + (meadowBlend * MeadowSaturationBoost));
+        }
 
-        float saturationBoost = SaturationBoostBase +
-                                (dominantWeight * DominantBiomeSaturationBoost) +
-                                (biome.CanyonWeight * CanyonSaturationBoost) +
-                                (biome.SwampWeight * SwampSaturationBoost) +
-                                (cliffBlend * CliffSaturationBoost) -
-                                (peakBlend * PeakSaturationReduction);
-        color = SaturateColor(color, saturationBoost);
         return ClampColor(color);
+    }
+
+    private static float ComputeMeadowBoost(float flatness, float shoreBlend, TerrainBiomeSample biome)
+    {
+        float plainsBlend = Mathf.SmoothStep(0.35f, 0.85f, biome.PlainsWeight);
+        float moistureBlend = Mathf.SmoothStep(0.38f, 0.72f, biome.Moisture);
+        float dryPenalty = 1.0f - Mathf.SmoothStep(0.48f, 0.92f, biome.Ruggedness);
+        float shorePenalty = 1.0f - (shoreBlend * 0.35f);
+        return Mathf.Clamp(flatness * plainsBlend * moistureBlend * dryPenalty * shorePenalty, 0.0f, 1.0f);
     }
 
     private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)
@@ -403,37 +257,13 @@ public sealed class TerrainSurfaceColorizer
         return Mathf.Clamp((worldY - minHeight) / Mathf.Max(1.0f, maxHeight - minHeight), 0.0f, 1.0f);
     }
 
-    private static Color BuildBiomeSurfaceColor(TerrainBiomeSample biome) => BlendBiomeColor(
+    private static Color BuildBiomeHueTint(TerrainBiomeSample biome) => BlendBiomeColor(
         biome,
-        PlainsSurfaceColor,
-        RockySurfaceColor,
-        CanyonSurfaceColor,
-        SwampSurfaceColor,
-        VolcanicSurfaceColor);
-
-    private static Color BuildBiomeRockColor(TerrainBiomeSample biome) => BlendBiomeColor(
-        biome,
-        PlainsRockColor,
-        RockyRockColor,
-        CanyonRockColor,
-        SwampRockColor,
-        VolcanicRockColor);
-
-    private static Color BuildBiomeAccentColor(TerrainBiomeSample biome) => BlendBiomeColor(
-        biome,
-        PlainsAccentColor,
-        RockyAccentColor,
-        CanyonAccentColor,
-        SwampAccentColor,
-        VolcanicAccentColor);
-
-    private static Color BuildBiomeWetColor(TerrainBiomeSample biome) => BlendBiomeColor(
-        biome,
-        PlainsWetColor,
-        RockyWetColor,
-        CanyonWetColor,
-        SwampWetColor,
-        VolcanicWetColor);
+        PlainsBiomeTint,
+        RockyBiomeTint,
+        CanyonBiomeTint,
+        SwampBiomeTint,
+        VolcanicBiomeTint);
 
     private static Color BlendBiomeColor(
         TerrainBiomeSample biome,
@@ -504,11 +334,6 @@ public sealed class TerrainSurfaceColorizer
             Mathf.Clamp(color.G, 0.0f, 1.0f),
             Mathf.Clamp(color.B, 0.0f, 1.0f),
             Mathf.Clamp(color.A, 0.0f, 1.0f));
-    }
-
-    private static float NoiseToUnit(float value)
-    {
-        return Mathf.Clamp((value + 1.0f) * 0.5f, 0.0f, 1.0f);
     }
 
     private static Color SaturateColor(Color color, float saturation)

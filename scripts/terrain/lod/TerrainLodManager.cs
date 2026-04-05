@@ -31,12 +31,12 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0,64,4")] public float TargetVisibleTerrainPadding = 24.0f;
 
     [ExportGroup("Refinement Stability")]
-    [Export(PropertyHint.Range, "0,2,1")] public int SameLodBubbleRadiusXZ = 1;
+    [Export(PropertyHint.Range, "0,2,1")] public int SameLodBubbleRadiusXZ = 2;
     [Export(PropertyHint.Range, "1,8,1")] public int CollisionSafetyRadiusXZ = 3;
     [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float BubbleMovePaddingFraction = 0.20f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float BlockReleaseHysteresisSeconds = 0.70f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float RefinedBlockReleaseExtraSeconds = 0.45f;
-    [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentPromotionsPerFrame = 2;
+    [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentPromotionsPerFrame = 3;
     [Export(PropertyHint.Range, "0,8,1")] public int RefinedParentDemotionsPerFrame = 1;
 
     [ExportGroup("Worker Scheduler")]
@@ -422,11 +422,33 @@ public partial class TerrainLodManager : Node3D
         {
             for (int x = -bubbleRadius; x <= bubbleRadius; x++)
             {
+                if (!ShouldRefineParentOffset(x, z, bubbleRadius))
+                {
+                    continue;
+                }
+
                 AddRefinedParent(refinedParents, centerParent, x, z);
             }
         }
 
         return refinedParents;
+    }
+
+    private static bool ShouldRefineParentOffset(int xOffset, int zOffset, int bubbleRadius)
+    {
+        if (bubbleRadius <= 0)
+        {
+            return xOffset == 0 && zOffset == 0;
+        }
+
+        if (bubbleRadius == 1)
+        {
+            return true;
+        }
+
+        // Keep the close range a bit finer without paying for a full square of extra LOD0 parents.
+        Vector2 offset = new(xOffset, zOffset);
+        return offset.LengthSquared() <= Mathf.Pow(bubbleRadius + 0.05f, 2.0f);
     }
 
     private static void AddRefinedParent(HashSet<TerrainBlockId> refinedParents, TerrainBlockId centerParent, int xOffset, int zOffset)

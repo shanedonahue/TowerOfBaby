@@ -14,9 +14,9 @@ internal static class TerrainSurfaceMaterialLibrary
     private const string RockNormalPath = "res://assets/terrain/stylized-textures/cliff_rocks_02_1k/cliff_rocks_02_normal_gl_1k.png";
 
     private const float DefaultTextureTilingScale = 0.32f;
-    private const float DefaultBlendSharpness = 3.5f;
-    private const float DefaultGrassSlopeMax = 0.34f;
-    private const float DefaultRockSlopeStart = 0.32f;
+    private const float DefaultBlendSharpness = 3.0f;
+    private const float DefaultGrassSlopeMax = 0.28f;
+    private const float DefaultRockSlopeStart = 0.42f;
     private const float DefaultVertexTintStrength = 0.06f;
     private const float DefaultNormalStrength = 0.75f;
     private const float DefaultNormalDetailMaxDistance = 72.0f;

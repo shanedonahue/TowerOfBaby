@@ -22,12 +22,12 @@ public readonly record struct TerrainSurfaceColumnSample(
 public sealed class VoxelFieldGenerator
 {
     private const float TerrainWarpFrequency = 0.0100f;
-    private const float TerrainWarpStrength = 16.0f;
+    private const float TerrainWarpStrength = 12.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
-    private const float MountainHeightScale = 0.72f;
-    private const float HillHeightScale = 0.16f;
-    private const float DetailContributionScale = 0.24f;
+    private const float MountainHeightScale = 0.62f;
+    private const float HillHeightScale = 0.13f;
+    private const float DetailContributionScale = 0.18f;
     private const float SwampVegetationBias = 0.60f;
     private const float WaterShorelineFadeMultiplier = 1.85f;
     private const float WaterSubmergedFadeMultiplier = 1.75f;
