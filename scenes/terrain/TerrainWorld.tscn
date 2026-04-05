@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://scripts/terrain/TerrainWorld.cs" id="1_world"]
 [ext_resource type="Script" path="res://scripts/terrain/lod/TerrainLodManager.cs" id="2_lod"]
 [ext_resource type="Script" path="res://scripts/terrain/TerrainWaterSurface.cs" id="3_water"]
+[ext_resource type="Script" path="res://scripts/terrain/TerrainGrassSystem.cs" id="4_grass"]
 
 [node name="TerrainWorld" type="Node3D"]
 script = ExtResource("1_world")
@@ -20,3 +21,6 @@ script = ExtResource("2_lod")
 
 [node name="TerrainWaterSurface" type="Node3D" parent="."]
 script = ExtResource("3_water")
+
+[node name="TerrainGrassSystem" type="Node3D" parent="."]
+script = ExtResource("4_grass")

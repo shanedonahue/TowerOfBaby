@@ -303,6 +303,7 @@ public partial class FpsOverlay : CanvasLayer
     private string BuildExpandedText(TerrainWorldProfileSnapshot snapshot, LocomotionTelemetrySnapshot locomotionSnapshot)
     {
         _detailBuilder.Clear();
+        TerrainGrassSystem grassSystem = _terrainWorld?.GetNodeOrNull<TerrainGrassSystem>("TerrainGrassSystem");
         _detailBuilder.AppendLine(
             $"Perf {_currentFps:0} fps  avg {_averageFrameMs:0.00} ms  worst {_worstFrameMs:0.00} ms  up {_uptimeSeconds:0.0}s");
         _detailBuilder.AppendLine($"Memory RSS {_workingSetMiB:0} MiB  GC {_gcMiB:0} MiB");
@@ -338,6 +339,10 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine($"Handoff {TrimForOverlay(snapshot.LastRefinementHandoffSummary, 84)}");
             _detailBuilder.AppendLine($"Latest {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
             _detailBuilder.AppendLine($"Release {TrimForOverlay(snapshot.LastReleasedChunkSummary, 84)}");
+            if (grassSystem != null)
+            {
+                _detailBuilder.AppendLine($"Grass {TrimForOverlay(grassSystem.GetDebugSummary(), 84)}");
+            }
         }
         else
         {
@@ -393,6 +398,10 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine($"Selected {TrimForOverlay(snapshot.LastSelectedChunkSummary)}");
             _detailBuilder.AppendLine($"Released {TrimForOverlay(snapshot.LastReleasedChunkSummary)}");
             _detailBuilder.AppendLine($"Source {TrimForOverlay(snapshot.LastChunkSourceSummary)}");
+            if (grassSystem != null)
+            {
+                _detailBuilder.AppendLine($"Grass {TrimForOverlay(grassSystem.GetDebugSummary())}");
+            }
         }
 
         if (locomotionSnapshot == null)

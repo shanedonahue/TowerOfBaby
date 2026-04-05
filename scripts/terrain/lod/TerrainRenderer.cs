@@ -20,6 +20,8 @@ public partial class TerrainRenderer : Node3D
     private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
 
     public TerrainBlockId BlockId { get; private set; }
+    public Vector3[] Vertices => _vertices;
+    public Vector3[] Normals => _normals;
 
     public static void ConfigureSharedSurfaceMaterial(float roughness)
     {
