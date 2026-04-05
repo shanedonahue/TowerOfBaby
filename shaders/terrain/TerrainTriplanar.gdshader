@@ -27,16 +27,16 @@ uniform sampler2D sand_shore_normal : hint_normal, repeat_enable, filter_linear_
 uniform sampler2D sand_coast_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
 uniform sampler2D sand_coast_normal : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
 
-uniform float texture_tiling_scale = 0.18;
-uniform float blend_sharpness = 3.4;
-uniform float grass_slope_max = 0.18;
-uniform float rock_slope_start = 0.56;
+uniform float texture_tiling_scale = 0.14;
+uniform float blend_sharpness = 2.6;
+uniform float grass_slope_max = 0.30;
+uniform float rock_slope_start = 0.44;
 uniform float sand_height_blend = 3.2;
 uniform float water_level = -2.6;
 uniform float terrain_roughness = 1.0;
 uniform float biome_variation_scale = 0.022;
-uniform float vertex_tint_strength = 0.38;
-uniform float normal_strength = 0.85;
+uniform float vertex_tint_strength = 0.16;
+uniform float normal_strength = 0.72;
 uniform float normal_detail_max_distance = 72.0;
 uniform float flat_normal_skip_slope = 0.12;
 uniform float distant_mode_start = 140.0;
@@ -299,36 +299,36 @@ void get_dirt_variants(int dominant_biome, out int variant_a, out int variant_b)
     }
 
     variant_a = DIRT_REGULAR;
-    variant_b = DIRT_MUD;
+    variant_b = DIRT_REGULAR;
 }
 
 void get_rock_variants(int dominant_biome, out int variant_a, out int variant_b) {
     if (dominant_biome == BIOME_ROCKY) {
-        variant_a = ROCK_CLIFF;
-        variant_b = ROCK_GRAVEL;
+        variant_a = ROCK_GRAVEL;
+        variant_b = ROCK_CLIFF;
         return;
     }
 
     if (dominant_biome == BIOME_CANYON) {
-        variant_a = ROCK_CLIFF;
-        variant_b = ROCK_GRAVEL;
+        variant_a = ROCK_GRAVEL;
+        variant_b = ROCK_CLIFF;
         return;
     }
 
     if (dominant_biome == BIOME_SWAMP) {
-        variant_a = ROCK_MOSSY;
-        variant_b = ROCK_GRAVEL;
+        variant_a = ROCK_GRAVEL;
+        variant_b = ROCK_MOSSY;
         return;
     }
 
     if (dominant_biome == BIOME_VOLCANIC) {
-        variant_a = ROCK_CLIFF;
-        variant_b = ROCK_GRAVEL;
+        variant_a = ROCK_GRAVEL;
+        variant_b = ROCK_CLIFF;
         return;
     }
 
-    variant_a = ROCK_MOSSY;
-    variant_b = ROCK_GRAVEL;
+    variant_a = ROCK_GRAVEL;
+    variant_b = ROCK_MOSSY;
 }
 
 void get_sand_variants(int dominant_biome, out int variant_a, out int variant_b) {
@@ -467,6 +467,9 @@ vec3 sample_surface_albedo(
 
     if (surface_type == SURFACE_GRASS) {
         get_grass_variants(dominant_biome, variant_a, variant_b);
+        if (dominant_biome == BIOME_PLAINS && variant_a == GRASS_LUSH && variant_b == GRASS_PATH) {
+            variation_blend = smoothstep(0.74, 0.92, variation);
+        }
         chosen_normal_variant = variation_blend > 0.5 ? variant_b : variant_a;
         if (distant_mode) {
             return sample_grass_albedo_variant(chosen_normal_variant, position, normal, true);

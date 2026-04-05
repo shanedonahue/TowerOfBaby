@@ -5,6 +5,11 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
+    private const float MacroTintBlendScale = 0.5f;
+    private const float WetTintBlendScale = 0.5f;
+    private const float CliffBreakupTintBlendScale = 0.5f;
+    private const float AccentTintBlendScale = 0.5f;
+    private const float BiomeIdentityTintScale = 0.5f;
     private const float ShadeFactorMin = 0.88f;
     private const float ShadeFactorMax = 1.06f;
     private const float ShadeFactorFlatBonus = 0.02f;
@@ -17,10 +22,10 @@ public sealed class TerrainSurfaceColorizer
     private const float SnowDustHighlightBlendStrength = 0.08f;
     private const float ShoreColorBlendStrength = 0.16f;
     private const float SaturationBoostBase = 1.02f;
-    private const float DominantBiomeSaturationBoost = 0.06f;
-    private const float CanyonSaturationBoost = 0.03f;
-    private const float SwampSaturationBoost = 0.02f;
-    private const float CliffSaturationBoost = 0.03f;
+    private const float DominantBiomeSaturationBoost = 0.03f;
+    private const float CanyonSaturationBoost = 0.015f;
+    private const float SwampSaturationBoost = 0.01f;
+    private const float CliffSaturationBoost = 0.015f;
     private const float PeakSaturationReduction = 0.04f;
 
     private static readonly Color[] SlopeBandPalette =
@@ -242,7 +247,7 @@ public sealed class TerrainSurfaceColorizer
         float wetLowlandBlend = flatBlend * Mathf.Clamp(
             (lowlandBlend * (0.28f + (biome.Moisture * 0.36f) + (biome.SwampWeight * 0.34f))) +
             (shoreBlend * 0.55f) +
-            (wetPatch * lowlandBlend * 0.12f),
+            (wetPatch * lowlandBlend * 0.06f),
             0.0f,
             1.0f);
 
@@ -257,9 +262,9 @@ public sealed class TerrainSurfaceColorizer
             Mathf.SmoothStep(0.18f, 0.86f, cliffBreakup));
 
         Color flatColor = baseMaterialColor.Lerp(biomeSurfaceColor, 0.58f);
-        flatColor = flatColor.Lerp(biomeAccentColor, 0.18f + (macroBiome * 0.12f));
-        flatColor = flatColor.Lerp(macroGroundTint, 0.10f + (flatBlend * 0.08f));
-        flatColor = flatColor.Lerp(biome.DebugColor, dominantWeight * 0.10f);
+        flatColor = flatColor.Lerp(biomeAccentColor, (0.18f + (macroBiome * 0.12f)) * AccentTintBlendScale);
+        flatColor = flatColor.Lerp(macroGroundTint, (0.10f + (flatBlend * 0.08f)) * MacroTintBlendScale);
+        flatColor = flatColor.Lerp(biome.DebugColor, dominantWeight * 0.10f * BiomeIdentityTintScale);
 
         Color slopeColor = baseMaterialColor.Lerp(
             biomeSurfaceColor.Lerp(biomeRockColor, 0.42f + (biome.Ruggedness * 0.20f)),
@@ -267,20 +272,20 @@ public sealed class TerrainSurfaceColorizer
         slopeColor = slopeColor.Lerp(
             SlopeMeadowColor,
             biome.PlainsWeight * 0.18f * (1.0f - cliffBlend));
-        slopeColor = slopeColor.Lerp(biomeAccentColor, 0.12f + (macroAccent * 0.08f));
-        slopeColor = slopeColor.Lerp(macroRegionTint, 0.08f);
+        slopeColor = slopeColor.Lerp(biomeAccentColor, (0.12f + (macroAccent * 0.08f)) * AccentTintBlendScale);
+        slopeColor = slopeColor.Lerp(macroRegionTint, 0.08f * MacroTintBlendScale);
 
         Color cliffColor = baseMaterialColor.Lerp(biomeRockColor, 0.84f);
         cliffColor = cliffColor.Lerp(CliffShadowColor, 0.28f + (sheerBlend * 0.18f));
-        cliffColor = cliffColor.Lerp(cliffStrataColor, 0.22f + (cliffBlend * 0.18f));
+        cliffColor = cliffColor.Lerp(cliffStrataColor, (0.22f + (cliffBlend * 0.18f)) * CliffBreakupTintBlendScale);
         cliffColor = cliffColor.Lerp(
             biomeAccentColor,
-            (biome.CanyonWeight * 0.12f) + (biome.VolcanicWeight * 0.10f));
+            ((biome.CanyonWeight * 0.12f) + (biome.VolcanicWeight * 0.10f)) * AccentTintBlendScale);
         cliffColor = cliffColor.Lerp(PeakRockColor, uplandBlend * (0.08f + (peakBlend * 0.18f)));
 
         Color wetColor = biomeSurfaceColor.Lerp(biomeWetColor, 0.68f);
-        wetColor = wetColor.Lerp(WetLowlandColor, 0.26f + (wetPatch * 0.18f));
-        wetColor = wetColor.Lerp(MacroCoolColor, 0.18f + (biome.Moisture * 0.12f));
+        wetColor = wetColor.Lerp(WetLowlandColor, (0.26f + (wetPatch * 0.18f)) * WetTintBlendScale);
+        wetColor = wetColor.Lerp(MacroCoolColor, (0.18f + (biome.Moisture * 0.12f)) * MacroTintBlendScale);
         wetColor = wetColor.Lerp(ShoreColor, shoreBlend * 0.12f);
 
         Color peakColor = biomeRockColor.Lerp(PeakRockColor, 0.42f + (peakBlend * 0.18f));
@@ -290,13 +295,15 @@ public sealed class TerrainSurfaceColorizer
         Color color = flatColor;
         color = color.Lerp(slopeColor, slopeBlend * 0.82f);
         color = color.Lerp(cliffColor, cliffBlend);
-        color = color.Lerp(wetColor, wetLowlandBlend * (0.60f + (wetPatch * 0.25f)));
+        color = color.Lerp(wetColor, wetLowlandBlend * ((0.60f + (wetPatch * 0.25f)) * WetTintBlendScale));
         color = color.Lerp(ShoreColor, shoreBlend * ShoreColorBlendStrength);
         color = color.Lerp(HighlandDustColor, uplandBlend * 0.18f);
         color = color.Lerp(peakColor, peakBlend * (0.35f + (flatBlend * 0.20f)));
 
         Color macroCompositeTint = macroGroundTint.Lerp(macroRegionTint, 0.5f + (macroAccent * 0.2f));
-        color = color.Lerp(macroCompositeTint, 0.06f + (flatBlend * 0.08f) + (cliffBlend * 0.03f));
+        color = color.Lerp(
+            macroCompositeTint,
+            (0.06f + (flatBlend * 0.08f) + (cliffBlend * 0.03f)) * MacroTintBlendScale);
 
         float shadeFactor = Mathf.Lerp(ShadeFactorMin, ShadeFactorMax, macroShade);
         shadeFactor += flatBlend * ShadeFactorFlatBonus;

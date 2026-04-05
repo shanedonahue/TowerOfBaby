@@ -1,5 +1,8 @@
+using System;
 using Godot;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
 
@@ -10,6 +13,11 @@ public partial class TerrainGrassSystem : Node3D
     // The instanced grass path expects an alpha-cutout blade atlas, so keep it bound to the simple clump sheet.
     private const string GrassTexturePath = "res://assets/terrain/textures/grass/grass_clump_atlas.png";
     private const float Tau = Mathf.Pi * 2.0f;
+    private const float SelectiveGrassSlopeMax = 0.18f;
+    private const float SelectiveGrassMinHeightAboveWater = 1.5f;
+    private const float SelectiveGrassDensityScale = 0.65f;
+    private const float GrassMaterialSampleInset = 0.18f;
+    private const float TerrainSurfaceQueryCellSizeMin = 0.5f;
 
     [ExportGroup("Nodes")]
     [Export] public NodePath TerrainLodManagerPath = new("../TerrainLodManager");
@@ -79,6 +87,7 @@ public partial class TerrainGrassSystem : Node3D
     [Export] public Color DebugFallbackColor = new(0.24f, 0.95f, 0.32f, 1.0f);
 
     private readonly Dictionary<ulong, GrassPatchEntry> _patches = new();
+    private readonly Dictionary<ulong, GrassPatchSkipEntry> _skippedPatchBuilds = new();
     private readonly Queue<TerrainRenderer> _pendingBuilds = new();
     private readonly HashSet<ulong> _pendingBuildIds = new();
 
@@ -92,7 +101,9 @@ public partial class TerrainGrassSystem : Node3D
     private Texture2D _grassTexture = null!;
     private FastNoiseLite _clumpNoise = null!;
     private FastNoiseLite _clumpDetailNoise = null!;
+    private VoxelFieldGenerator _terrainPlacementSampler = null!;
     private long _settingsSignature;
+    private long _terrainPlacementSamplerSignature;
     private float _syncCountdown;
     private float _debugLogCountdown;
     private bool _warnedMissingShader;
@@ -110,6 +121,8 @@ public partial class TerrainGrassSystem : Node3D
     private int _lastRejectedSlopeCount;
     private int _lastRejectedWaterCount;
     private int _lastRejectedHighlandCount;
+    private int _lastRejectedMaterialCount;
+    private int _lastRejectedBiomeCount;
     private int _lastRejectedDensityCount;
     private string _lastBuildOutcome = "waiting_for_renderers";
 
@@ -130,6 +143,7 @@ public partial class TerrainGrassSystem : Node3D
     {
         _terrainWorld = GetParent() as TerrainWorld;
         _lodManager = ResolveLodManager();
+        EnsureTerrainPlacementSampler();
         EnsureResources();
         UpdateClumpNoiseGenerators();
         UpdateMaterialParameters();
@@ -142,6 +156,7 @@ public partial class TerrainGrassSystem : Node3D
     {
         _terrainWorld ??= GetParent() as TerrainWorld;
         _lodManager ??= ResolveLodManager();
+        EnsureTerrainPlacementSampler();
         EnsureResources();
         UpdateClumpNoiseGenerators();
         UpdateMaterialParameters();
@@ -168,6 +183,7 @@ public partial class TerrainGrassSystem : Node3D
     public override void _ExitTree()
     {
         ClearAllPatches();
+        _skippedPatchBuilds.Clear();
         _pendingBuilds.Clear();
         _pendingBuildIds.Clear();
     }
@@ -200,7 +216,9 @@ public partial class TerrainGrassSystem : Node3D
             if (trackingState == GrassTrackingState.Eligible)
             {
                 _lastEligibleRendererCount++;
-                if (!_patches.ContainsKey(rendererId) && !_pendingBuildIds.Contains(rendererId))
+                if (!_patches.ContainsKey(rendererId) &&
+                    !_pendingBuildIds.Contains(rendererId) &&
+                    !ShouldSkipPatchBuild(renderer))
                 {
                     _pendingBuilds.Enqueue(renderer);
                     _pendingBuildIds.Add(rendererId);
@@ -226,6 +244,20 @@ public partial class TerrainGrassSystem : Node3D
         foreach (ulong patchId in stalePatchIds)
         {
             RemovePatch(patchId);
+        }
+
+        List<ulong> staleSkippedBuildIds = new();
+        foreach (ulong rendererId in _skippedPatchBuilds.Keys)
+        {
+            if (!seenRendererIds.Contains(rendererId))
+            {
+                staleSkippedBuildIds.Add(rendererId);
+            }
+        }
+
+        foreach (ulong rendererId in staleSkippedBuildIds)
+        {
+            _skippedPatchBuilds.Remove(rendererId);
         }
 
         RefreshActivePatchStats();
@@ -255,12 +287,18 @@ public partial class TerrainGrassSystem : Node3D
                 continue;
             }
 
-            MultiMeshInstance3D patch = BuildGrassPatch(renderer, viewerPosition);
+            MultiMeshInstance3D patch = BuildGrassPatch(renderer, viewerPosition, out bool cacheEmptyBuild);
             if (patch == null)
             {
+                if (cacheEmptyBuild)
+                {
+                    RememberSkippedPatchBuild(renderer);
+                }
+
                 continue;
             }
 
+            _skippedPatchBuilds.Remove(rendererId);
             renderer.AddChild(patch);
             _patches[rendererId] = new GrassPatchEntry(renderer, patch);
             _lastBuildOutcome = $"{renderer.BlockId} built {patch.Multimesh?.InstanceCount ?? 0} inst  material {(_usingFallbackMaterial ? "fallback" : "shader")}";
@@ -270,8 +308,12 @@ public partial class TerrainGrassSystem : Node3D
         RefreshActivePatchStats();
     }
 
-    private MultiMeshInstance3D BuildGrassPatch(TerrainRenderer renderer, Vector3 viewerPosition)
+    private MultiMeshInstance3D BuildGrassPatch(
+        TerrainRenderer renderer,
+        Vector3 viewerPosition,
+        out bool cacheEmptyBuild)
     {
+        cacheEmptyBuild = false;
         Vector3[] vertices = renderer.Vertices;
         if (vertices == null || vertices.Length < 3)
         {
@@ -288,10 +330,15 @@ public partial class TerrainGrassSystem : Node3D
 
         Vector3[] normals = renderer.Normals;
         Color[] terrainColors = renderer.BaseColors;
+        float[] biomeWeights = renderer.BiomeWeights;
         float slopeLimitDot = Mathf.Cos(Mathf.DegToRad(Mathf.Clamp(MaxSlopeDegrees, 0.0f, 89.0f)));
+        float maxPlacementSlope = Mathf.Min(SelectiveGrassSlopeMax, 1.0f - slopeLimitDot);
         float highlandStart = Mathf.Max(0.0f, HighlandFadeStart);
         float highlandEnd = Mathf.Max(highlandStart + 0.01f, HighlandFadeEnd);
         float waterLevel = _terrainWorld?.WaterLevel ?? -2.6f;
+        float minHeightAboveWater = Mathf.Max(MinHeightAboveWater, SelectiveGrassMinHeightAboveWater);
+        VoxelFieldGenerator placementSampler = _terrainPlacementSampler;
+        float terrainQueryCellSize = ResolveTerrainSurfaceQueryCellSize(renderer.BlockId.Lod);
 
         RandomNumberGenerator random = new();
         random.Seed = ComputeRendererSeed(renderer.BlockId);
@@ -299,12 +346,16 @@ public partial class TerrainGrassSystem : Node3D
         List<Transform3D> transforms = new();
         List<Color> colors = new();
         List<Color> customData = new();
+        Dictionary<TerrainSurfaceQueryKey, TerrainSurfaceColumnSample> terrainColumnCache = new();
         Transform3D rendererTransform = renderer.GlobalTransform;
         int triangleCount = vertices.Length / 3;
         int rejectedSlopeCount = 0;
         int rejectedWaterCount = 0;
         int rejectedHighlandCount = 0;
+        int rejectedMaterialCount = 0;
+        int rejectedBiomeCount = 0;
         int rejectedDensityCount = 0;
+        int eligibleTriangleCount = 0;
 
         for (int triangle = 0; triangle <= vertices.Length - 3; triangle += 3)
         {
@@ -330,20 +381,61 @@ public partial class TerrainGrassSystem : Node3D
                 }
             }
 
+            Vector3 centroidLocal = (a + b + c) / 3.0f;
+            Vector3 centroidWorld = rendererTransform * centroidLocal;
+            float heightAboveWater = centroidWorld.Y - waterLevel;
+            if (!DebugBypassPlacementFilters && heightAboveWater < minHeightAboveWater)
+            {
+                rejectedWaterCount++;
+                continue;
+            }
+
             float upDot = Mathf.Clamp(surfaceNormal.Dot(Vector3.Up), -1.0f, 1.0f);
-            if (!DebugBypassPlacementFilters && upDot < slopeLimitDot)
+            float sampledSlope = 1.0f - Mathf.Clamp(upDot, 0.0f, 1.0f);
+            if (!DebugBypassPlacementFilters && sampledSlope >= maxPlacementSlope)
             {
                 rejectedSlopeCount++;
                 continue;
             }
 
-            Vector3 centroidLocal = (a + b + c) / 3.0f;
-            Vector3 centroidWorld = rendererTransform * centroidLocal;
-            float heightAboveWater = centroidWorld.Y - waterLevel;
-            if (!DebugBypassPlacementFilters && heightAboveWater < MinHeightAboveWater)
+            if (!DebugBypassPlacementFilters)
             {
-                rejectedWaterCount++;
-                continue;
+                bool hasTriangleBiome = TryResolveTriangleBiomeSample(biomeWeights, triangle, out TerrainBiomeSample triangleBiome);
+                if (hasTriangleBiome && !IsGrassPlacementBiomeAllowed(triangleBiome.DominantBiome))
+                {
+                    rejectedBiomeCount++;
+                    continue;
+                }
+
+                TerrainSurfaceColumnSample terrainColumn = ResolveTerrainSurfaceColumnSample(
+                    centroidWorld,
+                    placementSampler,
+                    terrainQueryCellSize,
+                    terrainColumnCache);
+                TerrainBiomeSample surfaceBiome = hasTriangleBiome ? triangleBiome : terrainColumn.Biome;
+                if (!hasTriangleBiome && !IsGrassPlacementBiomeAllowed(surfaceBiome.DominantBiome))
+                {
+                    rejectedBiomeCount++;
+                    continue;
+                }
+
+                Vector3 materialSamplePosition = centroidWorld - (surfaceNormal * GrassMaterialSampleInset);
+                float surfaceDensity = placementSampler != null
+                    ? placementSampler.SampleDensity(materialSamplePosition, terrainColumn.TerrainHeight)
+                    : terrainColumn.TerrainHeight - materialSamplePosition.Y;
+                VoxelMaterialId surfaceMaterial = placementSampler != null
+                    ? placementSampler.SampleMaterial(
+                        materialSamplePosition,
+                        surfaceDensity,
+                        terrainColumn.TerrainHeight,
+                        sampledSlope,
+                        surfaceBiome)
+                    : VoxelMaterialId.Grass;
+                if (surfaceMaterial != VoxelMaterialId.Grass)
+                {
+                    rejectedMaterialCount++;
+                    continue;
+                }
             }
 
             float lowlandFactor = DebugBypassPlacementFilters
@@ -355,6 +447,7 @@ public partial class TerrainGrassSystem : Node3D
                 continue;
             }
 
+            eligibleTriangleCount++;
             float slopeFactor = DebugBypassPlacementFilters
                 ? 1.0f
                 : Mathf.SmoothStep(slopeLimitDot, 1.0f, upDot);
@@ -365,7 +458,14 @@ public partial class TerrainGrassSystem : Node3D
             float moisture = ComputeMoistureFactor(lowlandFactor, slopeFactor, shoreProximity);
             Color triangleTerrainColor = ResolveTriangleTerrainColor(terrainColors, triangle);
             float triangleArea = twiceArea * 0.5f;
-            float expectedInstances = triangleArea * DensityPerSquareMeter * lowlandFactor * slopeFactor * clumpDensityFactor * distanceDensityFactor;
+            float expectedInstances =
+                triangleArea *
+                DensityPerSquareMeter *
+                SelectiveGrassDensityScale *
+                lowlandFactor *
+                slopeFactor *
+                clumpDensityFactor *
+                distanceDensityFactor;
             int instanceCount = Mathf.FloorToInt(expectedInstances);
             if (random.Randf() < (expectedInstances - instanceCount))
             {
@@ -433,10 +533,13 @@ public partial class TerrainGrassSystem : Node3D
             _lastRejectedSlopeCount = rejectedSlopeCount;
             _lastRejectedWaterCount = rejectedWaterCount;
             _lastRejectedHighlandCount = rejectedHighlandCount;
+            _lastRejectedMaterialCount = rejectedMaterialCount;
+            _lastRejectedBiomeCount = rejectedBiomeCount;
             _lastRejectedDensityCount = rejectedDensityCount;
             _lastBuiltInstanceCount = 0;
             _lastBuildOutcome =
-                $"{renderer.BlockId} 0 inst  tri {triangleCount}  slope/water/high/density {rejectedSlopeCount}/{rejectedWaterCount}/{rejectedHighlandCount}/{rejectedDensityCount}";
+                $"{renderer.BlockId} 0 inst  tri {triangleCount}  slope/water/high/material/biome/density {rejectedSlopeCount}/{rejectedWaterCount}/{rejectedHighlandCount}/{rejectedMaterialCount}/{rejectedBiomeCount}/{rejectedDensityCount}";
+            cacheEmptyBuild = !DebugBypassPlacementFilters && eligibleTriangleCount == 0;
             return null;
         }
 
@@ -475,6 +578,8 @@ public partial class TerrainGrassSystem : Node3D
         _lastRejectedSlopeCount = rejectedSlopeCount;
         _lastRejectedWaterCount = rejectedWaterCount;
         _lastRejectedHighlandCount = rejectedHighlandCount;
+        _lastRejectedMaterialCount = rejectedMaterialCount;
+        _lastRejectedBiomeCount = rejectedBiomeCount;
         _lastRejectedDensityCount = rejectedDensityCount;
         _lastBuiltInstanceCount = transforms.Count;
         return patch;
@@ -508,6 +613,78 @@ public partial class TerrainGrassSystem : Node3D
         }
 
         return GlobalTransform.Origin;
+    }
+
+    private void EnsureTerrainPlacementSampler()
+    {
+        if (_terrainWorld == null)
+        {
+            _terrainPlacementSampler = null;
+            _terrainPlacementSamplerSignature = 0;
+            return;
+        }
+
+        long samplerSignature = BuildTerrainPlacementSamplerSignature();
+        if (_terrainPlacementSampler != null && samplerSignature == _terrainPlacementSamplerSignature)
+        {
+            return;
+        }
+
+        _terrainPlacementSampler = new VoxelFieldGenerator(
+            _terrainWorld.Seed,
+            _terrainWorld.TerrainHeight,
+            _terrainWorld.DetailHeight,
+            _terrainWorld.CaveScale,
+            _terrainWorld.CaveThreshold,
+            _terrainWorld.WaterLevel,
+            _terrainWorld.ShorelineFalloff,
+            _terrainWorld.WaterBasinInfluence);
+        _terrainPlacementSamplerSignature = samplerSignature;
+    }
+
+    private long BuildTerrainPlacementSamplerSignature()
+    {
+        ulong hash = 1469598103934665603UL;
+        HashCombine(ref hash, _terrainWorld?.Seed ?? 0);
+        HashCombine(ref hash, _terrainWorld?.TerrainHeight ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.DetailHeight ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.CaveScale ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.CaveThreshold ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.WaterLevel ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.ShorelineFalloff ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.WaterBasinInfluence ?? 0.0f);
+        return unchecked((long)hash);
+    }
+
+    private static TerrainSurfaceColumnSample ResolveTerrainSurfaceColumnSample(
+        Vector3 worldPosition,
+        VoxelFieldGenerator placementSampler,
+        float cellSize,
+        Dictionary<TerrainSurfaceQueryKey, TerrainSurfaceColumnSample> cache)
+    {
+        if (placementSampler == null)
+        {
+            return new TerrainSurfaceColumnSample(worldPosition.Y, TerrainBiomeSample.Default);
+        }
+
+        float safeCellSize = Mathf.Max(TerrainSurfaceQueryCellSizeMin, cellSize);
+        TerrainSurfaceQueryKey key = new(
+            Mathf.FloorToInt(worldPosition.X / safeCellSize),
+            Mathf.FloorToInt(worldPosition.Z / safeCellSize));
+        if (cache.TryGetValue(key, out TerrainSurfaceColumnSample sample))
+        {
+            return sample;
+        }
+
+        sample = placementSampler.SampleSurfaceColumn(worldPosition.X, worldPosition.Z);
+        cache[key] = sample;
+        return sample;
+    }
+
+    private float ResolveTerrainSurfaceQueryCellSize(int lod)
+    {
+        float baseVoxelSize = _terrainWorld?.VoxelSize ?? 1.2f;
+        return Mathf.Max(TerrainSurfaceQueryCellSizeMin, baseVoxelSize * Mathf.Pow(2.0f, lod));
     }
 
     private GrassTrackingState EvaluateRendererTracking(TerrainRenderer renderer, Vector3 viewerPosition)
@@ -560,6 +737,7 @@ public partial class TerrainGrassSystem : Node3D
     private void RebuildAllPatches()
     {
         ClearAllPatches();
+        _skippedPatchBuilds.Clear();
         _pendingBuilds.Clear();
         _pendingBuildIds.Clear();
         _syncCountdown = 0.0f;
@@ -572,6 +750,19 @@ public partial class TerrainGrassSystem : Node3D
         {
             RemovePatch(patchId);
         }
+    }
+
+    private bool ShouldSkipPatchBuild(TerrainRenderer renderer)
+    {
+        ulong rendererId = renderer.GetInstanceId();
+        return _skippedPatchBuilds.TryGetValue(rendererId, out GrassPatchSkipEntry entry) &&
+            entry.RendererFingerprint == ComputeRendererGrassBuildFingerprint(renderer);
+    }
+
+    private void RememberSkippedPatchBuild(TerrainRenderer renderer)
+    {
+        _skippedPatchBuilds[renderer.GetInstanceId()] =
+            new GrassPatchSkipEntry(ComputeRendererGrassBuildFingerprint(renderer));
     }
 
     private void EnsureResources()
@@ -936,6 +1127,13 @@ public partial class TerrainGrassSystem : Node3D
     {
         ulong hash = 1469598103934665603UL;
         HashCombine(ref hash, _terrainWorld?.Seed ?? 0);
+        HashCombine(ref hash, _terrainWorld?.TerrainHeight ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.DetailHeight ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.CaveScale ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.CaveThreshold ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.WaterLevel ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.ShorelineFalloff ?? 0.0f);
+        HashCombine(ref hash, _terrainWorld?.WaterBasinInfluence ?? 0.0f);
         HashCombine(ref hash, DensityPerSquareMeter);
         HashCombine(ref hash, MaxSlopeDegrees);
         HashCombine(ref hash, MinHeightAboveWater);
@@ -983,6 +1181,95 @@ public partial class TerrainGrassSystem : Node3D
         return unchecked((long)hash);
     }
 
+    private static bool IsGrassPlacementBiomeAllowed(BiomeId dominantBiome)
+    {
+        return dominantBiome != BiomeId.Rocky &&
+            dominantBiome != BiomeId.Canyon &&
+            dominantBiome != BiomeId.Volcanic;
+    }
+
+    private static bool TryResolveTriangleBiomeSample(
+        float[] biomeWeights,
+        int triangleVertexStart,
+        out TerrainBiomeSample biome)
+    {
+        biome = TerrainBiomeSample.Default;
+        if (biomeWeights == null || biomeWeights.Length < ((triangleVertexStart + 3) * 4))
+        {
+            return false;
+        }
+
+        int aOffset = triangleVertexStart * 4;
+        int bOffset = (triangleVertexStart + 1) * 4;
+        int cOffset = (triangleVertexStart + 2) * 4;
+
+        float plainsWeight = (biomeWeights[aOffset] + biomeWeights[bOffset] + biomeWeights[cOffset]) / 3.0f;
+        float rockyWeight = (biomeWeights[aOffset + 1] + biomeWeights[bOffset + 1] + biomeWeights[cOffset + 1]) / 3.0f;
+        float canyonWeight = (biomeWeights[aOffset + 2] + biomeWeights[bOffset + 2] + biomeWeights[cOffset + 2]) / 3.0f;
+        float swampWeight = (biomeWeights[aOffset + 3] + biomeWeights[bOffset + 3] + biomeWeights[cOffset + 3]) / 3.0f;
+        float volcanicWeight = Mathf.Max(0.0f, 1.0f - (plainsWeight + rockyWeight + canyonWeight + swampWeight));
+        float totalWeight = plainsWeight + rockyWeight + canyonWeight + swampWeight + volcanicWeight;
+        if (totalWeight <= 0.0001f)
+        {
+            return false;
+        }
+
+        plainsWeight /= totalWeight;
+        rockyWeight /= totalWeight;
+        canyonWeight /= totalWeight;
+        swampWeight /= totalWeight;
+        volcanicWeight /= totalWeight;
+
+        biome = new TerrainBiomeSample(
+            ResolveDominantBiome(plainsWeight, rockyWeight, canyonWeight, swampWeight, volcanicWeight),
+            plainsWeight,
+            rockyWeight,
+            canyonWeight,
+            swampWeight,
+            volcanicWeight,
+            0.5f,
+            0.5f,
+            Mathf.Clamp(rockyWeight + canyonWeight + volcanicWeight, 0.0f, 1.0f),
+            volcanicWeight);
+        return true;
+    }
+
+    private static BiomeId ResolveDominantBiome(
+        float plainsWeight,
+        float rockyWeight,
+        float canyonWeight,
+        float swampWeight,
+        float volcanicWeight)
+    {
+        BiomeId dominantBiome = BiomeId.Plains;
+        float strongestWeight = plainsWeight;
+
+        if (rockyWeight > strongestWeight)
+        {
+            dominantBiome = BiomeId.Rocky;
+            strongestWeight = rockyWeight;
+        }
+
+        if (canyonWeight > strongestWeight)
+        {
+            dominantBiome = BiomeId.Canyon;
+            strongestWeight = canyonWeight;
+        }
+
+        if (swampWeight > strongestWeight)
+        {
+            dominantBiome = BiomeId.Swamp;
+            strongestWeight = swampWeight;
+        }
+
+        if (volcanicWeight > strongestWeight)
+        {
+            dominantBiome = BiomeId.Volcanic;
+        }
+
+        return dominantBiome;
+    }
+
     private static void HashCombine(ref ulong hash, int value)
     {
         hash ^= unchecked((uint)value);
@@ -1017,6 +1304,21 @@ public partial class TerrainGrassSystem : Node3D
         return hash;
     }
 
+    private static ulong ComputeRendererGrassBuildFingerprint(TerrainRenderer renderer)
+    {
+        ulong hash = ComputeRendererSeed(renderer.BlockId);
+        Vector3[] vertices = renderer.Vertices;
+        Vector3[] normals = renderer.Normals;
+        float[] biomeWeights = renderer.BiomeWeights;
+        HashCombine(ref hash, vertices?.Length ?? 0);
+        HashCombine(ref hash, normals?.Length ?? 0);
+        HashCombine(ref hash, biomeWeights?.Length ?? 0);
+        HashCombine(ref hash, vertices == null ? 0 : RuntimeHelpers.GetHashCode(vertices));
+        HashCombine(ref hash, normals == null ? 0 : RuntimeHelpers.GetHashCode(normals));
+        HashCombine(ref hash, biomeWeights == null ? 0 : RuntimeHelpers.GetHashCode(biomeWeights));
+        return hash;
+    }
+
     private static Vector3 SampleTriangle(Vector3 a, Vector3 b, Vector3 c, RandomNumberGenerator random)
     {
         float sqrtR1 = Mathf.Sqrt(random.Randf());
@@ -1039,7 +1341,7 @@ public partial class TerrainGrassSystem : Node3D
         return
             $"grass scan {_lastEligibleRendererCount}/{_lastScannedRendererCount} q {_pendingBuilds.Count} patch {_lastActivePatchCount} inst {_lastActiveInstanceCount} " +
             $"rej nv/lod/dist {_lastRejectedRendererNoVisualsCount}/{_lastRejectedRendererLodCount}/{_lastRejectedRendererDistanceCount} " +
-            $"tri {_lastTriangleCount} rej s/w/h/d {_lastRejectedSlopeCount}/{_lastRejectedWaterCount}/{_lastRejectedHighlandCount}/{_lastRejectedDensityCount} " +
+            $"tri {_lastTriangleCount} rej s/w/h/m/b/d {_lastRejectedSlopeCount}/{_lastRejectedWaterCount}/{_lastRejectedHighlandCount}/{_lastRejectedMaterialCount}/{_lastRejectedBiomeCount}/{_lastRejectedDensityCount} " +
             $"last {_lastBuiltInstanceCount} {materialMode}/{filterMode}  {TrimDebug(_lastBuildOutcome, 84)}";
     }
 
@@ -1137,4 +1439,8 @@ public partial class TerrainGrassSystem : Node3D
         public TerrainRenderer Renderer { get; }
         public MultiMeshInstance3D Patch { get; }
     }
+
+    private readonly record struct GrassPatchSkipEntry(ulong RendererFingerprint);
+
+    private readonly record struct TerrainSurfaceQueryKey(int XCell, int ZCell);
 }

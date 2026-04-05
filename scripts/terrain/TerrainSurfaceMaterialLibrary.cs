@@ -15,31 +15,31 @@ internal static class TerrainSurfaceMaterialLibrary
     private const string GrassDryAlbedoPath = "res://assets/terrain/textures/grass/grass_path_2_diff_2k.png";
     private const string GrassDryNormalPath = "res://assets/terrain/textures/grass/grass_path_2_nor_gl_2k.png";
 
-    private const string DirtRegularAlbedoPath = "res://assets/terrain/textures/dirt/dirt_diff_2k.png";
-    private const string DirtRegularNormalPath = "res://assets/terrain/textures/dirt/dirt_nor_gl_2k.png";
-    private const string DirtMudAlbedoPath = "res://assets/terrain/textures/dirt/brown_mud_diff_2k.png";
-    private const string DirtMudNormalPath = "res://assets/terrain/textures/dirt/brown_mud_nor_gl_2k.png";
+    private const string DirtRegularAlbedoPath = "res://assets/terrain/textures/dirt/park_dirt_diff_2k.png";
+    private const string DirtRegularNormalPath = "res://assets/terrain/textures/dirt/park_dirt_nor_gl_2k.png";
+    private const string DirtMudAlbedoPath = "res://assets/terrain/textures/dirt/brown_mud_dry_diff_2k.png";
+    private const string DirtMudNormalPath = "res://assets/terrain/textures/dirt/brown_mud_dry_nor_gl_2k.png";
     private const string DirtCrackedAlbedoPath = "res://assets/terrain/textures/dirt/cracked_red_ground_diff_2k.png";
     private const string DirtCrackedNormalPath = "res://assets/terrain/textures/dirt/cracked_red_ground_nor_gl_2k.png";
 
     private const string RockCliffAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_03_diff_2k.png";
     private const string RockCliffNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_03_nor_gl_2k.png";
-    private const string RockGravelAlbedoPath = "res://assets/terrain/textures/rock/rocky_terrain_diff_2k.png";
-    private const string RockGravelNormalPath = "res://assets/terrain/textures/rock/rocky_terrain_nor_gl_2k.png";
+    private const string RockGravelAlbedoPath = "res://assets/terrain/textures/rock/rocky_gravel_diff_2k.png";
+    private const string RockGravelNormalPath = "res://assets/terrain/textures/rock/rocky_gravel_nor_gl_2k.png";
     private const string RockMossyAlbedoPath = "res://assets/terrain/textures/rock/mossy_rock_diff_2k.png";
     private const string RockMossyNormalPath = "res://assets/terrain/textures/rock/mossy_rock_nor_gl_2k.png";
 
-    private const string SandShoreAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_04_diff_2k.png";
-    private const string SandShoreNormalPath = "res://assets/terrain/textures/sand/coast_sand_04_nor_gl_2k.png";
+    private const string SandShoreAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_01_diff_2k.png";
+    private const string SandShoreNormalPath = "res://assets/terrain/textures/sand/coast_sand_01_nor_gl_2k.png";
     private const string SandCoastAlbedoPath = "res://assets/terrain/textures/sand/coast_sand_02_diff_2k.png";
     private const string SandCoastNormalPath = "res://assets/terrain/textures/sand/coast_sand_02_nor_gl_2k.png";
 
-    private const float DefaultTextureTilingScale = 0.18f;
-    private const float DefaultBlendSharpness = 3.4f;
-    private const float DefaultGrassSlopeMax = 0.18f;
-    private const float DefaultRockSlopeStart = 0.56f;
+    private const float DefaultTextureTilingScale = 0.14f;
+    private const float DefaultBlendSharpness = 2.6f;
+    private const float DefaultGrassSlopeMax = 0.30f;
+    private const float DefaultRockSlopeStart = 0.44f;
     private const float DefaultSandHeightBlend = 3.2f;
-    private const float DefaultVertexTintStrength = 0.38f;
+    private const float DefaultVertexTintStrength = 0.16f;
     private const float DefaultNormalDetailMaxDistance = 72.0f;
     private const float DefaultFlatNormalSkipSlope = 0.12f;
     private const float DefaultDistantModeStart = 140.0f;

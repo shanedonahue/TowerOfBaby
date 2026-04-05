@@ -23,6 +23,7 @@ public partial class TerrainRenderer : Node3D
     public Vector3[] Vertices => _vertices;
     public Vector3[] Normals => _normals;
     public Color[] BaseColors => _baseColors;
+    public float[] BiomeWeights => _biomeWeights;
 
     public static void ConfigureSharedSurfaceMaterial(float roughness)
     {

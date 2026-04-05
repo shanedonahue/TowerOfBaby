@@ -15,15 +15,19 @@ public readonly record struct TerrainWaterDebugSample(
     float WaterMask,
     float BasinMask);
 
+public readonly record struct TerrainSurfaceColumnSample(
+    float TerrainHeight,
+    TerrainBiomeSample Biome);
+
 public sealed class VoxelFieldGenerator
 {
     private const float TerrainWarpFrequency = 0.0100f;
-    private const float TerrainWarpStrength = 50.0f;
+    private const float TerrainWarpStrength = 22.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
     private const float MountainHeightScale = 0.90f;
-    private const float HillHeightScale = 0.32f;
-    private const float DetailContributionScale = 0.90f;
+    private const float HillHeightScale = 0.22f;
+    private const float DetailContributionScale = 0.38f;
     private const float SwampVegetationBias = 0.60f;
     private const float WaterShorelineFadeMultiplier = 1.85f;
     private const float WaterSubmergedFadeMultiplier = 1.75f;
@@ -94,14 +98,14 @@ public sealed class VoxelFieldGenerator
         {
             Seed = seed + 59,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0500f
+            Frequency = 0.0240f
         };
 
         _detailNoise = new FastNoiseLite
         {
             Seed = seed + 101,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.2000f
+            Frequency = 0.0950f
         };
 
         _warpNoiseX = new FastNoiseLite
@@ -166,6 +170,12 @@ public sealed class VoxelFieldGenerator
         return SampleTerrainHeight(worldX, worldZ);
     }
 
+    public TerrainSurfaceColumnSample SampleSurfaceColumn(float worldX, float worldZ)
+    {
+        SampleTerrainSurface(worldX, worldZ, out float terrain, out TerrainBiomeSample biome);
+        return new TerrainSurfaceColumnSample(terrain, biome);
+    }
+
     public VoxelMaterialId SampleMaterial(Vector3 worldPosition, float density)
     {
         if (density < 0.0f)
@@ -217,14 +227,14 @@ public sealed class VoxelFieldGenerator
             basinMask);
     }
 
-    private float SampleDensity(Vector3 worldPosition, float terrain)
+    public float SampleDensity(Vector3 worldPosition, float terrain)
     {
         float density = terrain - worldPosition.Y;
         density += SampleCaveContribution(worldPosition);
         return density;
     }
 
-    private VoxelMaterialId SampleMaterial(
+    public VoxelMaterialId SampleMaterial(
         Vector3 worldPosition,
         float density,
         float terrain,
@@ -304,12 +314,13 @@ public sealed class VoxelFieldGenerator
     private float BuildTerrainHeight(TerrainHeightLayers layers, TerrainBiomeSample biome)
     {
         // The surface silhouette is driven by a 2D height field, then caves perturb density beneath it.
+        float plainsFlattenMask = Mathf.SmoothStep(0.30f, 0.90f, biome.PlainsWeight * layers.LowlandMask);
         float terrain = 0.0f;
         terrain += layers.Continent * (_terrainHeight * ContinentHeightScale);
         terrain -= _terrainHeight * ContinentBaseOffsetScale;
         terrain += layers.Mountain * (_terrainHeight * MountainHeightScale * layers.MountainStrength);
-        terrain += layers.Hills * (_terrainHeight * HillHeightScale * layers.HillStrength);
-        terrain += layers.Detail * (_detailHeight * DetailContributionScale * layers.DetailStrength);
+        terrain += layers.Hills * (_terrainHeight * HillHeightScale * layers.HillStrength * (1.0f - (plainsFlattenMask * 0.45f)));
+        terrain += layers.Detail * (_detailHeight * DetailContributionScale * layers.DetailStrength * (1.0f - (plainsFlattenMask * 0.55f)));
         terrain = ApplyWaterAwareTerrainShaping(terrain, biome, layers.LowlandMask, layers.BasinMask);
         return terrain;
     }
