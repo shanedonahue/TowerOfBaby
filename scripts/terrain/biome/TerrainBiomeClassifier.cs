@@ -4,6 +4,9 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainBiomeClassifier
 {
+    private const float DomainWarpFrequency = 0.0100f;
+    private const float DomainWarpStrength = 50.0f;
+
     private readonly FastNoiseLite _temperatureNoise;
     private readonly FastNoiseLite _moistureNoise;
     private readonly FastNoiseLite _ruggedNoise;
@@ -47,14 +50,14 @@ public sealed class TerrainBiomeClassifier
         {
             Seed = seed + 557,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0026f
+            Frequency = DomainWarpFrequency
         };
 
         _warpNoiseZ = new FastNoiseLite
         {
             Seed = seed + 593,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0026f
+            Frequency = DomainWarpFrequency
         };
 
         _macroFertilityNoise = new FastNoiseLite
@@ -93,9 +96,8 @@ public sealed class TerrainBiomeClassifier
 
     public TerrainBiomeSample SampleWorldPosition(float worldX, float worldZ)
     {
-        float warpStrength = 38.0f;
-        float sampleX = worldX + (_warpNoiseX.GetNoise2D(worldX, worldZ) * warpStrength);
-        float sampleZ = worldZ + (_warpNoiseZ.GetNoise2D(worldX, worldZ) * warpStrength);
+        float sampleX = worldX + (_warpNoiseX.GetNoise2D(worldX, worldZ) * DomainWarpStrength);
+        float sampleZ = worldZ + (_warpNoiseZ.GetNoise2D(worldX, worldZ) * DomainWarpStrength);
 
         float heat = NoiseToUnit(_temperatureNoise.GetNoise2D(sampleX, sampleZ));
         float moisture = NoiseToUnit(_moistureNoise.GetNoise2D(sampleX, sampleZ));

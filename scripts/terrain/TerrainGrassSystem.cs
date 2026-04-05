@@ -15,27 +15,27 @@ public partial class TerrainGrassSystem : Node3D
     [Export] public NodePath TerrainLodManagerPath = new("../TerrainLodManager");
 
     [ExportGroup("Distribution")]
-    [Export(PropertyHint.Range, "0.25,16,0.25")] public float DensityPerSquareMeter = 6.25f;
+    [Export(PropertyHint.Range, "0.25,16,0.25")] public float DensityPerSquareMeter = 2.25f;
     [Export(PropertyHint.Range, "0,75,1")] public float MaxSlopeDegrees = 38.0f;
     [Export(PropertyHint.Range, "0,4,0.05")] public float MinHeightAboveWater = 0.35f;
     [Export(PropertyHint.Range, "0,48,0.25")] public float HighlandFadeStart = 16.0f;
     [Export(PropertyHint.Range, "1,96,0.25")] public float HighlandFadeEnd = 34.0f;
     [Export(PropertyHint.Range, "0,256,0.5")] public float DensityFalloffStart = 30.0f;
     [Export(PropertyHint.Range, "0,2,1")] public int MaxGrassLod = 1;
-    [Export(PropertyHint.Range, "128,12000,64")] public int MaxInstancesPerPatch = 2800;
+    [Export(PropertyHint.Range, "128,12000,64")] public int MaxInstancesPerPatch = 1600;
     [Export(PropertyHint.Range, "0.00,0.25,0.005")] public float PlacementLift = 0.02f;
 
     [ExportGroup("Clumping")]
-    [Export(PropertyHint.Range, "0.001,0.2,0.001")] public float ClumpNoiseFrequency = 0.017f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMin = 0.28f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMax = 0.50f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDensityFloor = 0.58f;
-    [Export(PropertyHint.Range, "0.001,0.35,0.001")] public float ClumpDetailFrequency = 0.072f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailStrength = 0.06f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMin = 0.28f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMax = 0.50f;
-    [Export(PropertyHint.Range, "1,2,0.05")] public float ShoreDensityBoost = 1.12f;
-    [Export(PropertyHint.Range, "0.5,16,0.25")] public float ShoreDensityBoostRange = 4.5f;
+    [Export(PropertyHint.Range, "0.001,0.2,0.001")] public float ClumpNoiseFrequency = 0.028f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMin = 0.46f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpThresholdMax = 0.72f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDensityFloor = 0.14f;
+    [Export(PropertyHint.Range, "0.001,0.35,0.001")] public float ClumpDetailFrequency = 0.110f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailStrength = 0.22f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMin = 0.40f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float ClumpDetailThresholdMax = 0.68f;
+    [Export(PropertyHint.Range, "1,2,0.05")] public float ShoreDensityBoost = 1.05f;
+    [Export(PropertyHint.Range, "0.5,16,0.25")] public float ShoreDensityBoostRange = 3.0f;
 
     [ExportGroup("Blade Shape")]
     [Export(PropertyHint.Range, "0.2,3,0.05")] public float BladeHeight = 0.80f;
@@ -827,6 +827,8 @@ public partial class TerrainGrassSystem : Node3D
         float patchThresholdMax = Mathf.Clamp(ClumpThresholdMax, patchThresholdMin + 0.01f, 1.0f);
         float patchNoise = NoiseToUnit(_clumpNoise.GetNoise2D(worldPosition.X, worldPosition.Z));
         float patchMask = Mathf.SmoothStep(patchThresholdMin, patchThresholdMax, patchNoise);
+        // Shrub-style coverage reads better when dense centers fall off quickly into open ground.
+        patchMask *= patchMask;
         float clumpMask = Mathf.Lerp(Mathf.Clamp(ClumpDensityFloor, 0.0f, 1.0f), 1.0f, patchMask);
 
         if (_clumpDetailNoise != null && ClumpDetailStrength > 0.001f)
@@ -844,9 +846,9 @@ public partial class TerrainGrassSystem : Node3D
         float shoreProximity = 1.0f - Mathf.SmoothStep(shoreStart, shoreEnd, heightAboveWater);
         float shoreBoost = Mathf.Lerp(1.0f, Mathf.Max(1.0f, ShoreDensityBoost), shoreProximity);
 
-        float plainsBias = Mathf.Lerp(0.94f, 1.10f, Mathf.Clamp(slopeFactor, 0.0f, 1.0f));
-        float lowlandBias = Mathf.Lerp(0.92f, 1.06f, Mathf.Clamp(lowlandFactor, 0.0f, 1.0f));
-        float terrainBias = Mathf.Min(1.4f, plainsBias * lowlandBias * shoreBoost);
+        float plainsBias = Mathf.Lerp(0.86f, 1.00f, Mathf.Clamp(slopeFactor, 0.0f, 1.0f));
+        float lowlandBias = Mathf.Lerp(0.90f, 1.02f, Mathf.Clamp(lowlandFactor, 0.0f, 1.0f));
+        float terrainBias = Mathf.Min(1.12f, plainsBias * lowlandBias * shoreBoost);
         return clumpMask * terrainBias;
     }
 

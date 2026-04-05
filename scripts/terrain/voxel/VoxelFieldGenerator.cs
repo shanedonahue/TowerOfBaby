@@ -17,7 +17,8 @@ public readonly record struct TerrainWaterDebugSample(
 
 public sealed class VoxelFieldGenerator
 {
-    private const float TerrainWarpStrength = 18.0f;
+    private const float TerrainWarpFrequency = 0.0100f;
+    private const float TerrainWarpStrength = 50.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
     private const float MountainHeightScale = 0.90f;
@@ -34,10 +35,8 @@ public sealed class VoxelFieldGenerator
     private const float WaterBasinDepthScale = 0.56f;
     private const float WaterSwampFlattenScale = 0.40f;
     private const float WaterSwampNearWaterOffsetScale = 0.08f;
-    private const float CaveStartDepth = 3.0f;
-    private const float CaveFullStrengthDepth = 10.0f;
-
     private readonly FastNoiseLite _continentNoise;
+    private readonly FastNoiseLite _shapeBiomeNoise;
     private readonly FastNoiseLite _mountainNoise;
     private readonly FastNoiseLite _hillNoise;
     private readonly FastNoiseLite _detailNoise;
@@ -49,7 +48,6 @@ public sealed class VoxelFieldGenerator
     private readonly float _terrainHeight;
     private readonly float _detailHeight;
     private readonly float _caveScale;
-    private readonly float _caveThreshold;
     private readonly float _waterLevel;
     private readonly float _shorelineFalloff;
     private readonly float _waterBasinInfluence;
@@ -67,7 +65,6 @@ public sealed class VoxelFieldGenerator
         _terrainHeight = terrainHeight;
         _detailHeight = detailHeight;
         _caveScale = caveScale;
-        _caveThreshold = caveThreshold;
         _waterLevel = waterLevel;
         _shorelineFalloff = Mathf.Max(0.4f, shorelineFalloff);
         _waterBasinInfluence = Mathf.Clamp(waterBasinInfluence, 0.0f, 1.0f);
@@ -77,6 +74,13 @@ public sealed class VoxelFieldGenerator
             Seed = seed,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
             Frequency = 0.0010f
+        };
+
+        _shapeBiomeNoise = new FastNoiseLite
+        {
+            Seed = seed + 19,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+            Frequency = 0.0009f
         };
 
         _mountainNoise = new FastNoiseLite
@@ -104,14 +108,14 @@ public sealed class VoxelFieldGenerator
         {
             Seed = seed + 131,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0042f
+            Frequency = TerrainWarpFrequency
         };
 
         _warpNoiseZ = new FastNoiseLite
         {
             Seed = seed + 157,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0042f
+            Frequency = TerrainWarpFrequency
         };
 
         _waterBasinNoise = new FastNoiseLite
@@ -194,7 +198,7 @@ public sealed class VoxelFieldGenerator
         float peakMask = Mathf.Clamp(shoulderMask * layers.Mountain * layers.MountainStrength, 0.0f, 1.0f);
         return new TerrainMountainRangeDebugSample(
             landPresence,
-            layers.MountainStrength,
+            layers.ShapeBiome,
             shoulderMask,
             peakMask);
     }
@@ -215,8 +219,9 @@ public sealed class VoxelFieldGenerator
 
     private float SampleDensity(Vector3 worldPosition, float terrain)
     {
-        float surfaceDensity = terrain - worldPosition.Y;
-        return surfaceDensity + SampleCaveContribution(worldPosition, surfaceDensity);
+        float density = terrain - worldPosition.Y;
+        density += SampleCaveContribution(worldPosition);
+        return density;
     }
 
     private VoxelMaterialId SampleMaterial(
@@ -315,27 +320,29 @@ public sealed class VoxelFieldGenerator
         continent = Mathf.SmoothStep(0.18f, 0.82f, continent);
 
         float lowlandMask = 1.0f - Mathf.SmoothStep(0.22f, 0.78f, continent);
+        float shapeBiome = NoiseToUnit(SampleFbm2D(_shapeBiomeNoise, warped.X, warped.Y, octaves: 3));
+        shapeBiome = Mathf.SmoothStep(0.30f, 0.75f, shapeBiome);
 
-        float mountainStrength = Mathf.Clamp(
-            0.18f +
-            (biome.RockyWeight * 0.78f) +
-            (biome.CanyonWeight * 0.58f) +
-            (biome.VolcanicWeight * 1.00f) -
-            (biome.SwampWeight * 0.20f),
-            0.18f,
-            1.15f);
+        float ruggedShapeBoost = Mathf.Clamp(
+            (biome.RockyWeight * 0.75f) +
+            (biome.CanyonWeight * 0.60f) +
+            (biome.VolcanicWeight * 1.00f),
+            0.0f,
+            1.0f);
+        float mountainStrength = Mathf.Lerp(0.0f, 1.10f, shapeBiome);
+        mountainStrength *= Mathf.Lerp(0.85f, 1.25f, ruggedShapeBoost);
+        mountainStrength = Mathf.Clamp(mountainStrength, 0.0f, 1.25f);
         float mountain = SampleRidge(_mountainNoise, warped.X, warped.Y);
         mountain = Mathf.Pow(mountain, 3.0f);
         mountain *= Mathf.SmoothStep(0.18f, 0.72f, continent);
 
-        float hillStrength = Mathf.Clamp(
-            0.48f +
-            (biome.PlainsWeight * 0.26f) +
-            (biome.RockyWeight * 0.12f) +
-            (biome.CanyonWeight * 0.08f) -
-            (biome.SwampWeight * 0.18f),
-            0.28f,
-            0.92f);
+        float hillStrength = Mathf.Lerp(1.00f, 0.55f, shapeBiome);
+        hillStrength *= Mathf.Clamp(
+            0.82f +
+            (biome.PlainsWeight * 0.22f) -
+            (biome.SwampWeight * 0.12f),
+            0.65f,
+            1.10f);
         float hills = SampleFbm2D(_hillNoise, warped.X, warped.Y, octaves: 3);
         hills *= 0.55f + (lowlandMask * 0.45f);
 
@@ -360,6 +367,7 @@ public sealed class VoxelFieldGenerator
             detail,
             lowlandMask,
             basinMask,
+            shapeBiome,
             mountainStrength,
             hillStrength,
             detailStrength);
@@ -431,25 +439,10 @@ public sealed class VoxelFieldGenerator
             terrain);
     }
 
-    private float SampleCaveContribution(Vector3 worldPosition, float surfaceDensity)
+    private float SampleCaveContribution(Vector3 worldPosition)
     {
-        if (surfaceDensity <= CaveStartDepth)
-        {
-            return 0.0f;
-        }
-
-        float cave = 1.0f - Mathf.Abs(_caveNoise.GetNoise3D(worldPosition.X, worldPosition.Y, worldPosition.Z));
-        if (cave <= _caveThreshold)
-        {
-            return 0.0f;
-        }
-
-        float normalizedCave = (cave - _caveThreshold) / Mathf.Max(0.0001f, 1.0f - _caveThreshold);
-        float depthFactor = Mathf.Clamp(
-            (surfaceDensity - CaveStartDepth) / Mathf.Max(0.0001f, CaveFullStrengthDepth - CaveStartDepth),
-            0.0f,
-            1.0f);
-        return -(normalizedCave * _caveScale * depthFactor);
+        Vector2 warped = WarpXZ(worldPosition.X, worldPosition.Z);
+        return _caveNoise.GetNoise3D(warped.X, worldPosition.Y, warped.Y) * _caveScale;
     }
 
     private static float NoiseToUnit(float value)
@@ -504,6 +497,7 @@ public sealed class VoxelFieldGenerator
         float Detail,
         float LowlandMask,
         float BasinMask,
+        float ShapeBiome,
         float MountainStrength,
         float HillStrength,
         float DetailStrength);
