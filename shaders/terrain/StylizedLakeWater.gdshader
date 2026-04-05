@@ -3,23 +3,23 @@ render_mode blend_mix, depth_prepass_alpha, cull_back, diffuse_burley, specular_
 
 uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
 
-uniform vec4 shallow_color : source_color = vec4(0.11, 0.37, 0.48, 1.0);
-uniform vec4 deep_color : source_color = vec4(0.02, 0.11, 0.21, 1.0);
-uniform vec4 shore_color : source_color = vec4(0.20, 0.51, 0.52, 1.0);
-uniform vec4 fresnel_color : source_color = vec4(0.30, 0.49, 0.63, 1.0);
+uniform vec4 shallow_color : source_color = vec4(0.12, 0.44, 0.56, 1.0);
+uniform vec4 deep_color : source_color = vec4(0.03, 0.17, 0.24, 1.0);
+uniform vec4 shore_color : source_color = vec4(0.27, 0.63, 0.60, 1.0);
+uniform vec4 fresnel_color : source_color = vec4(0.34, 0.56, 0.68, 1.0);
 
 uniform float shallow_depth = 1.6;
 uniform float deep_depth = 13.0;
 uniform float shore_fade_depth = 0.8;
-uniform float alpha_shallow = 0.60;
+uniform float alpha_shallow = 0.56;
 uniform float alpha_deep = 0.88;
-uniform float fresnel_strength = 0.12;
+uniform float fresnel_strength = 0.18;
 uniform float fresnel_power = 4.8;
-uniform float specular_strength = 0.22;
+uniform float specular_strength = 0.28;
 uniform float metallic_amount = 0.0;
 uniform float roughness_near = 0.24;
 uniform float roughness_far = 0.14;
-uniform float shore_glow = 0.03;
+uniform float shore_glow = 0.045;
 uniform float macro_tint_strength = 0.05;
 
 varying vec3 world_position;
@@ -50,7 +50,7 @@ void fragment() {
     float macro_mix = (macro_a + macro_b) * 0.25 + 0.5;
 
     vec3 base_color = mix(shallow_color.rgb, deep_color.rgb, deep_factor);
-    base_color = mix(base_color, shore_color.rgb, shore_factor * 0.70);
+    base_color = mix(base_color, shore_color.rgb, shore_factor * 0.82);
     base_color *= mix(1.0 - macro_tint_strength, 1.0 + macro_tint_strength, macro_mix);
 
     float fresnel = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), fresnel_power);

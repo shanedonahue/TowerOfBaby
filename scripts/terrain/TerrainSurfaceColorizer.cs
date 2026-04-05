@@ -5,10 +5,10 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
-    private const float MacroTintBlendScale = 0.15f;
-    private const float WetTintBlendScale = 0.15f;
-    private const float CliffBreakupTintBlendScale = 0.15f;
-    private const float AccentTintBlendScale = 0.15f;
+    private const float MacroTintBlendScale = 0.05f;
+    private const float WetTintBlendScale = 0.09f;
+    private const float CliffBreakupTintBlendScale = 0.06f;
+    private const float AccentTintBlendScale = 0.045f;
     private const float BiomeIdentityTintScale = 0.15f;
     private const float ShadeFactorMin = 0.88f;
     private const float ShadeFactorMax = 1.06f;
@@ -21,11 +21,12 @@ public sealed class TerrainSurfaceColorizer
     private const float PlateauLightBlendStrength = 0.06f;
     private const float SnowDustHighlightBlendStrength = 0.08f;
     private const float ShoreColorBlendStrength = 0.16f;
-    private const float SaturationBoostBase = 1.02f;
-    private const float DominantBiomeSaturationBoost = 0.03f;
-    private const float CanyonSaturationBoost = 0.015f;
-    private const float SwampSaturationBoost = 0.01f;
-    private const float CliffSaturationBoost = 0.015f;
+    private const float SlopeMeadowTintBlendStrength = 0.09f;
+    private const float SaturationBoostBase = 1.01f;
+    private const float DominantBiomeSaturationBoost = 0.015f;
+    private const float CanyonSaturationBoost = 0.0075f;
+    private const float SwampSaturationBoost = 0.005f;
+    private const float CliffSaturationBoost = 0.0075f;
     private const float PeakSaturationReduction = 0.04f;
 
     private static readonly Color[] SlopeBandPalette =
@@ -271,7 +272,7 @@ public sealed class TerrainSurfaceColorizer
             0.72f);
         slopeColor = slopeColor.Lerp(
             SlopeMeadowColor,
-            biome.PlainsWeight * 0.18f * (1.0f - cliffBlend));
+            biome.PlainsWeight * SlopeMeadowTintBlendStrength * (1.0f - cliffBlend));
         slopeColor = slopeColor.Lerp(biomeAccentColor, (0.12f + (macroAccent * 0.08f)) * AccentTintBlendScale);
         slopeColor = slopeColor.Lerp(macroRegionTint, 0.08f * MacroTintBlendScale);
 

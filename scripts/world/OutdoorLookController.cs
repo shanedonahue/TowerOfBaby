@@ -15,30 +15,30 @@ public partial class OutdoorLookController : Node
     [Export(PropertyHint.Range, "5,85,0.1")] public float SunElevationDegrees = 48.0f;
 
     [ExportGroup("Sun Lighting")]
-    [Export] public Color SunColor = new(1.0f, 0.95f, 0.84f, 1.0f);
-    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.35f;
-    [Export(PropertyHint.Range, "0,4,0.01")] public float SunIndirectEnergy = 0.10f;
+    [Export] public Color SunColor = new(1.0f, 0.96f, 0.86f, 1.0f);
+    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.55f;
+    [Export(PropertyHint.Range, "0,4,0.01")] public float SunIndirectEnergy = 0.08f;
     [Export] public bool EnableSunShadows = true;
 
     [ExportGroup("Sky")]
-    [Export] public Color SkyTopColor = new(0.23f, 0.55f, 0.90f, 1.0f);
-    [Export] public Color SkyHorizonColor = new(0.78f, 0.90f, 1.0f, 1.0f);
-    [Export] public Color GroundHorizonColor = new(0.48f, 0.57f, 0.62f, 1.0f);
-    [Export] public Color GroundBottomColor = new(0.21f, 0.24f, 0.28f, 1.0f);
+    [Export] public Color SkyTopColor = new(0.18f, 0.57f, 0.96f, 1.0f);
+    [Export] public Color SkyHorizonColor = new(0.82f, 0.93f, 1.0f, 1.0f);
+    [Export] public Color GroundHorizonColor = new(0.52f, 0.61f, 0.66f, 1.0f);
+    [Export] public Color GroundBottomColor = new(0.23f, 0.27f, 0.31f, 1.0f);
     [Export(PropertyHint.Range, "0,90,0.1")] public float SunDiscAngle = 18.0f;
 
     [ExportGroup("Environment")]
-    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.36f;
-    [Export(PropertyHint.Range, "0,3,0.01")] public float TonemapExposure = 0.92f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.26f;
+    [Export(PropertyHint.Range, "0,3,0.01")] public float TonemapExposure = 1.0f;
     [Export] public bool ForceLegacyImageEffectsOff = true;
 
     [ExportGroup("Atmosphere")]
-    [Export(PropertyHint.Range, "0,1,0.001")] public float FogDensity = 0.032f;
-    [Export(PropertyHint.Range, "0,512,1")] public float FogDepthBegin = 72.0f;
-    [Export(PropertyHint.Range, "1,512,1")] public float FogDepthEnd = 340.0f;
-    [Export(PropertyHint.Range, "0.1,8,0.01")] public float FogDepthCurve = 1.35f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float FogAerialPerspective = 0.68f;
-    [Export(PropertyHint.Range, "0,1,0.01")] public float FogSkyAffect = 0.78f;
+    [Export(PropertyHint.Range, "0,1,0.001")] public float FogDensity = 0.022f;
+    [Export(PropertyHint.Range, "0,512,1")] public float FogDepthBegin = 110.0f;
+    [Export(PropertyHint.Range, "1,512,1")] public float FogDepthEnd = 420.0f;
+    [Export(PropertyHint.Range, "0.1,8,0.01")] public float FogDepthCurve = 1.15f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float FogAerialPerspective = 0.58f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float FogSkyAffect = 0.72f;
     [Export(PropertyHint.Range, "0,1,0.01")] public float FogSunScatter = 0.05f;
 
     [ExportGroup("Terrain Material")]
