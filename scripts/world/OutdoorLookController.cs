@@ -16,7 +16,7 @@ public partial class OutdoorLookController : Node
 
     [ExportGroup("Sun Lighting")]
     [Export] public Color SunColor = new(1.0f, 0.96f, 0.86f, 1.0f);
-    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.38f;
+    [Export(PropertyHint.Range, "0,8,0.01")] public float SunEnergy = 1.35f;
     [Export(PropertyHint.Range, "0,4,0.01")] public float SunIndirectEnergy = 0.11f;
     [Export] public bool EnableSunShadows = true;
 
@@ -28,7 +28,7 @@ public partial class OutdoorLookController : Node
     [Export(PropertyHint.Range, "0,90,0.1")] public float SunDiscAngle = 18.0f;
 
     [ExportGroup("Environment")]
-    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.34f;
+    [Export(PropertyHint.Range, "0,1,0.01")] public float AmbientSkyContribution = 0.36f;
     [Export(PropertyHint.Range, "0,3,0.01")] public float TonemapExposure = 0.98f;
     [Export] public bool ForceLegacyImageEffectsOff = true;
 
@@ -45,8 +45,8 @@ public partial class OutdoorLookController : Node
     [Export(PropertyHint.Range, "0,1,0.01")] public float TerrainRoughness = 1.0f;
     [Export(PropertyHint.Range, "0.02,1,0.01")] public float TerrainTextureTilingScale = 0.32f;
     [Export(PropertyHint.Range, "0.5,8,0.1")] public float TerrainBlendSharpness = 3.5f;
-    [Export(PropertyHint.Range, "0,0.6,0.01")] public float TerrainGrassSlopeMax = 0.40f;
-    [Export(PropertyHint.Range, "0.1,1,0.01")] public float TerrainRockSlopeStart = 0.38f;
+    [Export(PropertyHint.Range, "0,0.6,0.01")] public float TerrainGrassSlopeMax = 0.34f;
+    [Export(PropertyHint.Range, "0.1,1,0.01")] public float TerrainRockSlopeStart = 0.32f;
     [Export(PropertyHint.Range, "8,256,1")] public float TerrainNormalDetailMaxDistance = 72.0f;
     [Export(PropertyHint.Range, "0,0.5,0.01")] public float TerrainFlatNormalSkipSlope = 0.12f;
     [Export(PropertyHint.Range, "16,512,1")] public float TerrainDistantModeStart = 140.0f;

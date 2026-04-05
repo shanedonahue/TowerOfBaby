@@ -10,8 +10,8 @@ uniform sampler2D rock_normal : hint_normal, repeat_enable, filter_linear_mipmap
 
 uniform float texture_tiling_scale = 0.32;
 uniform float blend_sharpness = 3.5;
-uniform float grass_slope_max = 0.40;
-uniform float rock_slope_start = 0.38;
+uniform float grass_slope_max = 0.34;
+uniform float rock_slope_start = 0.32;
 uniform float water_level = -2.6;
 uniform float terrain_roughness = 1.0;
 uniform float vertex_tint_strength = 0.06;
@@ -189,10 +189,22 @@ void sample_surface_color(
         slope);
 
     float above_water = smoothstep(water_level - 0.4, water_level + 1.5, position.y);
+    float lowland_blend = 1.0 - smoothstep(water_level + 1.2, water_level + 7.0, position.y);
+    float gentle_slope_blend = smoothstep(
+        max((grass_slope_max * 0.28), 0.05),
+        grass_slope_max + transition,
+        slope);
+    gentle_slope_blend *= 1.0 - smoothstep(
+        rock_slope_start + (transition * 0.25),
+        rock_slope_start + (transition * 1.85),
+        slope);
     grass_weight *= mix(0.5, 1.0, above_water);
+    grass_weight *= 1.0 - (lowland_blend * 0.12);
 
     float dirt_weight = max(0.0, 1.0 - max(grass_weight, rock_weight));
-    dirt_weight += (1.0 - above_water) * (1.0 - rock_weight) * 0.35;
+    dirt_weight += (1.0 - above_water) * (1.0 - rock_weight) * 0.40;
+    dirt_weight += lowland_blend * (1.0 - rock_weight) * 0.18;
+    dirt_weight += gentle_slope_blend * (1.0 - rock_weight) * 0.14;
 
     float weight_sum = grass_weight + dirt_weight + rock_weight;
     if (weight_sum <= 0.0001) {
@@ -213,6 +225,32 @@ void sample_surface_color(
     terrain_color = (grass_color * grass_weight) +
         (dirt_color * dirt_weight) +
         (rock_color * rock_weight);
+
+    // A broad secondary dirt pass breaks large grassy areas without replacing the main blend.
+    float shoreline_breakup = (1.0 - above_water) * (1.0 - rock_weight);
+    float basin_breakup = lowland_blend * grass_weight;
+    float erosion_flat_breakup =
+        (1.0 - smoothstep(0.04, 0.18, slope)) *
+        smoothstep(water_level + 0.8, water_level + 4.8, position.y) *
+        grass_weight;
+    float grassy_cover = smoothstep(0.22, 0.78, grass_weight + (dirt_weight * 0.25));
+    float dirt_breakup_zone = saturate(
+        (shoreline_breakup * 0.70) +
+        (basin_breakup * 0.38) +
+        (erosion_flat_breakup * 0.32)) * grassy_cover;
+    vec3 secondary_dirt_position = vec3(position.x * 0.42, position.y * 0.24, position.z * 0.42);
+    vec3 secondary_dirt_color = sample_surface_albedo(
+        SURFACE_DIRT,
+        secondary_dirt_position,
+        normal,
+        distant_mode);
+    float secondary_dirt_mask = smoothstep(
+        0.40,
+        0.62,
+        dot(secondary_dirt_color, vec3(0.299, 0.587, 0.114)));
+    float secondary_dirt_blend = dirt_breakup_zone * secondary_dirt_mask * 0.12;
+    vec3 softened_dirt_breakup = mix(terrain_color, secondary_dirt_color, 0.45);
+    terrain_color = mix(terrain_color, softened_dirt_breakup, secondary_dirt_blend);
 
     dominant_normal_layer = SURFACE_GRASS;
     if (dirt_weight > grass_weight && dirt_weight >= rock_weight) {

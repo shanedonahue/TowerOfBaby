@@ -5,28 +5,28 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
-    private const float MacroTintBlendScale = 0.05f;
-    private const float WetTintBlendScale = 0.09f;
-    private const float CliffBreakupTintBlendScale = 0.06f;
-    private const float AccentTintBlendScale = 0.045f;
-    private const float BiomeIdentityTintScale = 0.15f;
-    private const float ShadeFactorMin = 0.93f;
+    private const float MacroTintBlendScale = 0.03f;
+    private const float WetTintBlendScale = 0.05f;
+    private const float CliffBreakupTintBlendScale = 0.04f;
+    private const float AccentTintBlendScale = 0.025f;
+    private const float BiomeIdentityTintScale = 0.08f;
+    private const float ShadeFactorMin = 0.94f;
     private const float ShadeFactorMax = 1.06f;
     private const float ShadeFactorFlatBonus = 0.02f;
     private const float ShadeFactorPeakBonus = 0.03f;
     private const float ShadeFactorWetPenalty = 0.03f;
     // Keep cliffs distinctly darker than flats for now; revisit these only after an in-engine visual check.
-    private const float ShadeFactorCliffBasePenalty = 0.015f;
-    private const float ShadeFactorCliffBreakupPenalty = 0.045f;
+    private const float ShadeFactorCliffBasePenalty = 0.012f;
+    private const float ShadeFactorCliffBreakupPenalty = 0.038f;
     private const float PlateauLightBlendStrength = 0.06f;
     private const float SnowDustHighlightBlendStrength = 0.08f;
     private const float ShoreColorBlendStrength = 0.16f;
-    private const float SlopeMeadowTintBlendStrength = 0.09f;
-    private const float SaturationBoostBase = 1.01f;
-    private const float DominantBiomeSaturationBoost = 0.015f;
-    private const float CanyonSaturationBoost = 0.0075f;
-    private const float SwampSaturationBoost = 0.005f;
-    private const float CliffSaturationBoost = 0.0075f;
+    private const float SlopeMeadowTintBlendStrength = 0.04f;
+    private const float SaturationBoostBase = 1.0f;
+    private const float DominantBiomeSaturationBoost = 0.008f;
+    private const float CanyonSaturationBoost = 0.004f;
+    private const float SwampSaturationBoost = 0.0025f;
+    private const float CliffSaturationBoost = 0.004f;
     private const float PeakSaturationReduction = 0.04f;
 
     private static readonly Color[] SlopeBandPalette =
