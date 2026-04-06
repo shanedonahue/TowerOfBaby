@@ -121,6 +121,7 @@ public static class TerrainSeamMesher
             normals.ToArray(),
             uvs.ToArray(),
             colors.ToArray(),
+            colors.ToArray(),
             Array.Empty<float>(),
             Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
@@ -262,8 +263,11 @@ public static class TerrainSeamMesher
             return;
         }
 
-        Color colorA = TryGetColor(baseMesh.Colors, indexA);
-        Color colorB = TryGetColor(baseMesh.Colors, indexB);
+        Color[] seamColors = baseMesh.HasMaterialColors
+            ? baseMesh.MaterialColors
+            : baseMesh.Colors;
+        Color colorA = TryGetColor(seamColors, indexA);
+        Color colorB = TryGetColor(seamColors, indexB);
         Vector3 normalA = TryGetNormal(baseMesh.Normals, indexA);
         Vector3 normalB = TryGetNormal(baseMesh.Normals, indexB);
         edges[key] = new BoundaryEdgeAccumulator(

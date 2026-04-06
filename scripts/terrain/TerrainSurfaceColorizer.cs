@@ -81,14 +81,17 @@ public sealed class TerrainSurfaceColorizer
             return mesh;
         }
 
-        Color[] litColors = new Color[mesh.Colors.Length];
-        float[] biomeWeights = new float[mesh.Colors.Length * 4];
+        Color[] baseMaterialColors = mesh.HasMaterialColors
+            ? mesh.MaterialColors
+            : mesh.Colors;
+        Color[] litColors = new Color[mesh.Vertices.Length];
+        float[] biomeWeights = new float[mesh.Vertices.Length * 4];
         Vector3 origin = data.Origin;
         for (int i = 0; i < litColors.Length; i++)
         {
             Vector3 worldPosition = origin + mesh.Vertices[i];
             TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
-            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], mesh.Colors[i], biome);
+            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], baseMaterialColors[i], biome);
             WriteBiomeWeights(biomeWeights, i * 4, biome);
         }
 
@@ -97,6 +100,7 @@ public sealed class TerrainSurfaceColorizer
             mesh.Normals,
             mesh.Uvs,
             litColors,
+            baseMaterialColors,
             biomeWeights,
             mesh.Tangents,
             mesh.NormalDebugMismatchCount,

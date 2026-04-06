@@ -15,6 +15,7 @@ public partial class TerrainRenderer : Node3D
     private Vector3[] _normals = System.Array.Empty<Vector3>();
     private Vector2[] _uvs = System.Array.Empty<Vector2>();
     private Color[] _baseColors = System.Array.Empty<Color>();
+    private Color[] _materialColors = System.Array.Empty<Color>();
     private float[] _biomeWeights = System.Array.Empty<float>();
     private float[] _tangents = System.Array.Empty<float>();
     private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
@@ -23,6 +24,7 @@ public partial class TerrainRenderer : Node3D
     public Vector3[] Vertices => _vertices;
     public Vector3[] Normals => _normals;
     public Color[] BaseColors => _baseColors;
+    public Color[] MaterialColors => _materialColors.Length == _vertices.Length ? _materialColors : _baseColors;
     public float[] BiomeWeights => _biomeWeights;
 
     public static void ConfigureSharedSurfaceMaterial(float roughness)
@@ -73,6 +75,7 @@ public partial class TerrainRenderer : Node3D
         _normals = meshBuild.Normals;
         _uvs = meshBuild.Uvs;
         _baseColors = meshBuild.Colors;
+        _materialColors = meshBuild.MaterialColors;
         _biomeWeights = meshBuild.BiomeWeights;
         _tangents = meshBuild.Tangents;
         ApplyCachedVisuals(surfaceColorizer, resetCollision: true);
@@ -112,6 +115,7 @@ public partial class TerrainRenderer : Node3D
         _normals = System.Array.Empty<Vector3>();
         _uvs = System.Array.Empty<Vector2>();
         _baseColors = System.Array.Empty<Color>();
+        _materialColors = System.Array.Empty<Color>();
         _biomeWeights = System.Array.Empty<float>();
         _tangents = System.Array.Empty<float>();
         _meshInstance.Mesh = null;
@@ -146,7 +150,7 @@ public partial class TerrainRenderer : Node3D
         _meshInstance.Mesh = mesh;
         _meshInstance.MaterialOverride = _debugView.UsesDiagnosticVertexColors()
             ? TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial
-            : TerrainSurfaceMaterialLibrary.TintedLitSurfaceMaterial;
+            : TerrainSurfaceMaterialLibrary.LitSurfaceMaterial;
         _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
         if (resetCollision)
         {
@@ -156,9 +160,17 @@ public partial class TerrainRenderer : Node3D
 
     private Color[] BuildRenderColors(TerrainSurfaceColorizer surfaceColorizer)
     {
-        if (_debugView == TerrainVisualDebugMode.Lit ||
-            _debugView == TerrainVisualDebugMode.VertexTint ||
-            surfaceColorizer == null)
+        if (_debugView == TerrainVisualDebugMode.Lit)
+        {
+            return _baseColors;
+        }
+
+        if (_debugView == TerrainVisualDebugMode.VertexTint)
+        {
+            return MaterialColors;
+        }
+
+        if (surfaceColorizer == null)
         {
             return _baseColors;
         }

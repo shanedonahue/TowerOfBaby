@@ -31,7 +31,7 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0,64,4")] public float TargetVisibleTerrainPadding = 24.0f;
 
     [ExportGroup("Refinement Stability")]
-    [Export(PropertyHint.Range, "0,2,1")] public int SameLodBubbleRadiusXZ = 2;
+    [Export(PropertyHint.Range, "0,4,1")] public int SameLodBubbleRadiusXZ = 3;
     [Export(PropertyHint.Range, "1,8,1")] public int CollisionSafetyRadiusXZ = 3;
     [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float BubbleMovePaddingFraction = 0.20f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float BlockReleaseHysteresisSeconds = 0.70f;
@@ -242,7 +242,7 @@ public partial class TerrainLodManager : Node3D
                 CommitsPerFrame = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame),
                 ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
                 GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods,
-                MeshColorMode = VoxelMeshColorMode.MaterialTint
+                MeshColorMode = VoxelMeshColorMode.Neutral
             };
         }
 
@@ -266,7 +266,7 @@ public partial class TerrainLodManager : Node3D
             CommitsPerFrame = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame),
             ReleasesPerFrame = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame),
             GenerateCollisionForCoarseLods = GenerateCollisionForCoarseLods,
-            MeshColorMode = VoxelMeshColorMode.MaterialTint
+            MeshColorMode = VoxelMeshColorMode.Neutral
         };
     }
 

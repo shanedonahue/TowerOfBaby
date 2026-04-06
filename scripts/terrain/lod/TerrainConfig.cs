@@ -23,5 +23,5 @@ public sealed class TerrainConfig
     public int ReleasesPerFrame { get; init; } = 8;
     public bool GenerateCollisionForCoarseLods { get; init; }
     public bool GenerateTangents { get; init; }
-    public VoxelMeshColorMode MeshColorMode { get; init; } = VoxelMeshColorMode.MaterialTint;
+    public VoxelMeshColorMode MeshColorMode { get; init; } = VoxelMeshColorMode.Neutral;
 }

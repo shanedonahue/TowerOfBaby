@@ -338,7 +338,7 @@ public partial class TerrainGrassSystem : Node3D
         }
 
         Vector3[] normals = renderer.Normals;
-        Color[] terrainColors = renderer.BaseColors;
+        Color[] terrainColors = renderer.MaterialColors;
         float[] biomeWeights = renderer.BiomeWeights;
         float slopeLimitDot = Mathf.Cos(Mathf.DegToRad(Mathf.Clamp(MaxSlopeDegrees, 0.0f, 89.0f)));
         float maxPlacementSlope = Mathf.Min(SelectiveGrassSlopeMax, 1.0f - slopeLimitDot);

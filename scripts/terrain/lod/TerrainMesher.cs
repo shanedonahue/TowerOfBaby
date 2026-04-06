@@ -1,3 +1,4 @@
+using Godot;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -48,12 +49,14 @@ public sealed class TerrainMesher
     public VoxelMeshBuildResult BuildMesh(VoxelChunkData data)
     {
         VoxelMeshBuildResult mesh = VoxelMesher.BuildMesh(data, _meshOptions);
-        if (!mesh.HasGeometry || _meshOptions.ColorMode != VoxelMeshColorMode.MaterialTint)
+        if (!mesh.HasGeometry)
         {
             return mesh;
         }
 
-        return CreateSurfaceColorizer().BuildLitMesh(mesh, data);
+        return _meshOptions.ColorMode == VoxelMeshColorMode.MaterialTint
+            ? CreateSurfaceColorizer().BuildLitMesh(mesh, data)
+            : AttachBiomeWeights(mesh, data);
     }
 
     public float SampleSurfaceHeight(float worldX, float worldZ)
@@ -77,5 +80,48 @@ public sealed class TerrainMesher
     private TerrainSurfaceColorizer CreateSurfaceColorizer()
     {
         return new TerrainSurfaceColorizer(_config);
+    }
+
+    private VoxelMeshBuildResult AttachBiomeWeights(VoxelMeshBuildResult mesh, VoxelChunkData data)
+    {
+        if (mesh.HasBiomeWeights)
+        {
+            return mesh;
+        }
+
+        // Mesh builds run on worker threads, so keep biome sampling thread-local just like the field generator.
+        TerrainBiomeClassifier biomeClassifier = new(_seed);
+        float[] biomeWeights = new float[mesh.Vertices.Length * 4];
+        Vector3 origin = data.Origin;
+        for (int i = 0; i < mesh.Vertices.Length; i++)
+        {
+            Vector3 worldPosition = origin + mesh.Vertices[i];
+            TerrainBiomeSample biome = biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
+            WriteBiomeWeights(biomeWeights, i * 4, biome);
+        }
+
+        return new VoxelMeshBuildResult(
+            mesh.Vertices,
+            mesh.Normals,
+            mesh.Uvs,
+            mesh.Colors,
+            mesh.MaterialColors,
+            biomeWeights,
+            mesh.Tangents,
+            mesh.NormalDebugMismatchCount,
+            mesh.TotalTriangleCount,
+            mesh.UsedDetailBrick,
+            mesh.UsedPersistentDetailEdits,
+            mesh.DetailTriangleCount,
+            mesh.ReplacedCoarseCellCount,
+            mesh.DetailCellCount);
+    }
+
+    private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)
+    {
+        destination[offset] = biome.PlainsWeight;
+        destination[offset + 1] = biome.RockyWeight;
+        destination[offset + 2] = biome.CanyonWeight;
+        destination[offset + 3] = biome.SwampWeight;
     }
 }

@@ -18,6 +18,7 @@ public readonly record struct VoxelMeshBuildResult(
     Vector3[] Normals,
     Vector2[] Uvs,
     Color[] Colors,
+    Color[] MaterialColors,
     float[] BiomeWeights,
     float[] Tangents,
     int NormalDebugMismatchCount,
@@ -34,6 +35,7 @@ public readonly record struct VoxelMeshBuildResult(
             Array.Empty<Vector3>(),
             Array.Empty<Vector2>(),
             Array.Empty<Color>(),
+            Array.Empty<Color>(),
             Array.Empty<float>(),
             Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
@@ -45,6 +47,7 @@ public readonly record struct VoxelMeshBuildResult(
             DetailCellCount: 0);
 
     public bool HasGeometry => Vertices.Length > 0;
+    public bool HasMaterialColors => MaterialColors.Length > 0;
     public bool HasBiomeWeights => BiomeWeights.Length > 0;
     public bool HasTangents => Tangents.Length > 0;
 }
@@ -147,6 +150,7 @@ public static class VoxelMesher
                 Array.Empty<Vector3>(),
                 Array.Empty<Vector2>(),
                 Array.Empty<Color>(),
+                Array.Empty<Color>(),
                 Array.Empty<float>(),
                 Array.Empty<float>(),
                 NormalDebugMismatchCount: 0,
@@ -163,6 +167,7 @@ public static class VoxelMesher
             scratch.Normals.ToArray(),
             scratch.Uvs.ToArray(),
             scratch.Colors.ToArray(),
+            scratch.MaterialColors.ToArray(),
             Array.Empty<float>(),
             options.GenerateTangents
                 ? scratch.Tangents.ToArray()
@@ -212,7 +217,7 @@ public static class VoxelMesher
 
         Span<Vector3> edgeVertices = stackalloc Vector3[12];
         Span<Vector3> edgeNormals = stackalloc Vector3[12];
-        Span<Color> edgeColors = stackalloc Color[12];
+        Span<Color> edgeMaterialColors = stackalloc Color[12];
         for (int edge = 0; edge < 12; edge++)
         {
             if ((edgeMask & (1 << edge)) == 0)
@@ -224,9 +229,7 @@ public static class VoxelMesher
             int b = MarchingCubesTables.EdgeVertexIndices[edge, 1];
             float t;
             edgeVertices[edge] = Interpolate(positions[a], positions[b], densities[a], densities[b], sourceData.IsoLevel, out t);
-            edgeColors[edge] = colorMode == VoxelMeshColorMode.MaterialTint
-                ? MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t)
-                : Colors.White;
+            edgeMaterialColors[edge] = MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t);
             Vector3 worldPosition = edgeVertices[edge] + meshOrigin;
             edgeNormals[edge] = normalSampleData.SampleSurfaceNormal(worldPosition);
         }
@@ -263,9 +266,12 @@ public static class VoxelMesher
             Vector3 normalA = AlignSmoothNormal(edgeNormals[edgeA], referenceNormal);
             Vector3 normalB = AlignSmoothNormal(edgeNormals[edgeB], referenceNormal);
             Vector3 normalC = AlignSmoothNormal(edgeNormals[edgeC], referenceNormal);
-            Color colorA = ResolveVertexColor(colorMode, edgeColors[edgeA], normalA);
-            Color colorB = ResolveVertexColor(colorMode, edgeColors[edgeB], normalB);
-            Color colorC = ResolveVertexColor(colorMode, edgeColors[edgeC], normalC);
+            Color materialColorA = edgeMaterialColors[edgeA];
+            Color materialColorB = edgeMaterialColors[edgeB];
+            Color materialColorC = edgeMaterialColors[edgeC];
+            Color colorA = ResolveVertexColor(colorMode, materialColorA, normalA);
+            Color colorB = ResolveVertexColor(colorMode, materialColorB, normalB);
+            Color colorC = ResolveVertexColor(colorMode, materialColorC, normalC);
 
             if (generateTangents)
             {
@@ -276,15 +282,15 @@ public static class VoxelMesher
                 }
 
                 ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, tangentNormal, out float tx, out float ty, out float tz, out float tw);
-                AddVertex(scratch, vertexA, normalA, uvA, colorA, tx, ty, tz, tw);
-                AddVertex(scratch, vertexB, normalB, uvB, colorB, tx, ty, tz, tw);
-                AddVertex(scratch, vertexC, normalC, uvC, colorC, tx, ty, tz, tw);
+                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA, tx, ty, tz, tw);
+                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB, tx, ty, tz, tw);
+                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC, tx, ty, tz, tw);
             }
             else
             {
-                AddVertex(scratch, vertexA, normalA, uvA, colorA);
-                AddVertex(scratch, vertexB, normalB, uvB, colorB);
-                AddVertex(scratch, vertexC, normalC, uvC, colorC);
+                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA);
+                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB);
+                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC);
             }
         }
 
@@ -442,6 +448,7 @@ public static class VoxelMesher
         Vector3 normal,
         Vector2 uv,
         Color color,
+        Color materialColor,
         float tangentX = 0.0f,
         float tangentY = 0.0f,
         float tangentZ = 0.0f,
@@ -451,6 +458,7 @@ public static class VoxelMesher
         scratch.Normals.Add(normal);
         scratch.Uvs.Add(uv);
         scratch.Colors.Add(color);
+        scratch.MaterialColors.Add(materialColor);
 
         if (!scratch.IncludeTangents)
         {
@@ -488,6 +496,7 @@ public static class VoxelMesher
         public readonly PooledBuffer<Vector3> Normals = new();
         public readonly PooledBuffer<Vector2> Uvs = new();
         public readonly PooledBuffer<Color> Colors = new();
+        public readonly PooledBuffer<Color> MaterialColors = new();
         public readonly PooledBuffer<float> Tangents = new();
 
         public bool IncludeTangents { get; private set; }
@@ -499,6 +508,7 @@ public static class VoxelMesher
             Normals.Reset();
             Uvs.Reset();
             Colors.Reset();
+            MaterialColors.Reset();
             Tangents.Reset();
             IncludeTangents = false;
         }
