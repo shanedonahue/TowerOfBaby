@@ -20,6 +20,15 @@ public partial class TerrainLodManager : Node3D
     private const int MaxCollisionBuildsPerFrame = 16;
     private const int MaxReleasesPerFrame = 32;
     private const int MaxRefinedParentTransitionsPerFrame = 8;
+    private static readonly (TerrainSeamFace Face, Vector3I Offset)[] SeamNeighborDirections =
+    {
+        (TerrainSeamFace.NegativeX, new Vector3I(-1, 0, 0)),
+        (TerrainSeamFace.PositiveX, new Vector3I(1, 0, 0)),
+        (TerrainSeamFace.NegativeY, new Vector3I(0, -1, 0)),
+        (TerrainSeamFace.PositiveY, new Vector3I(0, 1, 0)),
+        (TerrainSeamFace.NegativeZ, new Vector3I(0, 0, -1)),
+        (TerrainSeamFace.PositiveZ, new Vector3I(0, 0, 1))
+    };
 
     [Signal] public delegate void InitialLoadCompletedEventHandler();
 
@@ -214,6 +223,7 @@ public partial class TerrainLodManager : Node3D
             block.Renderer.SetDebugView(_activeTerrainDebugView, _surfaceColorizer);
         }
 
+        RefreshAllVisibleMixedLodSeams();
         _latestProfileSnapshot = BuildProfileSnapshot();
         return true;
     }
@@ -441,14 +451,9 @@ public partial class TerrainLodManager : Node3D
             return xOffset == 0 && zOffset == 0;
         }
 
-        if (bubbleRadius == 1)
-        {
-            return true;
-        }
-
-        // Keep the close range a bit finer without paying for a full square of extra LOD0 parents.
-        Vector2 offset = new(xOffset, zOffset);
-        return offset.LengthSquared() <= Mathf.Pow(bubbleRadius + 0.05f, 2.0f);
+        // With the current stylized terrain, keeping the close bubble square makes the mixed-LOD boundary
+        // less noticeable and keeps seams farther away from the player.
+        return true;
     }
 
     private static void AddRefinedParent(HashSet<TerrainBlockId> refinedParents, TerrainBlockId centerParent, int xOffset, int zOffset)
@@ -753,6 +758,7 @@ public partial class TerrainLodManager : Node3D
             ulong commitStart = Time.GetTicksUsec();
             block.Renderer.ApplyVisualMesh(block.Mesh, _activeTerrainDebugView, _surfaceColorizer);
             block.MarkVisible(collisionPending: includeCollision);
+            RefreshVisibleMixedLodSeamsAround(block.Id);
             _lastCommitMs += (Time.GetTicksUsec() - commitStart) / 1000.0;
             _lastCommitCount++;
             if (includeCollision)
@@ -877,9 +883,202 @@ public partial class TerrainLodManager : Node3D
         block.CancelPendingData();
         block.Renderer.QueueFree();
         RemoveBlockFromDispatcherQueues(blockId);
+        RefreshVisibleMixedLodSeamsAround(blockId);
         _lastReleaseCount++;
         _recentReleaseTimes.Enqueue(_currentTimeSeconds);
         _lastReleaseSummary = $"{blockId} {reason}";
+    }
+
+    private void RefreshAllVisibleMixedLodSeams()
+    {
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            RefreshVisibleMixedLodSeam(block.Id);
+        }
+    }
+
+    private void RefreshVisibleMixedLodSeamsAround(TerrainBlockId changedBlockId)
+    {
+        HashSet<TerrainBlockId> candidates = new();
+        foreach (TerrainBlockId candidate in EnumeratePotentialSeamBlocks(changedBlockId))
+        {
+            candidates.Add(candidate);
+        }
+
+        foreach (TerrainBlockId candidate in candidates)
+        {
+            RefreshVisibleMixedLodSeam(candidate);
+        }
+    }
+
+    private IEnumerable<TerrainBlockId> EnumeratePotentialSeamBlocks(TerrainBlockId blockId)
+    {
+        if (blockId.Lod == 1)
+        {
+            yield return blockId;
+            foreach ((_, Vector3I offset) in SeamNeighborDirections)
+            {
+                yield return new TerrainBlockId(1, blockId.Index + offset);
+            }
+
+            yield break;
+        }
+
+        if (blockId.Lod != 0)
+        {
+            yield break;
+        }
+
+        yield return blockId;
+        foreach ((_, Vector3I offset) in SeamNeighborDirections)
+        {
+            yield return new TerrainBlockId(0, blockId.Index + offset);
+        }
+
+        TerrainBlockId parent = GetParentBlock(blockId);
+        yield return parent;
+        foreach ((_, Vector3I offset) in SeamNeighborDirections)
+        {
+            yield return new TerrainBlockId(1, parent.Index + offset);
+        }
+    }
+
+    private void RefreshVisibleMixedLodSeam(TerrainBlockId blockId)
+    {
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+            block.State != TerrainBlockState.Visible ||
+            block.Renderer == null ||
+            !IsInstanceValid(block.Renderer) ||
+            !block.Renderer.HasVisuals)
+        {
+            return;
+        }
+
+        TerrainSeamFace requestedFaces = ResolveRequestedSeamFaces(blockId);
+        if (requestedFaces == TerrainSeamFace.None)
+        {
+            block.Renderer.UpdateSeamMesh(VoxelMeshBuildResult.Empty);
+            return;
+        }
+
+        VoxelMeshBuildResult baseMesh = block.Renderer.BuildVisualMeshSnapshot(_surfaceColorizer);
+        TerrainSeamBuildResult seamBuild = TerrainSeamMesher.BuildMixedLodSeams(_config, blockId, baseMesh, requestedFaces);
+        block.Renderer.UpdateSeamMesh(seamBuild.Mesh);
+    }
+
+    private TerrainSeamFace ResolveRequestedSeamFaces(TerrainBlockId blockId)
+    {
+        if (blockId.Lod == 1)
+        {
+            TerrainSeamFace coarseFaces = TerrainSeamFace.None;
+            foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
+            {
+                TerrainBlockId neighbor = new(1, blockId.Index + offset);
+                if (HasVisibleSameLodCoverage(neighbor))
+                {
+                    continue;
+                }
+
+                if (HasVisibleFinerCoverage(neighbor))
+                {
+                    coarseFaces |= face;
+                }
+            }
+
+            return coarseFaces;
+        }
+
+        if (blockId.Lod != 0)
+        {
+            return TerrainSeamFace.None;
+        }
+
+        TerrainSeamFace fineFaces = TerrainSeamFace.None;
+        foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
+        {
+            TerrainBlockId sameLodNeighbor = new(0, blockId.Index + offset);
+            if (HasVisibleSameLodCoverage(sameLodNeighbor))
+            {
+                continue;
+            }
+
+            if (TryGetVisibleCoarseNeighborForChildFace(blockId, face, out _))
+            {
+                fineFaces |= face;
+            }
+        }
+
+        return fineFaces;
+    }
+
+    private bool HasVisibleSameLodCoverage(TerrainBlockId blockId)
+    {
+        return _blocks.TryGetValue(blockId, out TerrainBlockData block) &&
+               block.State == TerrainBlockState.Visible &&
+               block.Renderer != null &&
+               IsInstanceValid(block.Renderer) &&
+               block.Renderer.HasVisuals;
+    }
+
+    private bool HasVisibleFinerCoverage(TerrainBlockId coarseBlockId)
+    {
+        if (coarseBlockId.Lod <= 0)
+        {
+            return false;
+        }
+
+        foreach (TerrainBlockId child in TerrainMetrics.GetChildren(coarseBlockId))
+        {
+            if (HasVisibleSameLodCoverage(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryGetVisibleCoarseNeighborForChildFace(
+        TerrainBlockId childBlockId,
+        TerrainSeamFace face,
+        out TerrainBlockId coarseNeighbor)
+    {
+        coarseNeighbor = default;
+        if (childBlockId.Lod != 0 || !IsChildOnParentOuterFace(childBlockId, face))
+        {
+            return false;
+        }
+
+        TerrainBlockId parent = GetParentBlock(childBlockId);
+        Vector3I offset = face switch
+        {
+            TerrainSeamFace.NegativeX => new Vector3I(-1, 0, 0),
+            TerrainSeamFace.PositiveX => new Vector3I(1, 0, 0),
+            TerrainSeamFace.NegativeY => new Vector3I(0, -1, 0),
+            TerrainSeamFace.PositiveY => new Vector3I(0, 1, 0),
+            TerrainSeamFace.NegativeZ => new Vector3I(0, 0, -1),
+            TerrainSeamFace.PositiveZ => new Vector3I(0, 0, 1),
+            _ => Vector3I.Zero
+        };
+
+        coarseNeighbor = new TerrainBlockId(1, parent.Index + offset);
+        return HasVisibleSameLodCoverage(coarseNeighbor);
+    }
+
+    private static bool IsChildOnParentOuterFace(TerrainBlockId childBlockId, TerrainSeamFace face)
+    {
+        TerrainBlockId parent = GetParentBlock(childBlockId);
+        Vector3I childLocalIndex = childBlockId.Index - (parent.Index * 2);
+        return face switch
+        {
+            TerrainSeamFace.NegativeX => childLocalIndex.X == 0,
+            TerrainSeamFace.PositiveX => childLocalIndex.X == 1,
+            TerrainSeamFace.NegativeY => childLocalIndex.Y == 0,
+            TerrainSeamFace.PositiveY => childLocalIndex.Y == 1,
+            TerrainSeamFace.NegativeZ => childLocalIndex.Z == 0,
+            TerrainSeamFace.PositiveZ => childLocalIndex.Z == 1,
+            _ => false
+        };
     }
 
     private void RecordRefinementHandoff(

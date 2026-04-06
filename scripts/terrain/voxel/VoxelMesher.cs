@@ -218,6 +218,7 @@ public static class VoxelMesher
         Span<Vector3> edgeVertices = stackalloc Vector3[12];
         Span<Vector3> edgeNormals = stackalloc Vector3[12];
         Span<Color> edgeMaterialColors = stackalloc Color[12];
+        Span<Color> edgeNeutralColors = stackalloc Color[12];
         for (int edge = 0; edge < 12; edge++)
         {
             if ((edgeMask & (1 << edge)) == 0)
@@ -229,7 +230,8 @@ public static class VoxelMesher
             int b = MarchingCubesTables.EdgeVertexIndices[edge, 1];
             float t;
             edgeVertices[edge] = Interpolate(positions[a], positions[b], densities[a], densities[b], sourceData.IsoLevel, out t);
-            edgeMaterialColors[edge] = MaterialColor(materials[a]).Lerp(MaterialColor(materials[b]), t);
+            edgeMaterialColors[edge] = MaterialTintColor(materials[a]).Lerp(MaterialTintColor(materials[b]), t);
+            edgeNeutralColors[edge] = NeutralColor(materials[a]).Lerp(NeutralColor(materials[b]), t);
             Vector3 worldPosition = edgeVertices[edge] + meshOrigin;
             edgeNormals[edge] = normalSampleData.SampleSurfaceNormal(worldPosition);
         }
@@ -269,9 +271,12 @@ public static class VoxelMesher
             Color materialColorA = edgeMaterialColors[edgeA];
             Color materialColorB = edgeMaterialColors[edgeB];
             Color materialColorC = edgeMaterialColors[edgeC];
-            Color colorA = ResolveVertexColor(colorMode, materialColorA, normalA);
-            Color colorB = ResolveVertexColor(colorMode, materialColorB, normalB);
-            Color colorC = ResolveVertexColor(colorMode, materialColorC, normalC);
+            Color neutralColorA = edgeNeutralColors[edgeA];
+            Color neutralColorB = edgeNeutralColors[edgeB];
+            Color neutralColorC = edgeNeutralColors[edgeC];
+            Color colorA = ResolveVertexColor(colorMode, neutralColorA, materialColorA, normalA);
+            Color colorB = ResolveVertexColor(colorMode, neutralColorB, materialColorB, normalB);
+            Color colorC = ResolveVertexColor(colorMode, neutralColorC, materialColorC, normalC);
 
             if (generateTangents)
             {
@@ -367,16 +372,22 @@ public static class VoxelMesher
             normalC.LengthSquared() > 0.000001f && normalC.Dot(faceNormal) < -0.2f;
     }
 
-    private static Color ResolveVertexColor(VoxelMeshColorMode colorMode, Color materialColor, Vector3 normal)
+    private static Color ResolveVertexColor(
+        VoxelMeshColorMode colorMode,
+        Color neutralColor,
+        Color materialColor,
+        Vector3 normal)
     {
         return colorMode switch
         {
+            VoxelMeshColorMode.Neutral => neutralColor,
+            VoxelMeshColorMode.MaterialTint => materialColor,
             VoxelMeshColorMode.NormalDebug => new Color(
                 (normal.X * 0.5f) + 0.5f,
                 (normal.Y * 0.5f) + 0.5f,
                 (normal.Z * 0.5f) + 0.5f,
                 1.0f),
-            _ => materialColor
+            _ => neutralColor
         };
     }
 
@@ -471,17 +482,30 @@ public static class VoxelMesher
         scratch.Tangents.Add(tangentW);
     }
 
-    private static Color MaterialColor(VoxelMaterialId materialId)
+    private static Color MaterialTintColor(VoxelMaterialId materialId)
     {
         return materialId switch
         {
-            // Stronger palette separation here gives the terrain colorizer a better base to push from.
             VoxelMaterialId.Grass => new Color(0.39f, 0.55f, 0.28f),
             VoxelMaterialId.Rock => new Color(0.44f, 0.48f, 0.52f),
             VoxelMaterialId.Cliff => new Color(0.47f, 0.43f, 0.40f),
             VoxelMaterialId.Snow => new Color(0.90f, 0.93f, 0.97f),
             VoxelMaterialId.Scorched => new Color(0.18f, 0.16f, 0.15f),
             _ => new Color(0.58f, 0.39f, 0.22f)
+        };
+    }
+
+    private static Color NeutralColor(VoxelMaterialId materialId)
+    {
+        return materialId switch
+        {
+            // Keep the default lit path closer to the simpler gameplay palette from 7ba9579.
+            VoxelMaterialId.Grass => new Color(0.47f, 0.56f, 0.33f),
+            VoxelMaterialId.Rock => new Color(0.53f, 0.51f, 0.49f),
+            VoxelMaterialId.Cliff => new Color(0.61f, 0.55f, 0.41f),
+            VoxelMaterialId.Snow => new Color(0.86f, 0.87f, 0.89f),
+            VoxelMaterialId.Scorched => new Color(0.21f, 0.19f, 0.18f),
+            _ => new Color(0.50f, 0.40f, 0.27f)
         };
     }
 

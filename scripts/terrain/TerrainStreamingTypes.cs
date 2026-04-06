@@ -13,7 +13,8 @@ public enum TerrainVisualDebugMode
     SlopeBands = 4,
     HeightBands = 5,
     MountainRangeMask = 6,
-    WaterShoreMask = 7
+    WaterShoreMask = 7,
+    Wireframe = 8
 }
 
 public static class TerrainVisualDebugModeExtensions
@@ -21,6 +22,9 @@ public static class TerrainVisualDebugModeExtensions
     private static readonly TerrainVisualDebugMode[] RuntimeSelectorModes =
     {
         TerrainVisualDebugMode.Lit,
+        TerrainVisualDebugMode.Wireframe,
+        TerrainVisualDebugMode.VertexTint,
+        TerrainVisualDebugMode.Normals,
         TerrainVisualDebugMode.FinalBiomeColor,
         TerrainVisualDebugMode.SlopeBands,
         TerrainVisualDebugMode.HeightBands,
@@ -30,7 +34,7 @@ public static class TerrainVisualDebugModeExtensions
 
     public static bool UsesDiagnosticVertexColors(this TerrainVisualDebugMode mode)
     {
-        return mode != TerrainVisualDebugMode.Lit;
+        return mode is not TerrainVisualDebugMode.Lit and not TerrainVisualDebugMode.Wireframe;
     }
 
     public static string GetDisplayName(this TerrainVisualDebugMode mode)
@@ -45,6 +49,7 @@ public static class TerrainVisualDebugModeExtensions
             TerrainVisualDebugMode.HeightBands => "Height Bands",
             TerrainVisualDebugMode.MountainRangeMask => "Mountain Mask",
             TerrainVisualDebugMode.WaterShoreMask => "Water/Shore Mask",
+            TerrainVisualDebugMode.Wireframe => "Wireframe",
             _ => mode.ToString()
         };
     }
