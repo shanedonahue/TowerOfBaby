@@ -4,9 +4,11 @@ namespace TowerOfBaby.Terrain;
 
 public static class TerrainMetrics
 {
+    private const int BaseVoxelReferenceLod = 1;
+
     public static float GetVoxelSize(TerrainConfig config, int lod)
     {
-        return config.BaseVoxelSize * Mathf.Pow(2.0f, lod);
+        return config.BaseVoxelSize * Mathf.Pow(2.0f, lod - BaseVoxelReferenceLod);
     }
 
     public static float GetBlockSpan(TerrainConfig config, int lod)
