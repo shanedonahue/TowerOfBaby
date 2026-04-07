@@ -5,15 +5,14 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainSurfaceColorizer
 {
-    private const float HeightTintStrength = 0.055f;
-    private const float LowlandTintStrength = 0.045f;
-    private const float ShoreTintStrength = 0.085f;
-    private const float ShoreBrightenStrength = 0.10f;
-    private const float BiomeTintStrength = 0.075f;
-    private const float SlopeDarkeningMax = 0.085f;
-    private const bool EnableMeadowBoost = true;
-    private const float MeadowTintStrength = 0.16f;
-    private const float MeadowSaturationBoost = 0.12f;
+    private const float FlatSlopeStart = 0.10f;
+    private const float FlatSlopeEnd = 0.34f;
+    private const float LowlandHeightStart = 0.38f;
+    private const float LowlandHeightEnd = 0.66f;
+    private const float PeakHeightStart = 0.72f;
+    private const float PeakHeightEnd = 0.86f;
+    private const float DryLandStartAboveWater = 0.15f;
+    private const float DryLandEndAboveWater = 1.30f;
 
     private static readonly Color[] SlopeBandPalette =
     {
@@ -35,17 +34,9 @@ public sealed class TerrainSurfaceColorizer
         new(0.92f, 0.92f, 0.96f, 1.0f)
     };
 
-    private static readonly Color WarmLowHeightTint = new(0.78f, 0.69f, 0.57f, 1.0f);
-    private static readonly Color CoolHighHeightTint = new(0.72f, 0.82f, 0.93f, 1.0f);
-    private static readonly Color LowlandTint = new(0.71f, 0.79f, 0.60f, 1.0f);
-    private static readonly Color ShoreTint = new(0.91f, 0.85f, 0.69f, 1.0f);
-    private static readonly Color MeadowBoostColor = new(0.56f, 0.81f, 0.34f, 1.0f);
-
-    private static readonly Color PlainsBiomeTint = new(0.59f, 0.77f, 0.45f, 1.0f);
-    private static readonly Color RockyBiomeTint = new(0.66f, 0.69f, 0.72f, 1.0f);
-    private static readonly Color CanyonBiomeTint = new(0.87f, 0.64f, 0.44f, 1.0f);
-    private static readonly Color SwampBiomeTint = new(0.47f, 0.72f, 0.63f, 1.0f);
-    private static readonly Color VolcanicBiomeTint = new(0.77f, 0.58f, 0.54f, 1.0f);
+    private static readonly Color LowlandColor = new(0.44f, 0.62f, 0.31f, 1.0f);
+    private static readonly Color SlopeColor = new(0.61f, 0.50f, 0.34f, 1.0f);
+    private static readonly Color PeakColor = new(0.94f, 0.95f, 0.97f, 1.0f);
 
     private readonly int _seed;
     private readonly float _terrainHeight;
@@ -81,7 +72,7 @@ public sealed class TerrainSurfaceColorizer
             return mesh;
         }
 
-        Color[] baseMaterialColors = mesh.HasMaterialColors
+        Color[] materialColors = mesh.HasMaterialColors
             ? mesh.MaterialColors
             : mesh.Colors;
         Color[] litColors = new Color[mesh.Vertices.Length];
@@ -91,7 +82,7 @@ public sealed class TerrainSurfaceColorizer
         {
             Vector3 worldPosition = origin + mesh.Vertices[i];
             TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
-            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], baseMaterialColors[i], biome);
+            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i]);
             WriteBiomeWeights(biomeWeights, i * 4, biome);
         }
 
@@ -100,7 +91,7 @@ public sealed class TerrainSurfaceColorizer
             mesh.Normals,
             mesh.Uvs,
             litColors,
-            baseMaterialColors,
+            materialColors,
             biomeWeights,
             mesh.Tangents,
             mesh.NormalDebugMismatchCount,
@@ -132,57 +123,32 @@ public sealed class TerrainSurfaceColorizer
 
     private Color ResolveLitColor(
         Vector3 worldPosition,
-        Vector3 normal,
-        Color baseMaterialColor,
-        TerrainBiomeSample biome)
+        Vector3 normal)
     {
         Vector3 safeNormal = normal.LengthSquared() > 0.000001f
             ? normal.Normalized()
             : Vector3.Up;
 
         float slope = 1.0f - Mathf.Clamp(safeNormal.Dot(Vector3.Up), 0.0f, 1.0f);
-        float flatness = 1.0f - Mathf.SmoothStep(0.10f, 0.42f, slope);
-        float slopeDarkening = Mathf.SmoothStep(0.12f, 0.78f, slope);
+        float flatness = 1.0f - Mathf.SmoothStep(FlatSlopeStart, FlatSlopeEnd, slope);
         float height01 = NormalizeHeight(worldPosition.Y);
-        float lowlandBlend = 1.0f - Mathf.SmoothStep(0.16f, 0.42f, height01);
-        float shoreBlend = (1.0f - Mathf.SmoothStep(
-            _shorelineFalloff * 0.35f,
-            _shorelineFalloff * 1.7f,
-            Mathf.Abs(worldPosition.Y - _waterLevel))) * (0.45f + (flatness * 0.55f));
+        float lowlandWeight = flatness *
+            (1.0f - Mathf.SmoothStep(LowlandHeightStart, LowlandHeightEnd, height01)) *
+            Mathf.SmoothStep(_waterLevel + DryLandStartAboveWater, _waterLevel + DryLandEndAboveWater, worldPosition.Y);
+        float peakWeight = flatness * Mathf.SmoothStep(PeakHeightStart, PeakHeightEnd, height01);
+        float slopeWeight = Mathf.Clamp(1.0f - Mathf.Max(lowlandWeight, peakWeight), 0.0f, 1.0f);
 
-        float dominantWeight = GetDominantBiomeWeight(biome);
-        Color color = baseMaterialColor;
-
-        Color heightTint = WarmLowHeightTint.Lerp(CoolHighHeightTint, height01);
-        color = color.Lerp(heightTint, HeightTintStrength);
-        color = color.Lerp(LowlandTint, lowlandBlend * LowlandTintStrength);
-        color = color.Lerp(ShoreTint, shoreBlend * ShoreTintStrength);
-        color = color.Lerp(
-            BuildBiomeHueTint(biome),
-            (0.35f + (dominantWeight * 0.65f)) * BiomeTintStrength);
-
-        color = ScaleColor(color, 1.0f - (slopeDarkening * SlopeDarkeningMax));
-        color = color.Lerp(Colors.White, shoreBlend * ShoreBrightenStrength);
-
-        float meadowBlend = EnableMeadowBoost
-            ? ComputeMeadowBoost(flatness, shoreBlend, biome)
-            : 0.0f;
-        if (meadowBlend > 0.0f)
+        float weightSum = lowlandWeight + slopeWeight + peakWeight;
+        if (weightSum <= 0.0001f)
         {
-            color = color.Lerp(MeadowBoostColor, meadowBlend * MeadowTintStrength);
-            color = SaturateColor(color, 1.0f + (meadowBlend * MeadowSaturationBoost));
+            return SlopeColor;
         }
 
-        return ClampColor(color);
-    }
-
-    private static float ComputeMeadowBoost(float flatness, float shoreBlend, TerrainBiomeSample biome)
-    {
-        float plainsBlend = Mathf.SmoothStep(0.35f, 0.85f, biome.PlainsWeight);
-        float moistureBlend = Mathf.SmoothStep(0.38f, 0.72f, biome.Moisture);
-        float dryPenalty = 1.0f - Mathf.SmoothStep(0.48f, 0.92f, biome.Ruggedness);
-        float shorePenalty = 1.0f - (shoreBlend * 0.35f);
-        return Mathf.Clamp(flatness * plainsBlend * moistureBlend * dryPenalty * shorePenalty, 0.0f, 1.0f);
+        return ClampColor(new Color(
+            ((LowlandColor.R * lowlandWeight) + (SlopeColor.R * slopeWeight) + (PeakColor.R * peakWeight)) / weightSum,
+            ((LowlandColor.G * lowlandWeight) + (SlopeColor.G * slopeWeight) + (PeakColor.G * peakWeight)) / weightSum,
+            ((LowlandColor.B * lowlandWeight) + (SlopeColor.B * slopeWeight) + (PeakColor.B * peakWeight)) / weightSum,
+            1.0f));
     }
 
     private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)
@@ -261,54 +227,6 @@ public sealed class TerrainSurfaceColorizer
         return Mathf.Clamp((worldY - minHeight) / Mathf.Max(1.0f, maxHeight - minHeight), 0.0f, 1.0f);
     }
 
-    private static Color BuildBiomeHueTint(TerrainBiomeSample biome) => BlendBiomeColor(
-        biome,
-        PlainsBiomeTint,
-        RockyBiomeTint,
-        CanyonBiomeTint,
-        SwampBiomeTint,
-        VolcanicBiomeTint);
-
-    private static Color BlendBiomeColor(
-        TerrainBiomeSample biome,
-        Color plainsColor,
-        Color rockyColor,
-        Color canyonColor,
-        Color swampColor,
-        Color volcanicColor)
-    {
-        return new Color(
-            (plainsColor.R * biome.PlainsWeight) +
-            (rockyColor.R * biome.RockyWeight) +
-            (canyonColor.R * biome.CanyonWeight) +
-            (swampColor.R * biome.SwampWeight) +
-            (volcanicColor.R * biome.VolcanicWeight),
-            (plainsColor.G * biome.PlainsWeight) +
-            (rockyColor.G * biome.RockyWeight) +
-            (canyonColor.G * biome.CanyonWeight) +
-            (swampColor.G * biome.SwampWeight) +
-            (volcanicColor.G * biome.VolcanicWeight),
-            (plainsColor.B * biome.PlainsWeight) +
-            (rockyColor.B * biome.RockyWeight) +
-            (canyonColor.B * biome.CanyonWeight) +
-            (swampColor.B * biome.SwampWeight) +
-            (volcanicColor.B * biome.VolcanicWeight),
-            1.0f);
-    }
-
-    private static float GetDominantBiomeWeight(TerrainBiomeSample biome)
-    {
-        return biome.DominantBiome switch
-        {
-            BiomeId.Plains => biome.PlainsWeight,
-            BiomeId.Rocky => biome.RockyWeight,
-            BiomeId.Canyon => biome.CanyonWeight,
-            BiomeId.Swamp => biome.SwampWeight,
-            BiomeId.Volcanic => biome.VolcanicWeight,
-            _ => 0.0f
-        };
-    }
-
     private VoxelFieldGenerator GetFieldGenerator()
     {
         return _fieldGenerator ??= new VoxelFieldGenerator(
@@ -322,15 +240,6 @@ public sealed class TerrainSurfaceColorizer
             _waterBasinInfluence);
     }
 
-    private static Color ScaleColor(Color color, float factor)
-    {
-        return new Color(
-            color.R * factor,
-            color.G * factor,
-            color.B * factor,
-            color.A);
-    }
-
     private static Color ClampColor(Color color)
     {
         return new Color(
@@ -338,15 +247,5 @@ public sealed class TerrainSurfaceColorizer
             Mathf.Clamp(color.G, 0.0f, 1.0f),
             Mathf.Clamp(color.B, 0.0f, 1.0f),
             Mathf.Clamp(color.A, 0.0f, 1.0f));
-    }
-
-    private static Color SaturateColor(Color color, float saturation)
-    {
-        float grayscale = (color.R + color.G + color.B) / 3.0f;
-        return new Color(
-            grayscale + ((color.R - grayscale) * saturation),
-            grayscale + ((color.G - grayscale) * saturation),
-            grayscale + ((color.B - grayscale) * saturation),
-            color.A);
     }
 }

@@ -290,7 +290,12 @@ public partial class TerrainRenderer : Node3D
             AlbedoColor = Colors.White,
             Roughness = 1.0f,
             Metallic = 0.0f,
-            ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel
+            MetallicSpecular = 0.0f,
+            SpecularMode = BaseMaterial3D.SpecularModeEnum.Disabled,
+            DisableAmbientLight = true,
+            DisableReceiveShadows = true,
+            DisableFog = true,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.PerVertex
         };
     }
 

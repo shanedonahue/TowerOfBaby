@@ -25,7 +25,12 @@ public sealed class VoxelFieldGenerator
     private const float TerrainWarpStrength = 8.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
-    private const float MountainHeightScale = 0.52f;
+    private const float MountainHeightScale = 0.60f;
+    private const float HeroPeakThresholdMin = 0.79f;
+    private const float HeroPeakThresholdMax = 0.93f;
+    private const float HeroPeakMaskAmplifyPower = 0.55f;
+    private const float HeroPeakStrengthBoost = 1.42f;
+    private const float HeroPeakHeightScale = 1.35f;
     private const float HillHeightScale = 0.10f;
     private const float DetailContributionScale = 0.10f;
     private const float SwampVegetationBias = 0.60f;
@@ -42,6 +47,7 @@ public sealed class VoxelFieldGenerator
     private readonly FastNoiseLite _continentNoise;
     private readonly FastNoiseLite _shapeBiomeNoise;
     private readonly FastNoiseLite _mountainNoise;
+    private readonly FastNoiseLite _heroPeakNoise;
     private readonly FastNoiseLite _hillNoise;
     private readonly FastNoiseLite _detailNoise;
     private readonly FastNoiseLite _warpNoiseX;
@@ -99,6 +105,13 @@ public sealed class VoxelFieldGenerator
             Seed = seed + 59,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
             Frequency = 0.0180f
+        };
+
+        _heroPeakNoise = new FastNoiseLite
+        {
+            Seed = seed + 83,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+            Frequency = 0.0022f
         };
 
         _detailNoise = new FastNoiseLite
@@ -198,14 +211,42 @@ public sealed class VoxelFieldGenerator
         return SampleSlope(worldX, worldZ);
     }
 
+    public Vector3 SampleSurfaceNormal(Vector3 worldPosition, float sampleStep)
+    {
+        float step = Mathf.Max(0.5f, sampleStep);
+        float heightLeft = SampleTerrainHeight(worldPosition.X - step, worldPosition.Z);
+        float heightRight = SampleTerrainHeight(worldPosition.X + step, worldPosition.Z);
+        float heightBack = SampleTerrainHeight(worldPosition.X, worldPosition.Z - step);
+        float heightForward = SampleTerrainHeight(worldPosition.X, worldPosition.Z + step);
+        Vector3 tangentX = new(step * 2.0f, heightRight - heightLeft, 0.0f);
+        Vector3 tangentZ = new(0.0f, heightForward - heightBack, step * 2.0f);
+        Vector3 normal = tangentZ.Cross(tangentX);
+        if (normal.LengthSquared() <= 0.000001f)
+        {
+            return Vector3.Up;
+        }
+
+        return normal.Normalized();
+    }
+
     public TerrainMountainRangeDebugSample SampleMountainRangeDebug(float worldX, float worldZ)
     {
         Vector2 warped = WarpXZ(worldX, worldZ);
         TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldX, worldZ);
         TerrainHeightLayers layers = SampleHeightLayers(warped, biome);
         float landPresence = Mathf.SmoothStep(0.18f, 0.72f, layers.Continent);
-        float shoulderMask = Mathf.Clamp(landPresence * Mathf.SmoothStep(0.12f, 0.55f, layers.Mountain), 0.0f, 1.0f);
-        float peakMask = Mathf.Clamp(shoulderMask * layers.Mountain * layers.MountainStrength, 0.0f, 1.0f);
+        float shoulderMask = Mathf.Clamp(
+            landPresence * Mathf.SmoothStep(0.12f, 0.55f, layers.Mountain),
+            0.0f,
+            1.0f);
+        shoulderMask = Mathf.Clamp(shoulderMask + (layers.HeroPeakMask * 0.18f), 0.0f, 1.0f);
+        float peakMask = Mathf.Clamp(
+            shoulderMask *
+            layers.Mountain *
+            layers.MountainStrength *
+            Mathf.Lerp(1.0f, 1.35f, layers.HeroPeakMask),
+            0.0f,
+            1.0f);
         return new TerrainMountainRangeDebugSample(
             landPresence,
             layers.ShapeBiome,
@@ -322,7 +363,11 @@ public sealed class VoxelFieldGenerator
         float terrain = 0.0f;
         terrain += layers.Continent * (_terrainHeight * ContinentHeightScale);
         terrain -= _terrainHeight * ContinentBaseOffsetScale;
-        terrain += layers.Mountain * (_terrainHeight * MountainHeightScale * layers.MountainStrength);
+        float mountainLift = layers.Mountain * (_terrainHeight * MountainHeightScale * layers.MountainStrength);
+        float heroPeakLift =
+            Mathf.Pow(layers.Mountain, 1.10f) *
+            (_terrainHeight * HeroPeakHeightScale * layers.MountainStrength * layers.HeroPeakMask);
+        terrain += mountainLift + heroPeakLift;
         terrain += layers.Hills * (_terrainHeight * HillHeightScale * layers.HillStrength * (1.0f - (plainsFlattenMask * 0.45f)));
         terrain += layers.Detail * (
             _detailHeight *
@@ -351,10 +396,21 @@ public sealed class VoxelFieldGenerator
             1.0f);
         float mountainStrength = Mathf.Lerp(0.0f, 1.10f, shapeBiome);
         mountainStrength *= Mathf.Lerp(0.85f, 1.25f, ruggedShapeBoost);
-        mountainStrength = Mathf.Clamp(mountainStrength, 0.0f, 1.25f);
         float mountain = SampleRidge(_mountainNoise, warped.X, warped.Y);
         mountain = Mathf.Pow(mountain, 2.2f);
         mountain *= Mathf.SmoothStep(0.18f, 0.72f, continent);
+
+        float heroPeakMask = NoiseToUnit(SampleFbm2D(_heroPeakNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.15f, gain: 0.60f));
+        heroPeakMask = Mathf.SmoothStep(HeroPeakThresholdMin, HeroPeakThresholdMax, heroPeakMask);
+        heroPeakMask *= Mathf.SmoothStep(0.30f, 0.78f, continent);
+        heroPeakMask *= Mathf.SmoothStep(0.42f, 0.80f, mountain);
+        heroPeakMask = Mathf.Clamp(heroPeakMask, 0.0f, 1.0f);
+        heroPeakMask = heroPeakMask <= 0.0f
+            ? 0.0f
+            : Mathf.Pow(heroPeakMask, HeroPeakMaskAmplifyPower);
+
+        mountainStrength *= Mathf.Lerp(1.0f, HeroPeakStrengthBoost, heroPeakMask);
+        mountainStrength = Mathf.Clamp(mountainStrength, 0.0f, 1.55f);
 
         float hillStrength = Mathf.Lerp(1.00f, 0.55f, shapeBiome);
         hillStrength *= Mathf.Clamp(
@@ -390,7 +446,8 @@ public sealed class VoxelFieldGenerator
             shapeBiome,
             mountainStrength,
             hillStrength,
-            detailStrength);
+            detailStrength,
+            heroPeakMask);
     }
 
     private float SampleSlope(float worldX, float worldZ)
@@ -520,5 +577,6 @@ public sealed class VoxelFieldGenerator
         float ShapeBiome,
         float MountainStrength,
         float HillStrength,
-        float DetailStrength);
+        float DetailStrength,
+        float HeroPeakMask);
 }

@@ -41,7 +41,7 @@ public static class TerrainVisualDebugModeExtensions
     {
         return mode switch
         {
-            TerrainVisualDebugMode.Lit => "Lit",
+            TerrainVisualDebugMode.Lit => "Palette",
             TerrainVisualDebugMode.VertexTint => "Material Tint",
             TerrainVisualDebugMode.Normals => "Normals",
             TerrainVisualDebugMode.FinalBiomeColor => "Biome Color",

@@ -54,9 +54,11 @@ public sealed class TerrainMesher
             return mesh;
         }
 
-        return _meshOptions.ColorMode == VoxelMeshColorMode.MaterialTint
-            ? CreateSurfaceColorizer().BuildLitMesh(mesh, data)
-            : AttachBiomeWeights(mesh, data);
+        // Mesh builds run on worker threads, so keep world-space sampling thread-local.
+        VoxelFieldGenerator normalSampler = CreateFieldGenerator();
+        TerrainSurfaceColorizer surfaceColorizer = CreateSurfaceColorizer();
+        mesh = RebuildChunkBoundaryNormals(mesh, data, normalSampler);
+        return surfaceColorizer.BuildLitMesh(mesh, data);
     }
 
     public float SampleSurfaceHeight(float worldX, float worldZ)
@@ -82,31 +84,60 @@ public sealed class TerrainMesher
         return new TerrainSurfaceColorizer(_config);
     }
 
-    private VoxelMeshBuildResult AttachBiomeWeights(VoxelMeshBuildResult mesh, VoxelChunkData data)
+    private static VoxelMeshBuildResult RebuildChunkBoundaryNormals(
+        VoxelMeshBuildResult mesh,
+        VoxelChunkData data,
+        VoxelFieldGenerator normalSampler)
     {
-        if (mesh.HasBiomeWeights)
+        float boundaryBlendDistance = Mathf.Max(data.VoxelSize * 1.5f, 0.0005f);
+        float sampleStep = Mathf.Max(data.VoxelSize * 1.5f, 1.75f);
+        Vector3[] normals = new Vector3[mesh.Normals.Length];
+        bool changed = false;
+
+        for (int i = 0; i < mesh.Vertices.Length; i++)
+        {
+            Vector3 originalNormal = mesh.Normals[i].LengthSquared() > 0.000001f
+                ? mesh.Normals[i].Normalized()
+                : Vector3.Up;
+            float boundaryBlend = ComputeBoundaryBlend(mesh.Vertices[i], data.ChunkSize, boundaryBlendDistance);
+            if (boundaryBlend <= 0.0f)
+            {
+                normals[i] = originalNormal;
+                continue;
+            }
+
+            Vector3 worldPosition = data.Origin + mesh.Vertices[i];
+            Vector3 sampledNormal = normalSampler.SampleSurfaceNormal(worldPosition, sampleStep);
+            if (sampledNormal.LengthSquared() <= 0.000001f)
+            {
+                normals[i] = originalNormal;
+                continue;
+            }
+
+            if (sampledNormal.Dot(originalNormal) < 0.0f)
+            {
+                sampledNormal = -sampledNormal;
+            }
+
+            Vector3 blendedNormal = originalNormal.Lerp(sampledNormal, boundaryBlend);
+            normals[i] = blendedNormal.LengthSquared() > 0.000001f
+                ? blendedNormal.Normalized()
+                : sampledNormal;
+            changed = true;
+        }
+
+        if (!changed)
         {
             return mesh;
         }
 
-        // Mesh builds run on worker threads, so keep biome sampling thread-local just like the field generator.
-        TerrainBiomeClassifier biomeClassifier = new(_seed);
-        float[] biomeWeights = new float[mesh.Vertices.Length * 4];
-        Vector3 origin = data.Origin;
-        for (int i = 0; i < mesh.Vertices.Length; i++)
-        {
-            Vector3 worldPosition = origin + mesh.Vertices[i];
-            TerrainBiomeSample biome = biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
-            WriteBiomeWeights(biomeWeights, i * 4, biome);
-        }
-
         return new VoxelMeshBuildResult(
             mesh.Vertices,
-            mesh.Normals,
+            normals,
             mesh.Uvs,
             mesh.Colors,
             mesh.MaterialColors,
-            biomeWeights,
+            mesh.BiomeWeights,
             mesh.Tangents,
             mesh.NormalDebugMismatchCount,
             mesh.TotalTriangleCount,
@@ -117,11 +148,18 @@ public sealed class TerrainMesher
             mesh.DetailCellCount);
     }
 
-    private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)
+    private static float ComputeBoundaryBlend(Vector3 localPosition, float chunkSize, float boundaryBlendDistance)
     {
-        destination[offset] = biome.PlainsWeight;
-        destination[offset + 1] = biome.RockyWeight;
-        destination[offset + 2] = biome.CanyonWeight;
-        destination[offset + 3] = biome.SwampWeight;
+        float distanceToBoundary = Mathf.Min(
+            Mathf.Min(localPosition.X, chunkSize - localPosition.X),
+            Mathf.Min(
+                Mathf.Min(localPosition.Y, chunkSize - localPosition.Y),
+                Mathf.Min(localPosition.Z, chunkSize - localPosition.Z)));
+        if (distanceToBoundary >= boundaryBlendDistance)
+        {
+            return 0.0f;
+        }
+
+        return 1.0f - Mathf.SmoothStep(0.0f, boundaryBlendDistance, Mathf.Max(distanceToBoundary, 0.0f));
     }
 }
