@@ -40,8 +40,8 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0,64,4")] public float TargetVisibleTerrainPadding = 24.0f;
 
     [ExportGroup("Refinement Stability")]
-    [Export(PropertyHint.Range, "0,4,1")] public int SameLodBubbleRadiusXZ = 3;
-    [Export(PropertyHint.Range, "1,8,1")] public int CollisionSafetyRadiusXZ = 3;
+    [Export(PropertyHint.Range, "0,8,1")] public int SameLodBubbleRadiusXZ = 5;
+    [Export(PropertyHint.Range, "1,8,1")] public int CollisionSafetyRadiusXZ = 4;
     [Export(PropertyHint.Range, "0.00,0.49,0.01")] public float BubbleMovePaddingFraction = 0.20f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float BlockReleaseHysteresisSeconds = 0.70f;
     [Export(PropertyHint.Range, "0.00,3.00,0.05")] public float RefinedBlockReleaseExtraSeconds = 0.45f;
@@ -979,7 +979,8 @@ public partial class TerrainLodManager : Node3D
                     continue;
                 }
 
-                if (HasVisibleFinerCoverage(neighbor))
+                if (HasVisibleFinerCoverage(neighbor) &&
+                    !ShouldSuppressMixedLodSeamInsideNearBubble(blockId, neighbor))
                 {
                     coarseFaces |= face;
                 }
@@ -1002,13 +1003,35 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
-            if (TryGetVisibleCoarseNeighborForChildFace(blockId, face, out _))
+            if (TryGetVisibleCoarseNeighborForChildFace(blockId, face, out TerrainBlockId coarseNeighbor) &&
+                !ShouldSuppressMixedLodSeamInsideNearBubble(blockId, coarseNeighbor))
             {
                 fineFaces |= face;
             }
         }
 
         return fineFaces;
+    }
+
+    private bool ShouldSuppressMixedLodSeamInsideNearBubble(TerrainBlockId blockId, TerrainBlockId mixedNeighborParent)
+    {
+        if (mixedNeighborParent.Lod != 1 || _targetRefinedParents.Count == 0)
+        {
+            return false;
+        }
+
+        TerrainBlockId blockParent = blockId.Lod == 0
+            ? GetParentBlock(blockId)
+            : blockId;
+        if (blockParent.Lod != 1)
+        {
+            return false;
+        }
+
+        // Inside the intended same-LOD neighborhood around the player, prefer matching coverage
+        // over transient skirt geometry when promotion or release timing briefly mixes LODs.
+        return _targetRefinedParents.Contains(blockParent) &&
+               _targetRefinedParents.Contains(mixedNeighborParent);
     }
 
     private bool HasVisibleSameLodCoverage(TerrainBlockId blockId)

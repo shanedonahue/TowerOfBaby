@@ -22,12 +22,12 @@ public readonly record struct TerrainSurfaceColumnSample(
 public sealed class VoxelFieldGenerator
 {
     private const float TerrainWarpFrequency = 0.0100f;
-    private const float TerrainWarpStrength = 12.0f;
+    private const float TerrainWarpStrength = 8.0f;
     private const float ContinentHeightScale = 0.80f;
     private const float ContinentBaseOffsetScale = 0.55f;
-    private const float MountainHeightScale = 0.62f;
-    private const float HillHeightScale = 0.13f;
-    private const float DetailContributionScale = 0.18f;
+    private const float MountainHeightScale = 0.52f;
+    private const float HillHeightScale = 0.10f;
+    private const float DetailContributionScale = 0.10f;
     private const float SwampVegetationBias = 0.60f;
     private const float WaterShorelineFadeMultiplier = 1.85f;
     private const float WaterSubmergedFadeMultiplier = 1.75f;
@@ -315,12 +315,21 @@ public sealed class VoxelFieldGenerator
     {
         // The surface silhouette is driven by a 2D height field, then caves perturb density beneath it.
         float plainsFlattenMask = Mathf.SmoothStep(0.30f, 0.90f, biome.PlainsWeight * layers.LowlandMask);
+        float ruggedReliefMask = Mathf.Max(
+            layers.Mountain * layers.MountainStrength,
+            layers.Hills * layers.HillStrength * 0.65f);
+        float gentleSlopeMask = 1.0f - Mathf.SmoothStep(0.16f, 0.58f, ruggedReliefMask);
         float terrain = 0.0f;
         terrain += layers.Continent * (_terrainHeight * ContinentHeightScale);
         terrain -= _terrainHeight * ContinentBaseOffsetScale;
         terrain += layers.Mountain * (_terrainHeight * MountainHeightScale * layers.MountainStrength);
         terrain += layers.Hills * (_terrainHeight * HillHeightScale * layers.HillStrength * (1.0f - (plainsFlattenMask * 0.45f)));
-        terrain += layers.Detail * (_detailHeight * DetailContributionScale * layers.DetailStrength * (1.0f - (plainsFlattenMask * 0.55f)));
+        terrain += layers.Detail * (
+            _detailHeight *
+            DetailContributionScale *
+            layers.DetailStrength *
+            (1.0f - (plainsFlattenMask * 0.68f)) *
+            (1.0f - (gentleSlopeMask * 0.42f)));
         terrain = ApplyWaterAwareTerrainShaping(terrain, biome, layers.LowlandMask, layers.BasinMask);
         return terrain;
     }
@@ -344,7 +353,7 @@ public sealed class VoxelFieldGenerator
         mountainStrength *= Mathf.Lerp(0.85f, 1.25f, ruggedShapeBoost);
         mountainStrength = Mathf.Clamp(mountainStrength, 0.0f, 1.25f);
         float mountain = SampleRidge(_mountainNoise, warped.X, warped.Y);
-        mountain = Mathf.Pow(mountain, 3.0f);
+        mountain = Mathf.Pow(mountain, 2.2f);
         mountain *= Mathf.SmoothStep(0.18f, 0.72f, continent);
 
         float hillStrength = Mathf.Lerp(1.00f, 0.55f, shapeBiome);
@@ -354,7 +363,7 @@ public sealed class VoxelFieldGenerator
             (biome.SwampWeight * 0.12f),
             0.65f,
             1.10f);
-        float hills = SampleFbm2D(_hillNoise, warped.X, warped.Y, octaves: 3);
+        float hills = SampleFbm2D(_hillNoise, warped.X, warped.Y, octaves: 2);
         hills *= 0.55f + (lowlandMask * 0.45f);
 
         float detailStrength = Mathf.Clamp(

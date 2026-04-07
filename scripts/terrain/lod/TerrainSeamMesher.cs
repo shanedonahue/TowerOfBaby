@@ -61,9 +61,9 @@ public static class TerrainSeamMesher
         float voxelSize = TerrainMetrics.GetVoxelSize(config, blockId.Lod);
         float planeEpsilon = Mathf.Max(0.0005f, voxelSize * 0.001f);
         float quantizeStep = Mathf.Max(0.0005f, voxelSize * 0.01f);
-        float faceInset = Mathf.Max(0.0015f, voxelSize * 0.0075f);
-        float surfaceInset = Mathf.Max(0.0025f, voxelSize * 0.028f);
-        float skirtDepth = Mathf.Max(0.005f, voxelSize * 0.038f);
+        float faceInset = Mathf.Max(0.0010f, voxelSize * 0.0045f);
+        float surfaceInset = Mathf.Max(0.0015f, voxelSize * 0.016f);
+        float skirtDepth = Mathf.Max(0.0035f, voxelSize * 0.020f);
 
         List<Vector3> vertices = new();
         List<Vector3> normals = new();
@@ -73,8 +73,8 @@ public static class TerrainSeamMesher
         TerrainSeamFace generatedFaces = TerrainSeamFace.None;
         int quadCount = 0;
 
-        // Mixed-LOD seams are mostly raster T-junctions, not wide holes. Keep the skirt tiny,
-        // feather it under the surface, and avoid a single flat wall so the seam stays hidden.
+        // Near-field seams should be handled by matching LOD coverage. These skirts are just a
+        // far-field fallback for tiny mixed-LOD T-junctions, so keep them tucked under the surface.
         foreach (TerrainSeamFace face in EnumerateFaces(requestedFaces))
         {
             List<BoundaryEdge> boundaryEdges = CollectBoundaryEdgesForFace(
@@ -346,24 +346,24 @@ public static class TerrainSeamMesher
 
         Vector3 topA = edge.Start
             - (faceDirection * faceInset)
-            - (topNormalA * (surfaceInset * 0.16f));
+            - (topNormalA * (surfaceInset * 0.10f));
         Vector3 topB = edge.End
             - (faceDirection * faceInset)
-            - (topNormalB * (surfaceInset * 0.16f));
+            - (topNormalB * (surfaceInset * 0.10f));
 
         Vector3 midA = edge.Start
-            + (faceDirection * (faceInset * 0.12f))
-            - (midNormalA * (surfaceInset * 0.58f));
+            + (faceDirection * (faceInset * 0.04f))
+            - (midNormalA * (surfaceInset * 0.34f));
         Vector3 midB = edge.End
-            + (faceDirection * (faceInset * 0.12f))
-            - (midNormalB * (surfaceInset * 0.58f));
+            + (faceDirection * (faceInset * 0.04f))
+            - (midNormalB * (surfaceInset * 0.34f));
 
         Vector3 bottomA = edge.Start
-            - (faceDirection * (faceInset * 0.22f))
-            - (bottomNormalA * ((surfaceInset * 1.08f) + skirtDepth));
+            - (faceDirection * (faceInset * 0.12f))
+            - (bottomNormalA * ((surfaceInset * 0.72f) + skirtDepth));
         Vector3 bottomB = edge.End
-            - (faceDirection * (faceInset * 0.22f))
-            - (bottomNormalB * ((surfaceInset * 1.08f) + skirtDepth));
+            - (faceDirection * (faceInset * 0.12f))
+            - (bottomNormalB * ((surfaceInset * 0.72f) + skirtDepth));
 
         AddDoubleSidedQuad(
             vertices,
