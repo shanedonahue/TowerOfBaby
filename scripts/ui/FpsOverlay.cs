@@ -330,11 +330,14 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Retain held {snapshot.HysteresisRetainedBlockCount}  defer h/c {snapshot.LastReleaseDeferralsHysteresisCount}/{snapshot.LastReleaseDeferralsCoverageCount}");
             _detailBuilder.AppendLine(
+                $"Supersede active {snapshot.ActiveSupersededBlockTransitionCount}  wait r/v/c/h/f {snapshot.WaitingForMarkReleasableSupersededBlockCount}/{snapshot.WaitingForReplacementVisualsSupersededBlockCount}/{snapshot.WaitingForReplacementCollisionSupersededBlockCount}/{snapshot.WaitingForHideSupersededBlockCount}/{snapshot.WaitingForReleaseSupersededBlockCount}");
+            _detailBuilder.AppendLine(
                 $"Churn set/create/release {snapshot.BlockSetChangeRatePerSecond:0.0}/{snapshot.BlockCreateRatePerSecond:0.0}/{snapshot.BlockReleaseRatePerSecond:0.0} per s");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
             _detailBuilder.AppendLine($"Viewer {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
             _detailBuilder.AppendLine($"Lifecycle {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
             _detailBuilder.AppendLine($"LOD {TrimForOverlay(snapshot.TrackedCoverageStateSummary, 84)}");
+            _detailBuilder.AppendLine($"Supersede last {TrimForOverlay(snapshot.LastSupersededBlockTransitionSummary, 84)}");
             _detailBuilder.AppendLine($"Select {TrimForOverlay(snapshot.LastSelectedChunkSummary, 84)}");
             _detailBuilder.AppendLine($"Handoff {TrimForOverlay(snapshot.LastRefinementHandoffSummary, 84)}");
             _detailBuilder.AppendLine($"Latest {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
