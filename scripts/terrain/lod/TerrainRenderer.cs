@@ -149,15 +149,20 @@ public partial class TerrainRenderer : Node3D
     public void ApplyCollision(bool includeCollision)
     {
         EnsureNodes();
-        if (!includeCollision ||
-            _meshInstance.Mesh is not ArrayMesh mesh ||
-            mesh.GetSurfaceCount() == 0)
+        if (!includeCollision)
         {
             _collision.Shape = null;
             return;
         }
 
-        _collision.Shape = mesh.CreateTrimeshShape();
+        ArrayMesh collisionMesh = ResolveCollisionSourceMesh();
+        if (collisionMesh == null || collisionMesh.GetSurfaceCount() == 0)
+        {
+            _collision.Shape = null;
+            return;
+        }
+
+        _collision.Shape = collisionMesh.CreateTrimeshShape();
     }
 
     public void ClearVisuals()
@@ -208,6 +213,29 @@ public partial class TerrainRenderer : Node3D
 
     private void ApplyCachedVisuals(TerrainSurfaceColorizer surfaceColorizer, bool resetCollision)
     {
+        ArrayMesh mesh = BuildCachedVisualMesh(surfaceColorizer);
+        _meshInstance.Mesh = mesh;
+        _meshInstance.MaterialOverride = ResolveSurfaceMaterial();
+        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
+        ApplyCachedSeamVisuals();
+        if (resetCollision)
+        {
+            _collision.Shape = null;
+        }
+    }
+
+    private ArrayMesh ResolveCollisionSourceMesh()
+    {
+        if (_meshInstance.Mesh is ArrayMesh activeMesh && activeMesh.GetSurfaceCount() > 0)
+        {
+            return activeMesh;
+        }
+
+        return _vertices.Length > 0 ? BuildCachedCollisionMesh() : null;
+    }
+
+    private ArrayMesh BuildCachedVisualMesh(TerrainSurfaceColorizer surfaceColorizer)
+    {
         ArrayMesh mesh = new();
         GodotArray arrays = new();
         arrays.Resize((int)Mesh.ArrayType.Max);
@@ -221,14 +249,17 @@ public partial class TerrainRenderer : Node3D
         }
 
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-        _meshInstance.Mesh = mesh;
-        _meshInstance.MaterialOverride = ResolveSurfaceMaterial();
-        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
-        ApplyCachedSeamVisuals();
-        if (resetCollision)
-        {
-            _collision.Shape = null;
-        }
+        return mesh;
+    }
+
+    private ArrayMesh BuildCachedCollisionMesh()
+    {
+        ArrayMesh mesh = new();
+        GodotArray arrays = new();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = _vertices;
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        return mesh;
     }
 
     private void ApplyCachedSeamVisuals()

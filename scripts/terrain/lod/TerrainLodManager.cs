@@ -832,11 +832,13 @@ public partial class TerrainLodManager : Node3D
     {
         foreach (TerrainBlockData block in _blocks.Values)
         {
-            if (block.State != TerrainBlockState.Visible ||
-                !block.Desired ||
+            TerrainLodSuccessorCoverageStatus? coverage = block.State == TerrainBlockState.Releasable
+                ? EvaluateSuccessorCoverage(block.Id)
+                : null;
+            if (block.Renderer == null ||
+                !IsInstanceValid(block.Renderer) ||
                 block.CollisionPending ||
-                block.TriangleCount <= 0 ||
-                !ShouldIncludeCollision(block.Id) ||
+                !ShouldMaintainCollisionCoverage(block, coverage) ||
                 block.Renderer.HasCollision)
             {
                 continue;
@@ -854,24 +856,25 @@ public partial class TerrainLodManager : Node3D
                TryDequeueBlockDispatch(_collisionDispatcherQueue, _collisionDispatchTokens, out TerrainBlockId blockId))
         {
             if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
-                block.State != TerrainBlockState.Visible)
+                (block.State != TerrainBlockState.Visible && block.State != TerrainBlockState.Releasable))
             {
                 continue;
             }
 
-            if (!block.Desired)
-            {
-                continue;
-            }
-
-            bool includeCollision = ShouldIncludeCollision(block.Id);
+            TerrainLodSuccessorCoverageStatus? coverage = block.State == TerrainBlockState.Releasable
+                ? EvaluateSuccessorCoverage(block.Id)
+                : null;
+            bool includeCollision = ShouldMaintainCollisionCoverage(block, coverage);
             ulong collisionStart = Time.GetTicksUsec();
-            block.Renderer.ApplyCollision(includeCollision && block.TriangleCount > 0);
+            block.Renderer.ApplyCollision(includeCollision);
             _lastCollisionMs += (Time.GetTicksUsec() - collisionStart) / 1000.0;
             _lastCollisionCount++;
             block.MarkCollisionReady();
-            RecordReplacementCollisionReady(block.Id);
-            TryHideSupersededCoverageAround(block.Id);
+            if (block.State == TerrainBlockState.Visible && block.Desired)
+            {
+                RecordReplacementCollisionReady(block.Id);
+                TryHideSupersededCoverageAround(block.Id);
+            }
         }
     }
 
@@ -912,14 +915,16 @@ public partial class TerrainLodManager : Node3D
             }
 
             TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(block.Id);
-            if (!coverage.FullCoverageReady)
+            bool visualCoverageReady = HasReadyVisualSuccessorCoverage(block.Id, coverage);
+            bool physicsCoverageReady = HasReadyPhysicsSuccessorCoverage(block.Id, coverage);
+            if (!visualCoverageReady || !physicsCoverageReady)
             {
                 _lastReleaseCoverageDeferralCount++;
                 _releaseCoverageDeferralCount++;
                 ObserveSupersededBlockTransition(
                     block.Id,
                     block,
-                    coverage.VisualCoverageReady ? coverage.PhysicsDeferralReason : coverage.VisualDeferralReason,
+                    visualCoverageReady ? coverage.PhysicsDeferralReason : coverage.VisualDeferralReason,
                     coverage);
                 EnqueueReleaseDispatch(blockId);
                 break;
@@ -1267,9 +1272,20 @@ public partial class TerrainLodManager : Node3D
         return new TerrainBlockId(currentCenterParent.Lod, currentCenterParent.Index + step);
     }
 
-    private bool HasReadySuccessorCoverage(TerrainBlockId outgoingBlockId)
+    private bool HasReadyVisualSuccessorCoverage(
+        TerrainBlockId outgoingBlockId,
+        TerrainLodSuccessorCoverageStatus? coverageOverride = null)
     {
-        return EvaluateSuccessorCoverage(outgoingBlockId).FullCoverageReady;
+        TerrainLodSuccessorCoverageStatus coverage = coverageOverride ?? EvaluateSuccessorCoverage(outgoingBlockId);
+        return coverage.VisualCoverageReady;
+    }
+
+    private bool HasReadyPhysicsSuccessorCoverage(
+        TerrainBlockId outgoingBlockId,
+        TerrainLodSuccessorCoverageStatus? coverageOverride = null)
+    {
+        TerrainLodSuccessorCoverageStatus coverage = coverageOverride ?? EvaluateSuccessorCoverage(outgoingBlockId);
+        return coverage.PhysicsCoverageReady;
     }
 
     private List<TerrainBlockId> GetDesiredSuccessors(TerrainBlockId outgoingBlockId)
@@ -1614,6 +1630,23 @@ public partial class TerrainLodManager : Node3D
                Mathf.Abs(delta.Y) <= verticalSafetyRadius;
     }
 
+    private bool ShouldMaintainCollisionCoverage(
+        TerrainBlockData block,
+        TerrainLodSuccessorCoverageStatus? coverageOverride = null)
+    {
+        if (block.TriangleCount <= 0 || !ShouldIncludeCollision(block.Id))
+        {
+            return false;
+        }
+
+        return block.State switch
+        {
+            TerrainBlockState.Visible => block.Desired,
+            TerrainBlockState.Releasable => !HasReadyPhysicsSuccessorCoverage(block.Id, coverageOverride),
+            _ => false
+        };
+    }
+
     private void RemoveBlockFromDispatcherQueues(TerrainBlockId blockId)
     {
         InvalidateBlockDispatch(_createDispatchTokens, blockId);
@@ -1871,22 +1904,22 @@ public partial class TerrainLodManager : Node3D
 
         if (block.Renderer.HasVisuals)
         {
-            if (block.IsHeldForRelease(_currentTimeSeconds))
-            {
-                return "hysteresis_hold";
-            }
-
             if (!coverage.VisualCoverageReady)
             {
                 return coverage.VisualDeferralReason;
             }
 
-            if (!coverage.PhysicsCoverageReady)
-            {
-                return coverage.PhysicsDeferralReason;
-            }
+            return "ready_for_hide";
+        }
 
-            return "ready_for_hide_or_release";
+        if (!coverage.PhysicsCoverageReady)
+        {
+            return $"visuals_hidden_{coverage.PhysicsDeferralReason}";
+        }
+
+        if (block.IsHeldForRelease(_currentTimeSeconds))
+        {
+            return "visuals_hidden_hysteresis_hold";
         }
 
         return "visuals_hidden_waiting_release";
@@ -2023,41 +2056,39 @@ public partial class TerrainLodManager : Node3D
     {
         int activeCount = 0;
         int waitingForMarkReleasableCount = 0;
-        int waitingForReplacementVisualsCount = 0;
-        int waitingForReplacementCollisionCount = 0;
+        int waitingForVisualCoverageCount = 0;
         int waitingForHideCount = 0;
+        int waitingForPhysicsCoverageCount = 0;
         int waitingForReleaseCount = 0;
         foreach (TerrainLodSupersededBlockTransition transition in _supersededBlockTransitions.Values)
         {
             activeCount++;
-            if (transition.MarkReleasableAtSeconds == null)
+            switch (ClassifySupersededTransitionWaitState(transition))
             {
-                waitingForMarkReleasableCount++;
-            }
-            else if (transition.ReplacementVisualsReadyAtSeconds == null)
-            {
-                waitingForReplacementVisualsCount++;
-            }
-            else if (transition.ReplacementCollisionReadyAtSeconds == null)
-            {
-                waitingForReplacementCollisionCount++;
-            }
-            else if (transition.HiddenAtSeconds == null)
-            {
-                waitingForHideCount++;
-            }
-            else if (transition.ReleasedAtSeconds == null)
-            {
-                waitingForReleaseCount++;
+                case SupersededTransitionWaitState.MarkReleasable:
+                    waitingForMarkReleasableCount++;
+                    break;
+                case SupersededTransitionWaitState.VisualCoverage:
+                    waitingForVisualCoverageCount++;
+                    break;
+                case SupersededTransitionWaitState.Hide:
+                    waitingForHideCount++;
+                    break;
+                case SupersededTransitionWaitState.PhysicsCoverage:
+                    waitingForPhysicsCoverageCount++;
+                    break;
+                case SupersededTransitionWaitState.Release:
+                    waitingForReleaseCount++;
+                    break;
             }
         }
 
         return new SupersededTransitionProfileSummary(
             activeCount,
             waitingForMarkReleasableCount,
-            waitingForReplacementVisualsCount,
-            waitingForReplacementCollisionCount,
+            waitingForVisualCoverageCount,
             waitingForHideCount,
+            waitingForPhysicsCoverageCount,
             waitingForReleaseCount,
             _lastSupersededTransitionSummary);
     }
@@ -2066,7 +2097,7 @@ public partial class TerrainLodManager : Node3D
     {
         SupersededTransitionProfileSummary summary = BuildSupersededTransitionProfileSummary();
         return
-            $"active {summary.ActiveCount}  wait r/v/c/h/f {summary.WaitingForMarkReleasableCount}/{summary.WaitingForReplacementVisualsCount}/{summary.WaitingForReplacementCollisionCount}/{summary.WaitingForHideCount}/{summary.WaitingForReleaseCount}  " +
+            $"active {summary.ActiveCount}  wait r/v/h/p/f {summary.WaitingForMarkReleasableCount}/{summary.WaitingForVisualCoverageCount}/{summary.WaitingForHideCount}/{summary.WaitingForPhysicsCoverageCount}/{summary.WaitingForReleaseCount}  " +
             $"last {summary.LastSummary}";
     }
 
@@ -2074,8 +2105,36 @@ public partial class TerrainLodManager : Node3D
     {
         double ageMs = ElapsedMilliseconds(transition.RemovedAtSeconds, _currentTimeSeconds);
         return
-            $"{transition.OutgoingBlockId} age {ageMs:0.0} ms  {transition.LastReason}  succ {transition.LastSuccessorIdsSummary}  " +
+            $"{transition.OutgoingBlockId} age {ageMs:0.0} ms  wait {transition.LastReason}  out_vis {(transition.LastOutgoingHasVisuals ? "y" : "n")}  succ {transition.LastSuccessorIdsSummary}  " +
             $"lods {transition.LastSuccessorLodsSummary}  ready v/p {(transition.LastVisualCoverageReady ? "y" : "n")}/{(transition.LastPhysicsCoverageReady ? "y" : "n")}";
+    }
+
+    private SupersededTransitionWaitState ClassifySupersededTransitionWaitState(TerrainLodSupersededBlockTransition transition)
+    {
+        if (!_blocks.TryGetValue(transition.OutgoingBlockId, out TerrainBlockData block) ||
+            transition.MarkReleasableAtSeconds == null ||
+            block.State != TerrainBlockState.Releasable)
+        {
+            return SupersededTransitionWaitState.MarkReleasable;
+        }
+
+        TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(block.Id);
+        bool outgoingHasVisuals = block.Renderer != null &&
+                                  IsInstanceValid(block.Renderer) &&
+                                  block.Renderer.HasVisuals;
+        if (outgoingHasVisuals)
+        {
+            return HasReadyVisualSuccessorCoverage(block.Id, coverage)
+                ? SupersededTransitionWaitState.Hide
+                : SupersededTransitionWaitState.VisualCoverage;
+        }
+
+        if (!HasReadyPhysicsSuccessorCoverage(block.Id, coverage))
+        {
+            return SupersededTransitionWaitState.PhysicsCoverage;
+        }
+
+        return SupersededTransitionWaitState.Release;
     }
 
     private void WriteSupersededBlockTransitionLog(
@@ -2303,8 +2362,8 @@ public partial class TerrainLodManager : Node3D
             LastReleaseDeferralsCoverageCount = _lastReleaseCoverageDeferralCount,
             ActiveSupersededBlockTransitionCount = supersededSummary.ActiveCount,
             WaitingForMarkReleasableSupersededBlockCount = supersededSummary.WaitingForMarkReleasableCount,
-            WaitingForReplacementVisualsSupersededBlockCount = supersededSummary.WaitingForReplacementVisualsCount,
-            WaitingForReplacementCollisionSupersededBlockCount = supersededSummary.WaitingForReplacementCollisionCount,
+            WaitingForVisualCoverageSupersededBlockCount = supersededSummary.WaitingForVisualCoverageCount,
+            WaitingForPhysicsCoverageSupersededBlockCount = supersededSummary.WaitingForPhysicsCoverageCount,
             WaitingForHideSupersededBlockCount = supersededSummary.WaitingForHideCount,
             WaitingForReleaseSupersededBlockCount = supersededSummary.WaitingForReleaseCount,
             LastSupersededBlockTransitionSummary = supersededSummary.LastSummary,
@@ -2352,7 +2411,7 @@ public partial class TerrainLodManager : Node3D
             $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
             $"hold {_hysteresisRetainedBlockCount}  blocks {BuildTierCountSummary(_currentLodBlockCounts, 'l', FinestTerrainLod)}  " +
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
-            $"sup a/r/v/c/h/f {supersededSummary.ActiveCount}/{supersededSummary.WaitingForMarkReleasableCount}/{supersededSummary.WaitingForReplacementVisualsCount}/{supersededSummary.WaitingForReplacementCollisionCount}/{supersededSummary.WaitingForHideCount}/{supersededSummary.WaitingForReleaseCount}  " +
+            $"sup a/r/v/h/p/f {supersededSummary.ActiveCount}/{supersededSummary.WaitingForMarkReleasableCount}/{supersededSummary.WaitingForVisualCoverageCount}/{supersededSummary.WaitingForHideCount}/{supersededSummary.WaitingForPhysicsCoverageCount}/{supersededSummary.WaitingForReleaseCount}  " +
             $"dispatch c{_createDispatchTokens.Count}  fq/r/d {_fieldBuildDispatchTokens.Count}/{Volatile.Read(ref _activeFieldWorkerJobs)}/{_completedFieldBuildResults.Count}  " +
             $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{_completedMeshBuildResults.Count}  " +
             $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  " +
@@ -2535,12 +2594,12 @@ public partial class TerrainLodManager : Node3D
             return;
         }
 
-        if (!coverage.FullCoverageReady)
+        if (!HasReadyVisualSuccessorCoverage(blockId, coverage))
         {
             ObserveSupersededBlockTransition(
                 blockId,
                 block,
-                coverage.VisualCoverageReady ? coverage.PhysicsDeferralReason : coverage.VisualDeferralReason,
+                coverage.VisualDeferralReason,
                 coverage);
             return;
         }
@@ -2553,11 +2612,20 @@ public partial class TerrainLodManager : Node3D
     private readonly record struct SupersededTransitionProfileSummary(
         int ActiveCount,
         int WaitingForMarkReleasableCount,
-        int WaitingForReplacementVisualsCount,
-        int WaitingForReplacementCollisionCount,
+        int WaitingForVisualCoverageCount,
         int WaitingForHideCount,
+        int WaitingForPhysicsCoverageCount,
         int WaitingForReleaseCount,
         string LastSummary);
+
+    private enum SupersededTransitionWaitState
+    {
+        MarkReleasable = 0,
+        VisualCoverage = 1,
+        Hide = 2,
+        PhysicsCoverage = 3,
+        Release = 4
+    }
 
     private readonly record struct CompletedFieldBuildResult(
         TerrainBlockId BlockId,

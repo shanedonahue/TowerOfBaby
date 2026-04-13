@@ -330,7 +330,7 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Retain held {snapshot.HysteresisRetainedBlockCount}  defer h/c {snapshot.LastReleaseDeferralsHysteresisCount}/{snapshot.LastReleaseDeferralsCoverageCount}");
             _detailBuilder.AppendLine(
-                $"Supersede active {snapshot.ActiveSupersededBlockTransitionCount}  wait r/v/c/h/f {snapshot.WaitingForMarkReleasableSupersededBlockCount}/{snapshot.WaitingForReplacementVisualsSupersededBlockCount}/{snapshot.WaitingForReplacementCollisionSupersededBlockCount}/{snapshot.WaitingForHideSupersededBlockCount}/{snapshot.WaitingForReleaseSupersededBlockCount}");
+                $"Supersede active {snapshot.ActiveSupersededBlockTransitionCount}  wait r/v/h/p/f {snapshot.WaitingForMarkReleasableSupersededBlockCount}/{snapshot.WaitingForVisualCoverageSupersededBlockCount}/{snapshot.WaitingForHideSupersededBlockCount}/{snapshot.WaitingForPhysicsCoverageSupersededBlockCount}/{snapshot.WaitingForReleaseSupersededBlockCount}");
             _detailBuilder.AppendLine(
                 $"Churn set/create/release {snapshot.BlockSetChangeRatePerSecond:0.0}/{snapshot.BlockCreateRatePerSecond:0.0}/{snapshot.BlockReleaseRatePerSecond:0.0} per s");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
