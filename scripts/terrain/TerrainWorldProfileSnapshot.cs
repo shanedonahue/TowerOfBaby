@@ -184,6 +184,12 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastReleaseDeferralsHysteresisCount { get; init; }
     public long ReleaseDeferralsCoverageCount { get; init; }
     public int LastReleaseDeferralsCoverageCount { get; init; }
+    public long ReleaseRequeueCount { get; init; }
+    public int LastReleaseRequeueCount { get; init; }
+    public long ReleaseHeadOfLineAvoidedCount { get; init; }
+    public int LastReleaseHeadOfLineAvoidedCount { get; init; }
+    public double AverageReleaseDeferredAgeMs { get; init; }
+    public double LastAverageReleaseDeferredAgeMs { get; init; }
     public int ActiveSupersededBlockTransitionCount { get; init; }
     public int WaitingForMarkReleasableSupersededBlockCount { get; init; }
     public int WaitingForVisualCoverageSupersededBlockCount { get; init; }

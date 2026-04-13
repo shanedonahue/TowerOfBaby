@@ -118,17 +118,25 @@ public partial class TerrainLodManager : Node3D
     private int _lastReleaseCount;
     private int _lastReleaseHysteresisDeferralCount;
     private int _lastReleaseCoverageDeferralCount;
+    private int _lastReleaseRequeueCount;
+    private int _lastReleaseHeadOfLineAvoidedCount;
+    private int _lastReleaseDeferredAgeSampleCount;
     private double _lastFieldBuildMs;
     private double _lastMeshBuildMs;
     private double _lastCommitMs;
     private double _lastCollisionMs;
     private double _lastReleaseMs;
+    private double _lastReleaseDeferredAgeMsTotal;
     private double _blockCreateRatePerSecond;
     private double _blockReleaseRatePerSecond;
     private double _blockSetChangeRatePerSecond;
     private long _refinementHandoffCount;
     private long _releaseHysteresisDeferralCount;
     private long _releaseCoverageDeferralCount;
+    private long _releaseRequeueCount;
+    private long _releaseHeadOfLineAvoidedCount;
+    private long _releaseDeferredAgeSampleCount;
+    private double _releaseDeferredAgeMsTotal;
     private long _blockInstanceVersionSequence;
     private int _activeFieldWorkerJobs;
     private int _activeMeshWorkerJobs;
@@ -581,6 +589,10 @@ public partial class TerrainLodManager : Node3D
     {
         _lastReleaseHysteresisDeferralCount = 0;
         _lastReleaseCoverageDeferralCount = 0;
+        _lastReleaseRequeueCount = 0;
+        _lastReleaseHeadOfLineAvoidedCount = 0;
+        _lastReleaseDeferredAgeSampleCount = 0;
+        _lastReleaseDeferredAgeMsTotal = 0.0;
         ProcessCreateDispatch();
         StartFieldBuildWorkers();
         ApplyCompletedFieldBuildResults();
@@ -881,9 +893,29 @@ public partial class TerrainLodManager : Node3D
     private void ProcessReleaseDispatch()
     {
         int releaseBudget = Mathf.Clamp(ReleasesPerFrame, 1, MaxReleasesPerFrame);
+        int remainingAttempts = _releaseDispatchTokens.Count;
+        if (_lastReleaseCount >= releaseBudget || remainingAttempts <= 0)
+        {
+            return;
+        }
+
+        // Hold deferred blocks until the end of this pass so a single blocked head entry cannot
+        // immediately resurface and consume the bounded scan budget again.
+        List<TerrainBlockId> deferredRequeues = new(remainingAttempts);
+        int bypassedDeferredBlockCount = 0;
+
         while (_lastReleaseCount < releaseBudget &&
+               remainingAttempts > 0 &&
                TryDequeueBlockDispatch(_releaseDispatcherQueue, _releaseDispatchTokens, out TerrainBlockId blockId))
         {
+            remainingAttempts--;
+            if (bypassedDeferredBlockCount > 0)
+            {
+                _lastReleaseHeadOfLineAvoidedCount += bypassedDeferredBlockCount;
+                _releaseHeadOfLineAvoidedCount += bypassedDeferredBlockCount;
+                bypassedDeferredBlockCount = 0;
+            }
+
             if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
             {
                 continue;
@@ -910,8 +942,9 @@ public partial class TerrainLodManager : Node3D
                 _lastReleaseHysteresisDeferralCount++;
                 _releaseHysteresisDeferralCount++;
                 ObserveSupersededBlockTransition(block.Id, block, "release_deferred_hysteresis");
-                EnqueueReleaseDispatch(blockId);
-                break;
+                QueueDeferredRelease(blockId, deferredRequeues);
+                bypassedDeferredBlockCount++;
+                continue;
             }
 
             TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(block.Id);
@@ -926,14 +959,20 @@ public partial class TerrainLodManager : Node3D
                     block,
                     visualCoverageReady ? coverage.PhysicsDeferralReason : coverage.VisualDeferralReason,
                     coverage);
-                EnqueueReleaseDispatch(blockId);
-                break;
+                QueueDeferredRelease(blockId, deferredRequeues);
+                bypassedDeferredBlockCount++;
+                continue;
             }
 
             ObserveSupersededBlockTransition(block.Id, block, "release_ready", coverage);
             ulong releaseStart = Time.GetTicksUsec();
             ReleaseBlock(block.Id, "fell_outside_desired_set");
             _lastReleaseMs += (Time.GetTicksUsec() - releaseStart) / 1000.0;
+        }
+
+        foreach (TerrainBlockId deferredBlockId in deferredRequeues)
+        {
+            EnqueueReleaseDispatch(deferredBlockId);
         }
     }
 
@@ -2251,6 +2290,34 @@ public partial class TerrainLodManager : Node3D
         return Math.Max(0.0, (finishedAtSeconds - startedAtSeconds) * 1000.0);
     }
 
+    private void QueueDeferredRelease(TerrainBlockId blockId, List<TerrainBlockId> deferredRequeues)
+    {
+        _lastReleaseRequeueCount++;
+        _releaseRequeueCount++;
+
+        double deferredAgeMs = GetDeferredReleaseAgeMs(blockId);
+        _lastReleaseDeferredAgeSampleCount++;
+        _lastReleaseDeferredAgeMsTotal += deferredAgeMs;
+        _releaseDeferredAgeSampleCount++;
+        _releaseDeferredAgeMsTotal += deferredAgeMs;
+
+        deferredRequeues.Add(blockId);
+    }
+
+    private double GetDeferredReleaseAgeMs(TerrainBlockId blockId)
+    {
+        return _supersededBlockTransitions.TryGetValue(blockId, out TerrainLodSupersededBlockTransition transition)
+            ? ElapsedMilliseconds(transition.RemovedAtSeconds, _currentTimeSeconds)
+            : 0.0;
+    }
+
+    private double ComputeAverageDeferredReleaseAgeMs(long sampleCount, double totalAgeMs)
+    {
+        return sampleCount > 0
+            ? totalAgeMs / sampleCount
+            : 0.0;
+    }
+
     private static string FormatTimestamp(double startedAtSeconds, double? finishedAtSeconds)
     {
         return finishedAtSeconds.HasValue
@@ -2360,6 +2427,16 @@ public partial class TerrainLodManager : Node3D
             LastReleaseDeferralsHysteresisCount = _lastReleaseHysteresisDeferralCount,
             ReleaseDeferralsCoverageCount = _releaseCoverageDeferralCount,
             LastReleaseDeferralsCoverageCount = _lastReleaseCoverageDeferralCount,
+            ReleaseRequeueCount = _releaseRequeueCount,
+            LastReleaseRequeueCount = _lastReleaseRequeueCount,
+            ReleaseHeadOfLineAvoidedCount = _releaseHeadOfLineAvoidedCount,
+            LastReleaseHeadOfLineAvoidedCount = _lastReleaseHeadOfLineAvoidedCount,
+            AverageReleaseDeferredAgeMs = ComputeAverageDeferredReleaseAgeMs(
+                _releaseDeferredAgeSampleCount,
+                _releaseDeferredAgeMsTotal),
+            LastAverageReleaseDeferredAgeMs = ComputeAverageDeferredReleaseAgeMs(
+                _lastReleaseDeferredAgeSampleCount,
+                _lastReleaseDeferredAgeMsTotal),
             ActiveSupersededBlockTransitionCount = supersededSummary.ActiveCount,
             WaitingForMarkReleasableSupersededBlockCount = supersededSummary.WaitingForMarkReleasableCount,
             WaitingForVisualCoverageSupersededBlockCount = supersededSummary.WaitingForVisualCoverageCount,

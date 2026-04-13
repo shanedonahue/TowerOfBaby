@@ -579,6 +579,9 @@ public partial class PerformanceRunLogger : Node
                     builder.AppendLine($"LodRefinementHandoffCount: {latestSnapshot.RefinementHandoffCount}");
                     builder.AppendLine($"LodReleaseDeferralsDueToHysteresis: {latestSnapshot.ReleaseDeferralsHysteresisCount}");
                     builder.AppendLine($"LodReleaseDeferralsDueToCoverage: {latestSnapshot.ReleaseDeferralsCoverageCount}");
+                    builder.AppendLine($"LodReleaseRequeues: {latestSnapshot.ReleaseRequeueCount}");
+                    builder.AppendLine($"LodReleaseHeadOfLineAvoided: {latestSnapshot.ReleaseHeadOfLineAvoidedCount}");
+                    builder.AppendLine($"LodAverageDeferredReleaseAgeMs: {latestSnapshot.AverageReleaseDeferredAgeMs:0.00}");
                     builder.AppendLine($"LodLastRefinementHandoff: {latestSnapshot.LastRefinementHandoffSummary}");
                     builder.AppendLine($"LodDesiredSetSummary: {latestSnapshot.LastSelectedChunkSummary}");
                 }
@@ -592,7 +595,7 @@ public partial class PerformanceRunLogger : Node
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,high_priority_enqueue_budget_hits,deferred_high_priority_enqueues,smoothed_high_priority_enqueues,prevented_coverage_gap_releases,replacement_coverage_waits,chunks_held_for_coverage_safety,normal_debug_mismatches,tangent_generation_count,vertex_tint_enabled_frames,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,high_priority_enqueue_budget_hits,deferred_high_priority_enqueues,smoothed_high_priority_enqueues,prevented_coverage_gap_releases,replacement_coverage_waits,chunks_held_for_coverage_safety,normal_debug_mismatches,tangent_generation_count,vertex_tint_enabled_frames,release_requeues,release_head_of_line_avoided,avg_release_deferred_age_ms,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
@@ -600,7 +603,7 @@ public partial class PerformanceRunLogger : Node
             if (snapshot == null)
             {
                 builder.AppendLine(
-                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
+                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
                     $",{LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)}");
                 continue;
             }
@@ -679,6 +682,9 @@ public partial class PerformanceRunLogger : Node
                 sample.NormalDebugMismatches.ToString(CultureInfo.InvariantCulture),
                 sample.TangentGenerations.ToString(CultureInfo.InvariantCulture),
                 sample.VertexTintEnabledFrames.ToString(CultureInfo.InvariantCulture),
+                snapshot.LastReleaseRequeueCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.LastReleaseHeadOfLineAvoidedCount.ToString(CultureInfo.InvariantCulture),
+                snapshot.LastAverageReleaseDeferredAgeMs.ToString("0.00", CultureInfo.InvariantCulture),
                 snapshot.MeshBackendName,
                 sample.SearchMs.ToString("0.00", CultureInfo.InvariantCulture),
                 sample.PriorityEvalMs.ToString("0.00", CultureInfo.InvariantCulture),

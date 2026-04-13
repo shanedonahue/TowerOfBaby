@@ -328,7 +328,7 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Bubble parents {snapshot.NearPlayerBubbleParentCount}  refine blocks {snapshot.RefinedSameLodBlockCount}  handoffs {snapshot.RefinementHandoffCount}");
             _detailBuilder.AppendLine(
-                $"Retain held {snapshot.HysteresisRetainedBlockCount}  defer h/c {snapshot.LastReleaseDeferralsHysteresisCount}/{snapshot.LastReleaseDeferralsCoverageCount}");
+                $"Retain held {snapshot.HysteresisRetainedBlockCount}  defer h/c {snapshot.LastReleaseDeferralsHysteresisCount}/{snapshot.LastReleaseDeferralsCoverageCount}  rq/hol {snapshot.LastReleaseRequeueCount}/{snapshot.LastReleaseHeadOfLineAvoidedCount}  age {snapshot.LastAverageReleaseDeferredAgeMs:0.0}/{snapshot.AverageReleaseDeferredAgeMs:0.0} ms");
             _detailBuilder.AppendLine(
                 $"Supersede active {snapshot.ActiveSupersededBlockTransitionCount}  wait r/v/h/p/f {snapshot.WaitingForMarkReleasableSupersededBlockCount}/{snapshot.WaitingForVisualCoverageSupersededBlockCount}/{snapshot.WaitingForHideSupersededBlockCount}/{snapshot.WaitingForPhysicsCoverageSupersededBlockCount}/{snapshot.WaitingForReleaseSupersededBlockCount}");
             _detailBuilder.AppendLine(
