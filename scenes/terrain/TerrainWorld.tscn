@@ -8,7 +8,7 @@
 [node name="TerrainWorld" type="Node3D"]
 script = ExtResource("1_world")
 PointsPerAxis = 18
-VoxelSize = 1.2
+MinCellWorldSize = 0.6
 BaseY = -12.0
 Seed = 12345
 TerrainHeight = 10.0
@@ -18,6 +18,9 @@ CaveThreshold = 0.63
 
 [node name="TerrainLodManager" type="Node3D" parent="."]
 script = ExtResource("2_lod")
+TierCount = 4
+TierSplitRadiiXZ = PackedInt32Array(0, 4, 5)
+CoarsestRadiusXZ = 3
 
 [node name="TerrainWaterSurface" type="Node3D" parent="."]
 script = ExtResource("3_water")

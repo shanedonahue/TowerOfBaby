@@ -13,7 +13,7 @@ public partial class TerrainWorld : Node3D
     // rest of the scene can keep the same entry point while visibility authority moves to TerrainLodManager.
     [Export] public NodePath TrackedCharacterPath = new();
     [Export] public int PointsPerAxis = 18;
-    [Export] public float VoxelSize = 1.2f;
+    [Export] public float MinCellWorldSize = 0.6f;
     [Export] public float BaseY = -12.0f;
     [Export] public int Seed = 12345;
     [Export] public float TerrainHeight = 10.0f;
@@ -40,6 +40,7 @@ public partial class TerrainWorld : Node3D
     private TerrainLodManager _lodManager = null!;
     private TerrainWorldProfileSnapshot _fallbackProfileSnapshot = null!;
 
+    public float VoxelSize => MinCellWorldSize;
     public bool InitialLoadComplete => _lodManager?.InitialLoadComplete ?? true;
 
     public override void _Ready()

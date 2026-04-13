@@ -143,7 +143,8 @@ public partial class TerrainRenderer : Node3D
             DetailCellCount: 0);
     }
 
-    public bool HasVisuals => _vertices.Length > 0;
+    public bool HasVisuals => _meshInstance?.Mesh != null;
+    public bool HasCachedVisualData => _vertices.Length > 0;
 
     public void ApplyCollision(bool includeCollision)
     {
@@ -173,20 +174,37 @@ public partial class TerrainRenderer : Node3D
         _seamNormals = System.Array.Empty<Vector3>();
         _seamUvs = System.Array.Empty<Vector2>();
         _seamColors = System.Array.Empty<Color>();
+        HideVisuals();
+        _collision.Shape = null;
+    }
+
+    public bool HasCollision => _collision?.Shape != null;
+
+    public void HideVisuals()
+    {
+        EnsureNodes();
         _meshInstance.Mesh = null;
+        _meshInstance.MaterialOverride = null;
+        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
         if (_seamMeshInstance != null)
         {
             _seamMeshInstance.Mesh = null;
             _seamMeshInstance.MaterialOverride = null;
             _seamMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
         }
-
-        _meshInstance.MaterialOverride = null;
-        _meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
-        _collision.Shape = null;
     }
 
-    public bool HasCollision => _collision?.Shape != null;
+    public void RestoreCachedVisuals(TerrainVisualDebugMode debugView, TerrainSurfaceColorizer surfaceColorizer)
+    {
+        EnsureNodes();
+        _debugView = debugView;
+        if (_vertices.Length == 0)
+        {
+            return;
+        }
+
+        ApplyCachedVisuals(surfaceColorizer, resetCollision: false);
+    }
 
     private void ApplyCachedVisuals(TerrainSurfaceColorizer surfaceColorizer, bool resetCollision)
     {
