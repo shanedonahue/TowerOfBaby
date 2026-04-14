@@ -8,12 +8,23 @@ public partial class TerrainRenderer : Node3D
 {
     private const string TerrainSurfaceGroup = "terrain_surface";
     private const string TerrainWireframeShaderPath = "res://shaders/terrain/TerrainWireframe.gdshader";
+    private static readonly Color[] WireframeLodColors =
+    {
+        new(0.12f, 0.90f, 1.00f, 1.0f),
+        new(0.40f, 1.00f, 0.36f, 1.0f),
+        new(1.00f, 0.80f, 0.26f, 1.0f),
+        new(1.00f, 0.42f, 0.22f, 1.0f),
+        new(0.98f, 0.52f, 0.70f, 1.0f),
+        new(0.74f, 0.66f, 0.98f, 1.0f)
+    };
 
     private static readonly StandardMaterial3D SharedLitVertexColorMaterial = CreateLitVertexColorMaterial();
-    private static readonly StandardMaterial3D SharedLitWireframeMaterial = CreateLitVertexColorMaterial();
     private static readonly StandardMaterial3D SharedUnshadedVertexColorMaterial = CreateUnshadedVertexColorMaterial();
+    private static readonly System.Collections.Generic.Dictionary<int, StandardMaterial3D> WireframeMaterialsByLod = new();
     private static bool _wireframeMaterialInitialized;
     private static bool _warnedMissingWireframeShader;
+    private static Shader _wireframeShader = null!;
+    private static float _sharedSurfaceRoughness = 1.0f;
 
     private MeshInstance3D _meshInstance = null!;
     private MeshInstance3D _seamMeshInstance = null!;
@@ -42,8 +53,12 @@ public partial class TerrainRenderer : Node3D
     public static void ConfigureSharedSurfaceMaterial(float roughness)
     {
         float clampedRoughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
+        _sharedSurfaceRoughness = clampedRoughness;
         SharedLitVertexColorMaterial.Roughness = clampedRoughness;
-        SharedLitWireframeMaterial.Roughness = clampedRoughness;
+        foreach (StandardMaterial3D wireframeMaterial in WireframeMaterialsByLod.Values)
+        {
+            wireframeMaterial.Roughness = clampedRoughness;
+        }
     }
 
     public override void _Ready()
@@ -322,8 +337,7 @@ public partial class TerrainRenderer : Node3D
     {
         if (_debugView == TerrainVisualDebugMode.Wireframe)
         {
-            EnsureWireframeMaterial();
-            return SharedLitWireframeMaterial;
+            return ResolveWireframeMaterial(BlockId.Lod);
         }
 
         return _debugView.UsesDiagnosticVertexColors()
@@ -360,6 +374,30 @@ public partial class TerrainRenderer : Node3D
         };
     }
 
+    private static StandardMaterial3D ResolveWireframeMaterial(int lod)
+    {
+        if (WireframeMaterialsByLod.TryGetValue(lod, out StandardMaterial3D material))
+        {
+            return material;
+        }
+
+        material = CreateLitVertexColorMaterial();
+        material.Roughness = _sharedSurfaceRoughness;
+        EnsureWireframeMaterial();
+        if (_wireframeShader != null)
+        {
+            ShaderMaterial wireframePass = new()
+            {
+                Shader = _wireframeShader
+            };
+            wireframePass.SetShaderParameter("line_color", GetWireframeLodColor(lod));
+            material.NextPass = wireframePass;
+        }
+
+        WireframeMaterialsByLod[lod] = material;
+        return material;
+    }
+
     private static void EnsureWireframeMaterial()
     {
         if (_wireframeMaterialInitialized)
@@ -368,22 +406,20 @@ public partial class TerrainRenderer : Node3D
         }
 
         _wireframeMaterialInitialized = true;
-        Shader wireframeShader = ResourceLoader.Load<Shader>(TerrainWireframeShaderPath);
-        if (wireframeShader == null)
+        _wireframeShader = ResourceLoader.Load<Shader>(TerrainWireframeShaderPath);
+        if (_wireframeShader == null)
         {
             if (!_warnedMissingWireframeShader)
             {
                 GD.PushWarning($"Terrain wireframe shader missing at {TerrainWireframeShaderPath}; falling back to lit terrain.");
                 _warnedMissingWireframeShader = true;
             }
-
-            return;
         }
+    }
 
-        SharedLitWireframeMaterial.NextPass = new ShaderMaterial
-        {
-            Shader = wireframeShader
-        };
+    private static Color GetWireframeLodColor(int lod)
+    {
+        return WireframeLodColors[Mathf.PosMod(lod, WireframeLodColors.Length)];
     }
 
     private void EnsureNodes()

@@ -39,6 +39,7 @@ public partial class TerrainLodManager : Node3D
 
     [ExportGroup("LOD Policy")]
     [Export(PropertyHint.Range, "3,6,1")] public int TierCount = 4;
+    [Export(PropertyHint.Range, "-1,8,1")] public int Lod0NearFieldRadiusXZ = -1;
     [Export] public int[] TierSplitRadiiXZ = { 0, 4, 5 };
     [Export(PropertyHint.Range, "1,12,1")] public int CoarsestRadiusXZ = 3;
     [Export(PropertyHint.Range, "0,2,1")] public int VerticalRadius;
@@ -64,6 +65,8 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
     private readonly HashSet<TerrainBlockId> _desiredBlocks = new();
     private readonly Dictionary<int, HashSet<TerrainBlockId>> _activeSplitParentsByLod = new();
+    private readonly Dictionary<int, TerrainBlockId> _currentStableCentersByLod = new();
+    private readonly Dictionary<int, TerrainBlockId> _targetStableCentersByLod = new();
     private readonly HashSet<TerrainBlockId> _startupBlocks = new();
     private readonly HashSet<TerrainBlockId> _startupSatisfiedBlocks = new();
     private readonly StringBuilder _debugBuilder = new();
@@ -99,6 +102,7 @@ public partial class TerrainLodManager : Node3D
     private Vector3 _lastViewerPosition;
     private double _currentTimeSeconds;
     private string _lastSelectionSummary = "waiting_for_viewer";
+    private string _lastTierSelectionSummary = "Tier summary waiting_for_viewer.";
     private string _lastRefinementHandoffSummary = "none";
     private string _lastReleaseSummary = "none";
     private string _lastCommitSummary = "none";
@@ -212,6 +216,7 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.AppendLine(BuildLodSpanSummary());
         _debugBuilder.AppendLine($"Debug {_activeTerrainDebugView.GetDisplayName()}");
         _debugBuilder.AppendLine(_lastSelectionSummary);
+        _debugBuilder.AppendLine(_lastTierSelectionSummary);
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
         _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
         _debugBuilder.AppendLine($"Supersede {supersededSummary}");
@@ -315,29 +320,26 @@ public partial class TerrainLodManager : Node3D
     private void UpdateDesiredBlocks(Vector3 viewerPosition)
     {
         TerrainBlockId viewerParent = ComputeSelectionCenterParent(viewerPosition);
-        TerrainBlockId targetCenterParent = ResolveSelectionCenterParent(viewerPosition, viewerParent);
-
         _currentViewerParent = viewerParent;
         if (!_selectionInitialized)
         {
             _startupBlocks.Clear();
             _startupSatisfiedBlocks.Clear();
             _activeSplitParentsByLod.Clear();
-            _currentCenterParent = targetCenterParent;
-            _targetCenterParent = targetCenterParent;
+            _currentStableCentersByLod.Clear();
+            _targetStableCentersByLod.Clear();
+            UpdateStableCenterParents(viewerPosition, viewerParent);
             _selectionInitialized = true;
             _lastDesiredSetChangeCount = 0;
         }
         else
         {
-            _targetCenterParent = targetCenterParent;
-            if (!_currentCenterParent.Equals(_targetCenterParent))
-            {
-                TerrainBlockId previousCenterParent = _currentCenterParent;
-                _currentCenterParent = ComputeNextCenterStep(_currentCenterParent, _targetCenterParent);
-                RecordRefinementHandoff(previousCenterParent, _currentCenterParent, viewerParent);
-            }
+            UpdateStableCenterParents(viewerPosition, viewerParent);
         }
+
+        int selectionCenterLod = GetSelectionCenterLod();
+        _currentCenterParent = GetCurrentStableCenterParent(viewerPosition, selectionCenterLod);
+        _targetCenterParent = GetTargetStableCenterParent(viewerPosition, selectionCenterLod);
 
         Dictionary<int, HashSet<TerrainBlockId>> activeSplitParentsByLod = BuildActiveSplitParentsByLod(viewerPosition);
         ReplaceSetMap(_activeSplitParentsByLod, activeSplitParentsByLod);
@@ -360,11 +362,46 @@ public partial class TerrainLodManager : Node3D
 
         _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
         _lastSelectionSummary = BuildSelectionSummary(_currentCenterParent, _targetCenterParent, viewerParent, desired.Count);
+        _lastTierSelectionSummary = BuildTierSelectionSummary();
     }
 
     private TerrainBlockId ComputeSelectionCenterParent(Vector3 viewerPosition)
     {
         return ComputeTrackedParent(viewerPosition, GetSelectionCenterLod());
+    }
+
+    private void UpdateStableCenterParents(Vector3 viewerPosition, TerrainBlockId selectionViewerParent)
+    {
+        int selectionCenterLod = GetSelectionCenterLod();
+        for (int parentLod = FinestTerrainLod + 1; parentLod <= selectionCenterLod; parentLod++)
+        {
+            TerrainBlockId rawParent = parentLod == selectionCenterLod
+                ? selectionViewerParent
+                : ComputeTrackedParent(viewerPosition, parentLod);
+            if (!_selectionInitialized ||
+                !_currentStableCentersByLod.TryGetValue(parentLod, out TerrainBlockId currentCenterParent))
+            {
+                _currentStableCentersByLod[parentLod] = rawParent;
+                _targetStableCentersByLod[parentLod] = rawParent;
+                continue;
+            }
+
+            TerrainBlockId targetCenterParent = ResolveStableCenterParent(
+                viewerPosition,
+                rawParent,
+                currentCenterParent,
+                parentLod);
+            TerrainBlockId nextCenterParent = currentCenterParent.Equals(targetCenterParent)
+                ? currentCenterParent
+                : ComputeNextCenterStep(currentCenterParent, targetCenterParent);
+            if (parentLod == selectionCenterLod && !nextCenterParent.Equals(currentCenterParent))
+            {
+                RecordRefinementHandoff(currentCenterParent, nextCenterParent, selectionViewerParent, targetCenterParent);
+            }
+
+            _currentStableCentersByLod[parentLod] = nextCenterParent;
+            _targetStableCentersByLod[parentLod] = targetCenterParent;
+        }
     }
 
     private TerrainBlockId ComputeTrackedParent(Vector3 viewerPosition, int parentLod)
@@ -378,41 +415,59 @@ public partial class TerrainLodManager : Node3D
         return TerrainMetrics.GetBlockForWorldPosition(_config, resolvedParentLod, anchor);
     }
 
-    private TerrainBlockId ResolveSelectionCenterParent(Vector3 viewerPosition, TerrainBlockId viewerParent)
+    private TerrainBlockId GetCurrentStableCenterParent(Vector3 viewerPosition, int parentLod)
+    {
+        return _currentStableCentersByLod.TryGetValue(parentLod, out TerrainBlockId centerParent)
+            ? centerParent
+            : ComputeTrackedParent(viewerPosition, parentLod);
+    }
+
+    private TerrainBlockId GetTargetStableCenterParent(Vector3 viewerPosition, int parentLod)
+    {
+        return _targetStableCentersByLod.TryGetValue(parentLod, out TerrainBlockId centerParent)
+            ? centerParent
+            : GetCurrentStableCenterParent(viewerPosition, parentLod);
+    }
+
+    private TerrainBlockId ResolveStableCenterParent(
+        Vector3 viewerPosition,
+        TerrainBlockId viewerParent,
+        TerrainBlockId currentCenterParent,
+        int parentLod)
     {
         if (!_selectionInitialized)
         {
             return viewerParent;
         }
 
-        if (viewerParent.Index.Y != _currentCenterParent.Index.Y)
+        if (viewerParent.Index.Y != currentCenterParent.Index.Y)
         {
             return viewerParent;
         }
 
-        int bubbleRadius = GetSelectionCenterRadius();
+        int bubbleRadius = GetStableCenterRadius(parentLod);
         int preferredCenterRadius = Mathf.Max(0, bubbleRadius - 1);
-        Vector3I parentDelta = viewerParent.Index - _currentCenterParent.Index;
+        Vector3I parentDelta = viewerParent.Index - currentCenterParent.Index;
         if (Mathf.Abs(parentDelta.X) > preferredCenterRadius || Mathf.Abs(parentDelta.Z) > preferredCenterRadius)
         {
             // Treat the bubble's outer ring as a buffer instead of where the player lives. Recenter as soon as the
             // viewer enters that outer ring so the character stays closer to the middle while walking.
             return new TerrainBlockId(
-                _currentCenterParent.Lod,
-                _currentCenterParent.Index + new Vector3I(
+                currentCenterParent.Lod,
+                currentCenterParent.Index + new Vector3I(
                     ComputeCenterRecenteringDelta(parentDelta.X, preferredCenterRadius),
                     0,
                     ComputeCenterRecenteringDelta(parentDelta.Z, preferredCenterRadius)));
         }
 
-        float parentSpan = TerrainMetrics.GetBlockSpan(_config, GetSelectionCenterLod());
+        float parentSpan = TerrainMetrics.GetBlockSpan(_config, parentLod);
         float padding = Mathf.Clamp(BubbleMovePaddingFraction, 0.0f, 0.49f) * parentSpan;
         Vector3 minOrigin = TerrainMetrics.GetBlockOrigin(
             _config,
-            new TerrainBlockId(_currentCenterParent.Lod, _currentCenterParent.Index + new Vector3I(-bubbleRadius, 0, -bubbleRadius)));
+            new TerrainBlockId(currentCenterParent.Lod, currentCenterParent.Index + new Vector3I(-bubbleRadius, 0, -bubbleRadius)));
         Vector3 maxOrigin = TerrainMetrics.GetBlockOrigin(
             _config,
-            new TerrainBlockId(_currentCenterParent.Lod, _currentCenterParent.Index + new Vector3I(bubbleRadius, 0, bubbleRadius)));
+            new TerrainBlockId(currentCenterParent.Lod, currentCenterParent.Index + new Vector3I(bubbleRadius, 0, bubbleRadius)));
         float maxX = maxOrigin.X + parentSpan;
         float maxZ = maxOrigin.Z + parentSpan;
         // Let the same-LOD bubble trail the raw viewer parent until the player is meaningfully outside the
@@ -422,7 +477,7 @@ public partial class TerrainLodManager : Node3D
             viewerPosition.X > (maxX + padding) ||
             viewerPosition.Z < (minOrigin.Z - padding) ||
             viewerPosition.Z > (maxZ + padding);
-        return outsideStableBounds ? viewerParent : _currentCenterParent;
+        return outsideStableBounds ? viewerParent : currentCenterParent;
     }
 
     private Dictionary<int, HashSet<TerrainBlockId>> BuildActiveSplitParentsByLod(Vector3 viewerPosition)
@@ -444,9 +499,7 @@ public partial class TerrainLodManager : Node3D
         splitParentsByLod[coarsestLod] = outerSplitParents;
         for (int parentLod = GetSelectionCenterLod(); parentLod >= FinestTerrainLod + 1; parentLod--)
         {
-            TerrainBlockId centerParent = parentLod == GetSelectionCenterLod()
-                ? _currentCenterParent
-                : ComputeTrackedParent(viewerPosition, parentLod);
+            TerrainBlockId centerParent = GetCurrentStableCenterParent(viewerPosition, parentLod);
             HashSet<TerrainBlockId> splitParents = BuildParentBubble(centerParent, GetSplitRadiusForParentLod(parentLod));
             if (splitParentsByLod.TryGetValue(parentLod + 1, out HashSet<TerrainBlockId> activeCoarseParents))
             {
@@ -1190,12 +1243,13 @@ public partial class TerrainLodManager : Node3D
     private void RecordRefinementHandoff(
         TerrainBlockId previousCenterParent,
         TerrainBlockId nextCenterParent,
-        TerrainBlockId viewerParent)
+        TerrainBlockId viewerParent,
+        TerrainBlockId targetCenterParent)
     {
         _refinementHandoffCount++;
         Vector3I delta = nextCenterParent.Index - previousCenterParent.Index;
         _lastRefinementHandoffSummary =
-            $"handoff {_refinementHandoffCount} center {previousCenterParent} -> {nextCenterParent} raw {viewerParent} target {_targetCenterParent} " +
+            $"handoff {_refinementHandoffCount} center {previousCenterParent} -> {nextCenterParent} raw {viewerParent} target {targetCenterParent} " +
             $"delta {delta.X},{delta.Y},{delta.Z}";
     }
 
@@ -2506,6 +2560,7 @@ public partial class TerrainLodManager : Node3D
             : $"{centerParent}->{targetCenterParent}";
         return
             $"raw {viewerParent}  center {centerSummary}  desired {desiredCount}  " +
+            $"split_r {BuildSplitRadiusSummary()}  " +
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
             $"blocks {BuildTierCountSummary(_currentLodBlockCounts, 'l', FinestTerrainLod)}  " +
             $"coarse_r {_currentCoarsestRadius}  held {_hysteresisRetainedBlockCount}  changed {_lastDesiredSetChangeCount}  " +
@@ -2524,7 +2579,12 @@ public partial class TerrainLodManager : Node3D
 
     private int GetSelectionCenterRadius()
     {
-        return Mathf.Max(0, GetSplitRadiusForParentLod(GetSelectionCenterLod()));
+        return GetStableCenterRadius(GetSelectionCenterLod());
+    }
+
+    private int GetStableCenterRadius(int parentLod)
+    {
+        return Mathf.Max(0, GetSplitRadiusForParentLod(parentLod));
     }
 
     private int GetSplitRadiusForParentLod(int parentLod)
@@ -2534,17 +2594,43 @@ public partial class TerrainLodManager : Node3D
             return 0;
         }
 
-        int[] configuredRadii = TierSplitRadiiXZ ?? System.Array.Empty<int>();
-        int radius = 0;
-        for (int currentParentLod = FinestTerrainLod + 1; currentParentLod <= parentLod; currentParentLod++)
+        if (parentLod == FinestTerrainLod + 1)
         {
-            int configuredRadius = currentParentLod - 1 < configuredRadii.Length
-                ? configuredRadii[currentParentLod - 1]
-                : radius;
-            radius = Mathf.Max(radius, configuredRadius);
+            return GetEffectiveLod0NearFieldRadius();
+        }
+
+        // Keep the broader tier cascade intact, but once an explicit lod0 bubble is configured it should stop
+        // implicitly inflating every coarser tier radius.
+        int radius = UsesExplicitLod0NearFieldRadius()
+            ? 0
+            : GetLegacySplitRadiusForParentLod(FinestTerrainLod + 1);
+        for (int currentParentLod = FinestTerrainLod + 2; currentParentLod <= parentLod; currentParentLod++)
+        {
+            radius = Mathf.Max(radius, GetLegacySplitRadiusForParentLod(currentParentLod));
         }
 
         return radius;
+    }
+
+    private int GetEffectiveLod0NearFieldRadius()
+    {
+        return UsesExplicitLod0NearFieldRadius()
+            ? Mathf.Max(0, Lod0NearFieldRadiusXZ)
+            : GetLegacySplitRadiusForParentLod(FinestTerrainLod + 1);
+    }
+
+    private bool UsesExplicitLod0NearFieldRadius()
+    {
+        return Lod0NearFieldRadiusXZ >= 0;
+    }
+
+    private int GetLegacySplitRadiusForParentLod(int parentLod)
+    {
+        int[] configuredRadii = TierSplitRadiiXZ ?? System.Array.Empty<int>();
+        int configuredIndex = parentLod - 1;
+        return configuredIndex >= 0 && configuredIndex < configuredRadii.Length
+            ? Mathf.Max(0, configuredRadii[configuredIndex])
+            : 0;
     }
 
     private int GetMaxCollisionLod()
@@ -2599,6 +2685,58 @@ public partial class TerrainLodManager : Node3D
         }
 
         return builder.ToString();
+    }
+
+    private string BuildTierSelectionSummary()
+    {
+        StringBuilder builder = new();
+        int coarsestLod = GetCoarsestLod();
+        for (int leafLod = FinestTerrainLod; leafLod <= coarsestLod; leafLod++)
+        {
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.Append("Tier lod");
+            builder.Append(leafLod);
+            if (leafLod >= coarsestLod)
+            {
+                builder.Append(" cover center ");
+                builder.Append(GetAncestorBlock(_currentCenterParent, coarsestLod));
+                builder.Append(" radius ");
+                builder.Append(_currentCoarsestRadius);
+                builder.Append(" leaves ");
+                builder.Append(GetLodBlockCount(leafLod));
+                continue;
+            }
+
+            int parentLod = leafLod + 1;
+            builder.Append(" via p");
+            builder.Append(parentLod);
+            builder.Append(" center ");
+            builder.Append(GetTierSplitCenterParent(parentLod));
+            builder.Append(" radius ");
+            builder.Append(GetSplitRadiusForParentLod(parentLod));
+            builder.Append(" split ");
+            builder.Append(GetSplitParentCount(parentLod));
+            builder.Append(" leaves ");
+            builder.Append(GetLodBlockCount(leafLod));
+        }
+
+        return builder.ToString();
+    }
+
+    private TerrainBlockId GetTierSplitCenterParent(int parentLod)
+    {
+        return GetEffectiveSplitBubbleCenter(parentLod);
+    }
+
+    private TerrainBlockId GetEffectiveSplitBubbleCenter(int parentLod)
+    {
+        return parentLod <= GetSelectionCenterLod()
+            ? GetCurrentStableCenterParent(_lastViewerPosition, parentLod)
+            : GetAncestorBlock(_currentCenterParent, parentLod);
     }
 
     private static string BuildTierCountSummary(int[] counts, char labelPrefix, int startLod)
