@@ -81,6 +81,17 @@ public sealed class TerrainBlockData
         State = TerrainBlockState.MeshReady;
     }
 
+    public void RefreshDisplayedContent(VoxelMeshBuildResult mesh, bool collisionPending)
+    {
+        Field = null;
+        Mesh = VoxelMeshBuildResult.Empty;
+        SeamBuild = TerrainSeamBuildResult.None;
+        FieldBuildRunning = false;
+        MeshBuildRunning = false;
+        TriangleCount = mesh.TotalTriangleCount;
+        CollisionPending = collisionPending;
+    }
+
     public void SetSeamBuild(TerrainSeamBuildResult seamBuild)
     {
         SeamBuild = seamBuild;
@@ -133,6 +144,20 @@ public sealed class TerrainBlockData
     public bool IsHeldForRelease(double nowSeconds)
     {
         return State == TerrainBlockState.Releasable && nowSeconds < ReleaseEligibleAtSeconds;
+    }
+
+    public void InvalidatePendingBuildData()
+    {
+        Field = null;
+        Mesh = VoxelMeshBuildResult.Empty;
+        SeamBuild = TerrainSeamBuildResult.None;
+        FieldBuildRunning = false;
+        MeshBuildRunning = false;
+        CollisionPending = false;
+        TriangleCount = 0;
+        FieldBuildRevision++;
+        MeshBuildRevision++;
+        State = TerrainBlockState.Requested;
     }
 
     public void CancelPendingData()

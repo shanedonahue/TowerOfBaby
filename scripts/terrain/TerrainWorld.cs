@@ -65,12 +65,12 @@ public partial class TerrainWorld : Node3D
 
     public void ApplyBrush(Vector3 worldCenter, bool additive)
     {
-        // Intentionally stubbed for phase one: the new LOD runtime owns visibility, but edits/persistence are still parked.
+        _lodManager?.ApplyBrush(worldCenter, additive);
     }
 
     public void ApplySlash(VoxelSlashEdit edit)
     {
-        // Intentionally stubbed for phase one: slash-driven terrain edits will be reintroduced after the LOD skeleton settles.
+        _lodManager?.ApplySlash(edit);
     }
 
     public void AdjustBrushRadius(float delta)
@@ -104,6 +104,7 @@ public partial class TerrainWorld : Node3D
     public void ClearAllPersistentCache()
     {
         GetChunkStore().ClearAllChunkData();
+        _lodManager?.ClearPersistedEditRegions();
     }
 
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
@@ -166,6 +167,7 @@ public partial class TerrainWorld : Node3D
             TrackedBiomeSummary = "Waiting for TerrainLodManager.",
             TrackedDetailSummary = "No field/mesh work is running because the runtime child is missing.",
             TrackedCoverageStateSummary = "Scene should contain TerrainLodManager under TerrainWorld.",
+            ActiveEditRegionSummary = "none",
             MixedLodSeamMode = TerrainMixedLodSeamMode.SkirtsOnly,
             LastMixedLodSeamSummary = "none",
             LastSelectedChunkSummary = "none",

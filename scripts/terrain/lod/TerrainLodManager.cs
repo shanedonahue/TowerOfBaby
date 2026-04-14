@@ -94,6 +94,8 @@ public partial class TerrainLodManager : Node3D
     private readonly object _transitionLogLock = new();
 
     private TerrainConfig _config = null!;
+    private TerrainChunkStore _chunkStore = null!;
+    private TerrainEditRegionManager _editRegionManager = null!;
     private TerrainMesher _mesher = null!;
     private TerrainSurfaceColorizer _surfaceColorizer = null!;
     private TerrainWorldProfileSnapshot _latestProfileSnapshot = null!;
@@ -109,6 +111,7 @@ public partial class TerrainLodManager : Node3D
     private string _lastRefinementHandoffSummary = "none";
     private string _lastReleaseSummary = "none";
     private string _lastCommitSummary = "none";
+    private string _lastEditRegionSummary = "none";
     private bool _selectionInitialized;
     private bool _initialLoadComplete;
     private int _lastDesiredBlockCount;
@@ -165,8 +168,11 @@ public partial class TerrainLodManager : Node3D
     {
         _terrainWorld = GetParent() as TerrainWorld;
         _config = BuildConfig();
+        _chunkStore = new TerrainChunkStore(_terrainWorld?.Seed ?? _config.Seed);
+        _editRegionManager = new TerrainEditRegionManager(_chunkStore, _config.BaseVoxelSize);
         _mesher = new TerrainMesher(_config);
         _surfaceColorizer = new TerrainSurfaceColorizer(_config);
+        _lastEditRegionSummary = _editRegionManager.BuildDebugSummary();
         _appliedMixedLodSeamMode = MixedLodSeamMode;
         _activeTerrainDebugView = ResolveTerrainDebugView(_terrainWorld?.TerrainDebugView ?? TerrainVisualDebugMode.Lit);
         _trackedCharacter = ResolveTrackedCharacter();
@@ -237,11 +243,51 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.AppendLine(_lastSelectionSummary);
         _debugBuilder.AppendLine(_lastTierSelectionSummary);
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
+        _debugBuilder.AppendLine($"Edits {_lastEditRegionSummary}");
         _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
         _debugBuilder.AppendLine($"Seams {BuildMixedLodSeamSummary(seamSummary)}");
         _debugBuilder.AppendLine($"Supersede {supersededSummary}");
         _debugBuilder.Append($"Latest {(_lastCommitSummary == string.Empty ? "none" : _lastCommitSummary)}");
         return _debugBuilder.ToString();
+    }
+
+    public void ApplyBrush(Vector3 worldCenter, bool additive)
+    {
+        float strength = additive
+            ? (_terrainWorld?.BuildStrength ?? 2.8f)
+            : (_terrainWorld?.CarveStrength ?? -3.4f);
+        float radius = _terrainWorld?.BrushRadius ?? 2.4f;
+        float retextureMargin = _terrainWorld?.BrushRetextureMargin ?? 1.6f;
+        VoxelSphereEdit edit = new(worldCenter, radius, strength, retextureMargin);
+        TerrainEditStampData stamp = TerrainEditStampData.FromSphere(edit, _config.BaseVoxelSize);
+        ApplyEditMutation(
+            additive ? "build_brush" : "carve_brush",
+            _editRegionManager.RegisterStamp(
+                stamp,
+                2,
+                TerrainDetailRegionSource.Edit,
+                TerrainChunk.EditedDetailRegionReason,
+                100.0f,
+                true));
+    }
+
+    public void ApplySlash(VoxelSlashEdit edit)
+    {
+        TerrainEditStampData stamp = TerrainEditStampData.FromSlash(edit, _config.BaseVoxelSize);
+        ApplyEditMutation(
+            "slash",
+            _editRegionManager.RegisterStamp(
+                stamp,
+                2,
+                TerrainDetailRegionSource.Edit,
+                TerrainChunk.EditedDetailRegionReason,
+                100.0f,
+                true));
+    }
+
+    public void ClearPersistedEditRegions()
+    {
+        ApplyEditMutation("clear_edits", _editRegionManager.ClearAll());
     }
 
     public bool SetTerrainDebugView(TerrainVisualDebugMode debugView)
@@ -325,6 +371,90 @@ public partial class TerrainLodManager : Node3D
         return OS.IsDebugBuild()
             ? debugView
             : TerrainVisualDebugMode.Lit;
+    }
+
+    private void ApplyEditMutation(string operation, TerrainEditRegionMutationResult mutation)
+    {
+        _lastEditRegionSummary = mutation.Changed
+            ? $"{operation} {mutation.Summary}"
+            : $"{operation} none";
+        if (!mutation.Changed)
+        {
+            _latestProfileSnapshot = BuildProfileSnapshot();
+            return;
+        }
+
+        InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, operation);
+        _latestProfileSnapshot = BuildProfileSnapshot();
+    }
+
+    private void InvalidateBlocksForEditMutation(Aabb dirtyWorldBounds, string operation)
+    {
+        List<TerrainBlockData> displayedBlocks = new();
+        List<TerrainBlockId> requeuedBlocks = new();
+
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (!TerrainMetrics.GetBlockBounds(_config, block.Id).Intersects(dirtyWorldBounds))
+            {
+                continue;
+            }
+
+            if (IsBlockDisplayingVisuals(block))
+            {
+                displayedBlocks.Add(block);
+                continue;
+            }
+
+            if (block.State is TerrainBlockState.Requested or TerrainBlockState.FieldReady or TerrainBlockState.MeshReady)
+            {
+                block.InvalidatePendingBuildData();
+                RemoveBlockFromDispatcherQueues(block.Id);
+                if (block.Desired)
+                {
+                    requeuedBlocks.Add(block.Id);
+                }
+            }
+        }
+
+        foreach (TerrainBlockId blockId in requeuedBlocks)
+        {
+            EnqueueFieldBuildDispatch(blockId);
+        }
+
+        foreach (TerrainBlockData displayedBlock in displayedBlocks)
+        {
+            RebuildDisplayedBlock(displayedBlock, operation);
+        }
+    }
+
+    private void RebuildDisplayedBlock(TerrainBlockData block, string operation)
+    {
+        if (block.Renderer == null || !IsInstanceValid(block.Renderer))
+        {
+            return;
+        }
+
+        VoxelChunkData field = _mesher.BuildField(block.Id, GetEditRegionsForBlock(block.Id));
+        VoxelMeshBuildResult mesh = _mesher.BuildMesh(field);
+        bool includeCollision = ShouldIncludeCollision(block.Id) &&
+            mesh.TotalTriangleCount > 0 &&
+            (block.State switch
+            {
+                TerrainBlockState.Visible => block.Desired,
+                TerrainBlockState.Releasable => !HasReadyPhysicsSuccessorCoverage(block.Id),
+                _ => false
+            });
+        block.Renderer.ApplyMesh(mesh, includeCollision, _activeTerrainDebugView, _surfaceColorizer);
+        block.RefreshDisplayedContent(mesh, collisionPending: false);
+        RefreshVisibleMixedLodSeamsAround(block.Id);
+        _lastCommitSummary = $"{block.Id} edit_refresh {operation} tri {mesh.TotalTriangleCount}";
+    }
+
+    private TerrainEditRegion[] GetEditRegionsForBlock(TerrainBlockId blockId)
+    {
+        return _editRegionManager?.QueryOverlapping(TerrainMetrics.GetBlockBounds(_config, blockId))
+            ?? Array.Empty<TerrainEditRegion>();
     }
 
     private Node3D ResolveTrackedCharacter()
@@ -719,13 +849,14 @@ public partial class TerrainLodManager : Node3D
 
             int revision = block.BeginFieldBuild();
             long instanceVersion = block.InstanceVersion;
+            TerrainEditRegion[] editRegions = GetEditRegionsForBlock(blockId);
             Interlocked.Increment(ref _activeFieldWorkerJobs);
             _ = Task.Run(() =>
             {
                 Stopwatch stopwatch = Stopwatch.StartNew();
                 try
                 {
-                    VoxelChunkData field = _mesher.BuildField(blockId);
+                    VoxelChunkData field = _mesher.BuildField(blockId, editRegions);
                     _completedFieldBuildResults.Enqueue(
                         new CompletedFieldBuildResult(blockId, instanceVersion, revision, field, stopwatch.Elapsed.TotalMilliseconds, Succeeded: true));
                 }
@@ -2563,6 +2694,10 @@ public partial class TerrainLodManager : Node3D
         string lodSummary =
             $"{BuildLodSpanSummary()}  raw {_currentViewerParent}  center {centerSummary}  split_r {BuildSplitRadiusSummary()}  " +
             $"coarse_r {_currentCoarsestRadius}  move_pad {BubbleMovePaddingFraction:0.00}  debug {_activeTerrainDebugView.GetDisplayName()}  seam {MixedLodSeamMode.GetDisplayName()}";
+        int activeEditRegionCount = _editRegionManager?.RegionCount ?? 0;
+        int activeEditStampCount = _editRegionManager?.StampCount ?? 0;
+        int maxEditRegionDetailLevel = _editRegionManager?.MaxDetailLevel ?? 0;
+        string activeEditRegionSummary = _editRegionManager?.BuildDebugSummary() ?? "none";
 
         return new TerrainWorldProfileSnapshot
         {
@@ -2595,6 +2730,10 @@ public partial class TerrainLodManager : Node3D
             TrackedBiomeSummary = viewerSummary,
             TrackedDetailSummary = BuildLifecycleSummary(),
             TrackedCoverageStateSummary = lodSummary,
+            ActiveEditRegionCount = activeEditRegionCount,
+            ActiveEditStampCount = activeEditStampCount,
+            MaxEditRegionDetailLevel = maxEditRegionDetailLevel,
+            ActiveEditRegionSummary = activeEditRegionSummary,
             NearPlayerBubbleParentCount = _currentBubbleParentCount,
             RefinedParentCount = CountTotalSplitParents(),
             RefinedSameLodBlockCount = _currentRefinedSameLodBlockCount,

@@ -6,8 +6,24 @@ Terrain persistence currently uses two storage layers:
 
 - Base chunk payloads in the `chunks` and `startup_chunks` tables.
 - Optional adaptive-detail payloads in the existing `detail_brick_blob` column.
+- World-space edit-region payloads in the `edit_regions` table.
 
 Untouched terrain should remain deterministic from the world seed and procedural generation rules. Persisted data only overrides that deterministic result when we have real chunk edits or cached startup snapshots.
+
+## World Edit Regions
+
+The active `TerrainLodManager` runtime now keeps edit fidelity in a separate world-space authority:
+
+- `edit_regions` rows are independent of camera residency and block lifetime
+- each row stores:
+  - world-space bounds metadata
+  - requested detail level
+  - a serialized `TerrainEditRegion` payload
+- the serialized payload contains:
+  - sticky edit/detail metadata similar to `TerrainPersistedDetailRegionData`
+  - one or more world-edit stamps (sphere/slash today)
+
+On load, the LOD runtime restores these regions first and then any block field build queries overlapping regions before mesh generation. This keeps untouched terrain on normal camera-driven LOD while edited areas can request local higher-resolution sampling even when the player is far away.
 
 ## Base Chunk Data
 
@@ -56,6 +72,7 @@ Persisted:
 - Coarse voxel edits written into chunk density/material buffers
 - Sticky edited high-detail brick data
 - Sticky persisted detail-region metadata used to restore edited local detail on load
+- World-space edit-region registrations used by the active LOD runtime
 
 Not persisted:
 

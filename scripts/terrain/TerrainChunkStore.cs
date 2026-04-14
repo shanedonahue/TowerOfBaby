@@ -119,6 +119,45 @@ public sealed class TerrainChunkStore
         }
     }
 
+    public TerrainEditRegion[] LoadPersistedEditRegions()
+    {
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT payload_blob
+                FROM edit_regions
+                ORDER BY updated_at_unix ASC, region_id ASC
+                """;
+
+            using SqliteDataReader reader = command.ExecuteReader();
+            List<TerrainEditRegion> regions = new();
+            while (reader.Read())
+            {
+                byte[] payload = (byte[])reader["payload_blob"];
+                if (payload == null || payload.Length == 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    regions.Add(TerrainEditRegion.Deserialize(payload));
+                }
+                catch (Exception ex)
+                {
+                    GD.PushWarning($"Terrain edit region load failed | bytes {payload.Length} | {ex.Message}");
+                }
+            }
+
+            return regions.ToArray();
+        }
+    }
+
     public void Save(Vector3I key, VoxelChunkData data)
     {
         lock (_databaseLock)
@@ -173,6 +212,99 @@ public sealed class TerrainChunkStore
             command.ExecuteNonQuery();
 
             LogAdaptiveDetailSave("chunks", key, adaptiveDetail.Metrics);
+        }
+    }
+
+    public void SaveEditRegion(TerrainEditRegion region)
+    {
+        if (region == null)
+        {
+            throw new ArgumentNullException(nameof(region));
+        }
+
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                INSERT INTO edit_regions (
+                    region_id,
+                    bounds_min_x, bounds_min_y, bounds_min_z,
+                    bounds_size_x, bounds_size_y, bounds_size_z,
+                    requested_detail_level,
+                    payload_blob,
+                    updated_at_unix
+                )
+                VALUES (
+                    $regionId,
+                    $minX, $minY, $minZ,
+                    $sizeX, $sizeY, $sizeZ,
+                    $detailLevel,
+                    $payload,
+                    $updatedAtUnix
+                )
+                ON CONFLICT(region_id) DO UPDATE SET
+                    bounds_min_x = excluded.bounds_min_x,
+                    bounds_min_y = excluded.bounds_min_y,
+                    bounds_min_z = excluded.bounds_min_z,
+                    bounds_size_x = excluded.bounds_size_x,
+                    bounds_size_y = excluded.bounds_size_y,
+                    bounds_size_z = excluded.bounds_size_z,
+                    requested_detail_level = excluded.requested_detail_level,
+                    payload_blob = excluded.payload_blob,
+                    updated_at_unix = excluded.updated_at_unix
+                """;
+
+            command.Parameters.AddWithValue("$regionId", region.Id);
+            command.Parameters.AddWithValue("$minX", region.WorldBounds.Position.X);
+            command.Parameters.AddWithValue("$minY", region.WorldBounds.Position.Y);
+            command.Parameters.AddWithValue("$minZ", region.WorldBounds.Position.Z);
+            command.Parameters.AddWithValue("$sizeX", region.WorldBounds.Size.X);
+            command.Parameters.AddWithValue("$sizeY", region.WorldBounds.Size.Y);
+            command.Parameters.AddWithValue("$sizeZ", region.WorldBounds.Size.Z);
+            command.Parameters.AddWithValue("$detailLevel", region.RequestedDetailLevel);
+            command.Parameters.AddWithValue("$payload", region.Serialize());
+            command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public void DeleteEditRegion(string regionId)
+    {
+        if (string.IsNullOrWhiteSpace(regionId))
+        {
+            return;
+        }
+
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                DELETE FROM edit_regions
+                WHERE region_id = $regionId
+                """;
+            command.Parameters.AddWithValue("$regionId", regionId.Trim());
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public void ClearPersistedEditRegions()
+    {
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM edit_regions;";
+            command.ExecuteNonQuery();
         }
     }
 
@@ -294,6 +426,7 @@ public sealed class TerrainChunkStore
                 DELETE FROM startup_chunks;
                 DELETE FROM startup_state;
                 DELETE FROM chunks;
+                DELETE FROM edit_regions;
                 """;
             command.ExecuteNonQuery();
         }
@@ -309,6 +442,19 @@ public sealed class TerrainChunkStore
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText =
                 """
+                CREATE TABLE IF NOT EXISTS edit_regions (
+                    region_id TEXT NOT NULL PRIMARY KEY,
+                    bounds_min_x REAL NOT NULL,
+                    bounds_min_y REAL NOT NULL,
+                    bounds_min_z REAL NOT NULL,
+                    bounds_size_x REAL NOT NULL,
+                    bounds_size_y REAL NOT NULL,
+                    bounds_size_z REAL NOT NULL,
+                    requested_detail_level INTEGER NOT NULL,
+                    payload_blob BLOB NOT NULL,
+                    updated_at_unix INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS chunks (
                     chunk_x INTEGER NOT NULL,
                     chunk_y INTEGER NOT NULL,
