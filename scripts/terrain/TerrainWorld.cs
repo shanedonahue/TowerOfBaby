@@ -166,6 +166,8 @@ public partial class TerrainWorld : Node3D
             TrackedBiomeSummary = "Waiting for TerrainLodManager.",
             TrackedDetailSummary = "No field/mesh work is running because the runtime child is missing.",
             TrackedCoverageStateSummary = "Scene should contain TerrainLodManager under TerrainWorld.",
+            MixedLodSeamMode = TerrainMixedLodSeamMode.SkirtsOnly,
+            LastMixedLodSeamSummary = "none",
             LastSelectedChunkSummary = "none",
             LastReleasedChunkSummary = "none",
             LastChunkSourceSummary = "none",

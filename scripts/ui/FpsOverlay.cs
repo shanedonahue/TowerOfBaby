@@ -332,11 +332,14 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Supersede active {snapshot.ActiveSupersededBlockTransitionCount}  wait r/v/h/p/f {snapshot.WaitingForMarkReleasableSupersededBlockCount}/{snapshot.WaitingForVisualCoverageSupersededBlockCount}/{snapshot.WaitingForHideSupersededBlockCount}/{snapshot.WaitingForPhysicsCoverageSupersededBlockCount}/{snapshot.WaitingForReleaseSupersededBlockCount}");
             _detailBuilder.AppendLine(
+                $"Seams {snapshot.MixedLodSeamMode.GetDisplayName()}  blocks {snapshot.MixedLodSeamBlockCount}  faces t/s/k/sup {snapshot.MixedLodTransitionFaceCount}/{snapshot.MixedLodSkirtFaceCount}/{snapshot.MixedLodSkippedFaceCount}/{snapshot.MixedLodSuppressedFaceCount}  tri {snapshot.MixedLodSeamTriangleCount}");
+            _detailBuilder.AppendLine(
                 $"Churn set/create/release {snapshot.BlockSetChangeRatePerSecond:0.0}/{snapshot.BlockCreateRatePerSecond:0.0}/{snapshot.BlockReleaseRatePerSecond:0.0} per s");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
             _detailBuilder.AppendLine($"Viewer {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
             _detailBuilder.AppendLine($"Lifecycle {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");
             _detailBuilder.AppendLine($"LOD {TrimForOverlay(snapshot.TrackedCoverageStateSummary, 84)}");
+            _detailBuilder.AppendLine($"Seam last {TrimForOverlay(snapshot.LastMixedLodSeamSummary, 84)}");
             _detailBuilder.AppendLine($"Supersede last {TrimForOverlay(snapshot.LastSupersededBlockTransitionSummary, 84)}");
             _detailBuilder.AppendLine($"Select {TrimForOverlay(snapshot.LastSelectedChunkSummary, 84)}");
             _detailBuilder.AppendLine($"Handoff {TrimForOverlay(snapshot.LastRefinementHandoffSummary, 84)}");

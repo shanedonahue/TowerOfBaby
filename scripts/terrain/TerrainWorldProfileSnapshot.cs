@@ -196,6 +196,14 @@ public sealed class TerrainWorldProfileSnapshot
     public int WaitingForHideSupersededBlockCount { get; init; }
     public int WaitingForPhysicsCoverageSupersededBlockCount { get; init; }
     public int WaitingForReleaseSupersededBlockCount { get; init; }
+    public TerrainMixedLodSeamMode MixedLodSeamMode { get; init; }
+    public int MixedLodSeamBlockCount { get; init; }
+    public int MixedLodTransitionFaceCount { get; init; }
+    public int MixedLodSkirtFaceCount { get; init; }
+    public int MixedLodSkippedFaceCount { get; init; }
+    public int MixedLodSuppressedFaceCount { get; init; }
+    public int MixedLodSeamTriangleCount { get; init; }
+    public string LastMixedLodSeamSummary { get; init; } = string.Empty;
     public string LastSupersededBlockTransitionSummary { get; init; } = string.Empty;
     public string LastSelectedChunkSummary { get; init; } = string.Empty;
     public string LastRefinementHandoffSummary { get; init; } = string.Empty;

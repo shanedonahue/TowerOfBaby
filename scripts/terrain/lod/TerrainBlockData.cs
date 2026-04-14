@@ -28,6 +28,7 @@ public sealed class TerrainBlockData
     public int TriangleCount { get; private set; }
     public VoxelChunkData Field { get; private set; }
     public VoxelMeshBuildResult Mesh { get; private set; } = VoxelMeshBuildResult.Empty;
+    public TerrainSeamBuildResult SeamBuild { get; private set; } = TerrainSeamBuildResult.None;
     public double ReleaseEligibleAtSeconds { get; private set; }
     public int FieldBuildRevision { get; private set; }
     public bool FieldBuildRunning { get; private set; }
@@ -78,6 +79,11 @@ public sealed class TerrainBlockData
         Mesh = mesh;
         TriangleCount = mesh.TotalTriangleCount;
         State = TerrainBlockState.MeshReady;
+    }
+
+    public void SetSeamBuild(TerrainSeamBuildResult seamBuild)
+    {
+        SeamBuild = seamBuild;
     }
 
     public void ClearMeshBuildRunning(int revision)
@@ -133,6 +139,7 @@ public sealed class TerrainBlockData
     {
         Field = null;
         Mesh = VoxelMeshBuildResult.Empty;
+        SeamBuild = TerrainSeamBuildResult.None;
         FieldBuildRunning = false;
         MeshBuildRunning = false;
         CollisionPending = false;

@@ -62,6 +62,9 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "1,32,1")] public int ReleasesPerFrame = 2;
     [Export] public bool GenerateCollisionForCoarseLods;
 
+    [ExportGroup("Seams")]
+    [Export] public TerrainMixedLodSeamMode MixedLodSeamMode = TerrainMixedLodSeamMode.SkirtsOnly;
+
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
     private readonly HashSet<TerrainBlockId> _desiredBlocks = new();
     private readonly Dictionary<int, HashSet<TerrainBlockId>> _activeSplitParentsByLod = new();
@@ -145,12 +148,14 @@ public partial class TerrainLodManager : Node3D
     private int _activeFieldWorkerJobs;
     private int _activeMeshWorkerJobs;
     private int _dispatchSequence;
+    private TerrainMixedLodSeamMode _appliedMixedLodSeamMode;
     private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
     private int[] _currentLodBlockCounts = System.Array.Empty<int>();
     private int[] _currentSplitParentCounts = System.Array.Empty<int>();
     private StreamWriter _transitionLogWriter = null!;
     private bool _warnedTransitionLogFailure;
     private string _lastSupersededTransitionSummary = "none";
+    private string _lastMixedLodSeamSummary = "none";
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -162,6 +167,7 @@ public partial class TerrainLodManager : Node3D
         _config = BuildConfig();
         _mesher = new TerrainMesher(_config);
         _surfaceColorizer = new TerrainSurfaceColorizer(_config);
+        _appliedMixedLodSeamMode = MixedLodSeamMode;
         _activeTerrainDebugView = ResolveTerrainDebugView(_terrainWorld?.TerrainDebugView ?? TerrainVisualDebugMode.Lit);
         _trackedCharacter = ResolveTrackedCharacter();
         _latestProfileSnapshot = BuildProfileSnapshot();
@@ -176,6 +182,7 @@ public partial class TerrainLodManager : Node3D
     {
         _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
         _trackedCharacter ??= ResolveTrackedCharacter();
+        RefreshVisibleMixedLodSeamsIfNeeded();
         if (_trackedCharacter == null)
         {
             RefreshLifecycleRates();
@@ -203,6 +210,17 @@ public partial class TerrainLodManager : Node3D
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
 
+    private void RefreshVisibleMixedLodSeamsIfNeeded()
+    {
+        if (_appliedMixedLodSeamMode == MixedLodSeamMode)
+        {
+            return;
+        }
+
+        _appliedMixedLodSeamMode = MixedLodSeamMode;
+        RefreshAllVisibleMixedLodSeams();
+    }
+
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
     {
         return _latestProfileSnapshot ??= BuildProfileSnapshot();
@@ -211,6 +229,7 @@ public partial class TerrainLodManager : Node3D
     public string GetDebugSummary()
     {
         string supersededSummary = BuildSupersededTransitionSummary();
+        MixedLodSeamProfileSummary seamSummary = BuildMixedLodSeamProfileSummary();
         _debugBuilder.Clear();
         _debugBuilder.AppendLine("TerrainLodManager active.");
         _debugBuilder.AppendLine(BuildLodSpanSummary());
@@ -219,6 +238,7 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.AppendLine(_lastTierSelectionSummary);
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
         _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
+        _debugBuilder.AppendLine($"Seams {BuildMixedLodSeamSummary(seamSummary)}");
         _debugBuilder.AppendLine($"Supersede {supersededSummary}");
         _debugBuilder.Append($"Latest {(_lastCommitSummary == string.Empty ? "none" : _lastCommitSummary)}");
         return _debugBuilder.ToString();
@@ -1104,13 +1124,25 @@ public partial class TerrainLodManager : Node3D
         TerrainSeamFace requestedFaces = ResolveRequestedSeamFaces(blockId);
         if (requestedFaces == TerrainSeamFace.None)
         {
-            block.Renderer.UpdateSeamMesh(VoxelMeshBuildResult.Empty);
+            ApplyMixedLodSeamResult(block, TerrainSeamBuildResult.None with { RequestedFaces = TerrainSeamFace.None });
             return;
         }
 
         VoxelMeshBuildResult baseMesh = block.Renderer.BuildVisualMeshSnapshot(_surfaceColorizer);
-        TerrainSeamBuildResult seamBuild = TerrainSeamMesher.BuildMixedLodSeams(_config, blockId, baseMesh, requestedFaces);
-        block.Renderer.UpdateSeamMesh(seamBuild.Mesh);
+        ResolveMixedLodSeamInputs(
+            blockId,
+            requestedFaces,
+            out TerrainSeamFace skirtFaces,
+            out Dictionary<TerrainSeamFace, TerrainSeamNeighborData> transitionNeighbors);
+        TerrainSeamBuildResult seamBuild = TerrainSeamMesher.BuildMixedLodSeams(
+            _config,
+            blockId,
+            TerrainMetrics.GetBlockOrigin(_config, blockId),
+            baseMesh,
+            requestedFaces,
+            skirtFaces,
+            transitionNeighbors);
+        ApplyMixedLodSeamResult(block, seamBuild);
     }
 
     private TerrainSeamFace ResolveRequestedSeamFaces(TerrainBlockId blockId)
@@ -1146,6 +1178,96 @@ public partial class TerrainLodManager : Node3D
         }
 
         return faces;
+    }
+
+    private void ResolveMixedLodSeamInputs(
+        TerrainBlockId blockId,
+        TerrainSeamFace requestedFaces,
+        out TerrainSeamFace skirtFaces,
+        out Dictionary<TerrainSeamFace, TerrainSeamNeighborData> transitionNeighbors)
+    {
+        skirtFaces = TerrainSeamFace.None;
+        transitionNeighbors = new Dictionary<TerrainSeamFace, TerrainSeamNeighborData>();
+        bool preferTransitionMeshes = MixedLodSeamMode.PrefersTransitionMeshes();
+
+        foreach ((TerrainSeamFace face, _) in SeamNeighborDirections)
+        {
+            if ((requestedFaces & face) == 0)
+            {
+                continue;
+            }
+
+            // Requested mixed-LOD faces keep skirt fallback unless a conservative direct coarse-neighbor
+            // transition succeeds later in the build.
+            skirtFaces |= face;
+
+            if (preferTransitionMeshes &&
+                TerrainSeamMesher.SupportsTransitionFace(face) &&
+                TryGetVisibleCoarseNeighborForChildFace(blockId, face, out TerrainBlockId coarseNeighbor) &&
+                TryBuildVisibleSeamNeighborData(coarseNeighbor, out TerrainSeamNeighborData neighborData))
+            {
+                transitionNeighbors[face] = neighborData;
+            }
+        }
+    }
+
+    private bool TryBuildVisibleSeamNeighborData(TerrainBlockId blockId, out TerrainSeamNeighborData neighborData)
+    {
+        neighborData = default;
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+            !IsBlockDisplayingVisuals(block) ||
+            block.Renderer == null ||
+            !IsInstanceValid(block.Renderer))
+        {
+            return false;
+        }
+
+        VoxelMeshBuildResult mesh = block.Renderer.BuildVisualMeshSnapshot(_surfaceColorizer);
+        if (!mesh.HasGeometry)
+        {
+            return false;
+        }
+
+        neighborData = new TerrainSeamNeighborData(
+            blockId,
+            TerrainMetrics.GetBlockOrigin(_config, blockId),
+            mesh);
+        return true;
+    }
+
+    private void ApplyMixedLodSeamResult(TerrainBlockData block, TerrainSeamBuildResult seamBuild)
+    {
+        block.Renderer.UpdateSeamMesh(seamBuild.Mesh);
+        block.SetSeamBuild(seamBuild);
+        _lastMixedLodSeamSummary = BuildMixedLodSeamSummary(block.Id, seamBuild);
+        WriteMixedLodSeamDiagnosticsLog(block.Id, seamBuild);
+    }
+
+    private void WriteMixedLodSeamDiagnosticsLog(TerrainBlockId blockId, TerrainSeamBuildResult seamBuild)
+    {
+        if (seamBuild.FaceDiagnostics == null || seamBuild.FaceDiagnostics.Length == 0 || !EnsureTransitionLogWriter())
+        {
+            return;
+        }
+
+        lock (_transitionLogLock)
+        {
+            _transitionLogWriter!.WriteLine(
+                $"{TransitionLogPrefix} event=seam_build block={blockId} requested={TerrainSeamMesher.DescribeFaces(seamBuild.RequestedFaces)} " +
+                $"generated={TerrainSeamMesher.DescribeFaces(seamBuild.GeneratedFaces)} strategy={seamBuild.Strategy} " +
+                $"transition_faces={seamBuild.TransitionFaceCount} skirt_faces={seamBuild.SkirtFaceCount} skipped_faces={seamBuild.ExplicitSkipFaceCount} suppressed_faces={seamBuild.SuppressedFaceCount} " +
+                $"triangles={seamBuild.Mesh.TotalTriangleCount}");
+
+            foreach (TerrainSeamFaceDiagnostic diagnostic in seamBuild.FaceDiagnostics)
+            {
+                string neighborId = diagnostic.TransitionNeighborId?.ToString() ?? "none";
+                _transitionLogWriter.WriteLine(
+                    $"{TransitionLogPrefix} event=seam_face block={blockId} face={TerrainSeamMesher.DescribeFaces(diagnostic.Face)} " +
+                    $"requested={FormatBool(diagnostic.Requested)} suppressed={FormatBool(diagnostic.Suppressed)} transition_neighbor={neighborId} " +
+                    $"transition_attempted={FormatBool(diagnostic.TransitionAttempted)} transition_succeeded={FormatBool(diagnostic.TransitionSucceeded)} " +
+                    $"skirt_fallback={FormatBool(diagnostic.SkirtFallbackEnabled)} final_mode={TerrainSeamMesher.GetDisplayName(diagnostic.FinalMode)}");
+            }
+        }
     }
 
     private bool ShouldSuppressMixedLodSeamInsideStableRings(TerrainBlockId blockId, TerrainBlockId mixedNeighborParent)
@@ -1189,7 +1311,13 @@ public partial class TerrainLodManager : Node3D
         }
 
         TerrainBlockId parent = GetParentBlock(childBlockId);
-        Vector3I offset = face switch
+        coarseNeighbor = new TerrainBlockId(parent.Lod, parent.Index + GetSeamFaceOffset(face));
+        return HasVisibleSameLodCoverage(coarseNeighbor);
+    }
+
+    private static Vector3I GetSeamFaceOffset(TerrainSeamFace face)
+    {
+        return face switch
         {
             TerrainSeamFace.NegativeX => new Vector3I(-1, 0, 0),
             TerrainSeamFace.PositiveX => new Vector3I(1, 0, 0),
@@ -1199,9 +1327,6 @@ public partial class TerrainLodManager : Node3D
             TerrainSeamFace.PositiveZ => new Vector3I(0, 0, 1),
             _ => Vector3I.Zero
         };
-
-        coarseNeighbor = new TerrainBlockId(parent.Lod, parent.Index + offset);
-        return HasVisibleSameLodCoverage(coarseNeighbor);
     }
 
     private static bool IsChildOnParentOuterFace(TerrainBlockId childBlockId, TerrainSeamFace face)
@@ -2405,6 +2530,7 @@ public partial class TerrainLodManager : Node3D
         int visible = 0;
         int releasable = 0;
         SupersededTransitionProfileSummary supersededSummary = BuildSupersededTransitionProfileSummary();
+        MixedLodSeamProfileSummary seamSummary = BuildMixedLodSeamProfileSummary();
 
         foreach (TerrainBlockData block in _blocks.Values)
         {
@@ -2436,7 +2562,7 @@ public partial class TerrainLodManager : Node3D
             : $"{_currentCenterParent}->{_targetCenterParent}";
         string lodSummary =
             $"{BuildLodSpanSummary()}  raw {_currentViewerParent}  center {centerSummary}  split_r {BuildSplitRadiusSummary()}  " +
-            $"coarse_r {_currentCoarsestRadius}  move_pad {BubbleMovePaddingFraction:0.00}  debug {_activeTerrainDebugView.GetDisplayName()}";
+            $"coarse_r {_currentCoarsestRadius}  move_pad {BubbleMovePaddingFraction:0.00}  debug {_activeTerrainDebugView.GetDisplayName()}  seam {MixedLodSeamMode.GetDisplayName()}";
 
         return new TerrainWorldProfileSnapshot
         {
@@ -2497,6 +2623,14 @@ public partial class TerrainLodManager : Node3D
             WaitingForPhysicsCoverageSupersededBlockCount = supersededSummary.WaitingForPhysicsCoverageCount,
             WaitingForHideSupersededBlockCount = supersededSummary.WaitingForHideCount,
             WaitingForReleaseSupersededBlockCount = supersededSummary.WaitingForReleaseCount,
+            MixedLodSeamMode = MixedLodSeamMode,
+            MixedLodSeamBlockCount = seamSummary.BlockCount,
+            MixedLodTransitionFaceCount = seamSummary.TransitionFaceCount,
+            MixedLodSkirtFaceCount = seamSummary.SkirtFaceCount,
+            MixedLodSkippedFaceCount = seamSummary.ExplicitSkipFaceCount,
+            MixedLodSuppressedFaceCount = seamSummary.SuppressedFaceCount,
+            MixedLodSeamTriangleCount = seamSummary.TriangleCount,
+            LastMixedLodSeamSummary = seamSummary.LastSummary,
             LastSupersededBlockTransitionSummary = supersededSummary.LastSummary,
             LastSelectedChunkSummary = _lastSelectionSummary,
             LastRefinementHandoffSummary = _lastRefinementHandoffSummary,
@@ -2515,6 +2649,7 @@ public partial class TerrainLodManager : Node3D
         int visible = 0;
         int releasable = 0;
         SupersededTransitionProfileSummary supersededSummary = BuildSupersededTransitionProfileSummary();
+        MixedLodSeamProfileSummary seamSummary = BuildMixedLodSeamProfileSummary();
 
         foreach (TerrainBlockData block in _blocks.Values)
         {
@@ -2542,11 +2677,68 @@ public partial class TerrainLodManager : Node3D
             $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
             $"hold {_hysteresisRetainedBlockCount}  blocks {BuildTierCountSummary(_currentLodBlockCounts, 'l', FinestTerrainLod)}  " +
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
+            $"seam {MixedLodSeamMode.GetDisplayName()} t/s/k/sup {seamSummary.TransitionFaceCount}/{seamSummary.SkirtFaceCount}/{seamSummary.ExplicitSkipFaceCount}/{seamSummary.SuppressedFaceCount}  " +
             $"sup a/r/v/h/p/f {supersededSummary.ActiveCount}/{supersededSummary.WaitingForMarkReleasableCount}/{supersededSummary.WaitingForVisualCoverageCount}/{supersededSummary.WaitingForHideCount}/{supersededSummary.WaitingForPhysicsCoverageCount}/{supersededSummary.WaitingForReleaseCount}  " +
             $"dispatch c{_createDispatchTokens.Count}  fq/r/d {_fieldBuildDispatchTokens.Count}/{Volatile.Read(ref _activeFieldWorkerJobs)}/{_completedFieldBuildResults.Count}  " +
             $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{_completedMeshBuildResults.Count}  " +
             $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  " +
             $"set/s {_blockSetChangeRatePerSecond:0.0}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
+    }
+
+    private MixedLodSeamProfileSummary BuildMixedLodSeamProfileSummary()
+    {
+        int blockCount = 0;
+        int transitionFaceCount = 0;
+        int skirtFaceCount = 0;
+        int explicitSkipFaceCount = 0;
+        int suppressedFaceCount = 0;
+        int triangleCount = 0;
+
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (!IsBlockDisplayingVisuals(block))
+            {
+                continue;
+            }
+
+            TerrainSeamBuildResult seamBuild = block.SeamBuild;
+            if (seamBuild.RequestedFaces == TerrainSeamFace.None &&
+                seamBuild.GeneratedFaces == TerrainSeamFace.None)
+            {
+                continue;
+            }
+
+            blockCount++;
+            transitionFaceCount += seamBuild.TransitionFaceCount;
+            skirtFaceCount += seamBuild.SkirtFaceCount;
+            explicitSkipFaceCount += seamBuild.ExplicitSkipFaceCount;
+            suppressedFaceCount += seamBuild.SuppressedFaceCount;
+            triangleCount += seamBuild.Mesh.TotalTriangleCount;
+        }
+
+        return new MixedLodSeamProfileSummary(
+            blockCount,
+            transitionFaceCount,
+            skirtFaceCount,
+            explicitSkipFaceCount,
+            suppressedFaceCount,
+            triangleCount,
+            _lastMixedLodSeamSummary);
+    }
+
+    private string BuildMixedLodSeamSummary(MixedLodSeamProfileSummary summary)
+    {
+        return
+            $"{MixedLodSeamMode.GetDisplayName()}  blocks {summary.BlockCount}  faces t/s/k/sup {summary.TransitionFaceCount}/{summary.SkirtFaceCount}/{summary.ExplicitSkipFaceCount}/{summary.SuppressedFaceCount}  " +
+            $"tri {summary.TriangleCount}  last {summary.LastSummary}";
+    }
+
+    private static string BuildMixedLodSeamSummary(TerrainBlockId blockId, TerrainSeamBuildResult seamBuild)
+    {
+        return
+            $"{blockId} mode {seamBuild.Strategy} req {TerrainSeamMesher.DescribeFaces(seamBuild.RequestedFaces)}  " +
+            $"gen {TerrainSeamMesher.DescribeFaces(seamBuild.GeneratedFaces)}  t/s/k/sup {seamBuild.TransitionFaceCount}/{seamBuild.SkirtFaceCount}/{seamBuild.ExplicitSkipFaceCount}/{seamBuild.SuppressedFaceCount}  " +
+            $"tri {seamBuild.Mesh.TotalTriangleCount}  faces {TerrainSeamMesher.DescribeFaceDiagnostics(seamBuild.FaceDiagnostics)}";
     }
 
     private string BuildSelectionSummary(
@@ -2831,6 +3023,15 @@ public partial class TerrainLodManager : Node3D
         int WaitingForHideCount,
         int WaitingForPhysicsCoverageCount,
         int WaitingForReleaseCount,
+        string LastSummary);
+
+    private readonly record struct MixedLodSeamProfileSummary(
+        int BlockCount,
+        int TransitionFaceCount,
+        int SkirtFaceCount,
+        int ExplicitSkipFaceCount,
+        int SuppressedFaceCount,
+        int TriangleCount,
         string LastSummary);
 
     private enum SupersededTransitionWaitState

@@ -17,6 +17,12 @@ public enum TerrainVisualDebugMode
     Wireframe = 8
 }
 
+public enum TerrainMixedLodSeamMode
+{
+    SkirtsOnly = 0,
+    TransitionPreferred = 1
+}
+
 public static class TerrainVisualDebugModeExtensions
 {
     private static readonly TerrainVisualDebugMode[] RuntimeSelectorModes =
@@ -76,6 +82,24 @@ public static class TerrainVisualDebugModeExtensions
 
         nextIndex %= selectorModes.Length;
         return selectorModes[nextIndex];
+    }
+}
+
+public static class TerrainMixedLodSeamModeExtensions
+{
+    public static bool PrefersTransitionMeshes(this TerrainMixedLodSeamMode mode)
+    {
+        return mode == TerrainMixedLodSeamMode.TransitionPreferred;
+    }
+
+    public static string GetDisplayName(this TerrainMixedLodSeamMode mode)
+    {
+        return mode switch
+        {
+            TerrainMixedLodSeamMode.SkirtsOnly => "Skirts Only",
+            TerrainMixedLodSeamMode.TransitionPreferred => "Transition Preferred",
+            _ => mode.ToString()
+        };
     }
 }
 
