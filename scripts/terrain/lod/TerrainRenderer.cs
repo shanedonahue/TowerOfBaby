@@ -346,6 +346,8 @@ public partial class TerrainRenderer : Node3D
             : TerrainSurfaceMaterialLibrary.TintedLitSurfaceMaterial;
     }
 
+
+
     private static StandardMaterial3D CreateLitVertexColorMaterial()
     {
         return new StandardMaterial3D
