@@ -37,6 +37,9 @@ public sealed class TerrainSurfaceColorizer
     private static readonly Color LowlandColor = new(0.44f, 0.62f, 0.31f, 1.0f);
     private static readonly Color SlopeColor = new(0.61f, 0.50f, 0.34f, 1.0f);
     private static readonly Color PeakColor = new(0.94f, 0.95f, 0.97f, 1.0f);
+    private static readonly Color ExposedSoilColor = new(0.50f, 0.37f, 0.24f, 1.0f);
+    private static readonly Color ExposedRockColor = new(0.54f, 0.53f, 0.50f, 1.0f);
+    private static readonly Color ExposedCliffColor = new(0.60f, 0.52f, 0.39f, 1.0f);
 
     private readonly int _seed;
     private readonly float _terrainHeight;
@@ -160,12 +163,21 @@ public sealed class TerrainSurfaceColorizer
         float flatness)
     {
         VoxelMaterialId materialId = VoxelMaterialPalette.ResolveNearestTintMaterial(materialColor);
-        Color softenedMaterialColor = materialColor.Lerp(VoxelMaterialPalette.GetNeutralColor(materialId), 0.45f);
+        Color neutralMaterialColor = VoxelMaterialPalette.GetNeutralColor(materialId);
+        Color softenedMaterialColor = materialColor.Lerp(neutralMaterialColor, 0.40f);
+        softenedMaterialColor = materialId switch
+        {
+            VoxelMaterialId.Soil => softenedMaterialColor.Lerp(ExposedSoilColor, 0.38f + (flatness * 0.12f)),
+            VoxelMaterialId.Rock => softenedMaterialColor.Lerp(ExposedRockColor, 0.32f + (slope * 0.12f)),
+            VoxelMaterialId.Cliff => softenedMaterialColor.Lerp(ExposedCliffColor, 0.38f + (slope * 0.14f)),
+            _ => softenedMaterialColor
+        };
         float materialBlend = materialId switch
         {
             VoxelMaterialId.Grass => 0.24f + (flatness * 0.10f),
-            VoxelMaterialId.Rock => 0.30f + (slope * 0.10f),
-            VoxelMaterialId.Cliff => 0.36f + (slope * 0.12f),
+            VoxelMaterialId.Soil => 0.34f + (flatness * 0.18f) + (slope * 0.05f),
+            VoxelMaterialId.Rock => 0.42f + (slope * 0.12f),
+            VoxelMaterialId.Cliff => 0.54f + (slope * 0.12f),
             VoxelMaterialId.Snow => 0.42f,
             VoxelMaterialId.Scorched => 0.72f,
             _ => 0.18f + (flatness * 0.06f)

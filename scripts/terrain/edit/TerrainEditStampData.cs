@@ -85,6 +85,16 @@ public readonly record struct TerrainEditStampData(
         return Intersects(WorldBounds, worldBounds);
     }
 
+    public bool OverlapsPrecisely(Aabb worldBounds)
+    {
+        return Kind switch
+        {
+            TerrainEditStampKind.Sphere => IntersectsSphere(worldBounds, Center, Mathf.Max(0.001f, BoundsRadius)),
+            TerrainEditStampKind.Slash => IntersectsSlash(worldBounds, this),
+            _ => Intersects(WorldBounds, worldBounds)
+        };
+    }
+
     public VoxelEditStats Apply(
         VoxelChunkData data,
         Func<Vector3, float, VoxelMaterialId> materialResolver)
@@ -156,6 +166,61 @@ public readonly record struct TerrainEditStampData(
             aEnd.Y > b.Position.Y &&
             a.Position.Z < bEnd.Z &&
             aEnd.Z > b.Position.Z;
+    }
+
+    private static bool IntersectsSphere(Aabb bounds, Vector3 center, float radius)
+    {
+        Vector3 min = bounds.Position;
+        Vector3 max = bounds.End;
+        Vector3 clamped = new(
+            Mathf.Clamp(center.X, min.X, max.X),
+            Mathf.Clamp(center.Y, min.Y, max.Y),
+            Mathf.Clamp(center.Z, min.Z, max.Z));
+        return clamped.DistanceSquaredTo(center) <= (radius * radius);
+    }
+
+    private static bool IntersectsSlash(Aabb bounds, TerrainEditStampData stamp)
+    {
+        Vector3 normal = SafeNormalized(stamp.SurfaceNormal, Vector3.Up);
+        Vector3 direction = SafeNormalized(ProjectOntoPlane(stamp.Direction, normal), Vector3.Forward);
+        Vector3 across = normal.Cross(direction);
+        across = across.LengthSquared() > 0.0001f
+            ? across.Normalized()
+            : SafeNormalized(normal.Cross(Vector3.Forward), Vector3.Right);
+
+        Vector3 center = bounds.Position + (bounds.Size * 0.5f);
+        Vector3 extents = bounds.Size * 0.5f;
+        Vector3 delta = center - stamp.Center;
+        float retexturePadding = Mathf.Max(stamp.RetextureMargin, 0.0f);
+        float halfLength = Mathf.Max((stamp.Length * 0.5f) + (retexturePadding * 0.5f), stamp.BoundsRadius * 0.08f);
+        float halfWidth = Mathf.Max((stamp.Width * 0.5f) + retexturePadding, stamp.BoundsRadius * 0.08f);
+        float halfDepth = Mathf.Max((stamp.Depth * 0.5f) + (retexturePadding * 0.75f), stamp.BoundsRadius * 0.08f);
+
+        return
+            Mathf.Abs(delta.Dot(direction)) <= halfLength + ComputeProjectedExtent(extents, direction) &&
+            Mathf.Abs(delta.Dot(across)) <= halfWidth + ComputeProjectedExtent(extents, across) &&
+            Mathf.Abs(delta.Dot(normal)) <= halfDepth + ComputeProjectedExtent(extents, normal);
+    }
+
+    private static float ComputeProjectedExtent(Vector3 extents, Vector3 axis)
+    {
+        return
+            (Mathf.Abs(axis.X) * extents.X) +
+            (Mathf.Abs(axis.Y) * extents.Y) +
+            (Mathf.Abs(axis.Z) * extents.Z);
+    }
+
+    private static Vector3 SafeNormalized(Vector3 value, Vector3 fallback)
+    {
+        return value.LengthSquared() > 0.0001f
+            ? value.Normalized()
+            : fallback;
+    }
+
+    private static Vector3 ProjectOntoPlane(Vector3 value, Vector3 planeNormal)
+    {
+        Vector3 normal = SafeNormalized(planeNormal, Vector3.Up);
+        return value - (normal * value.Dot(normal));
     }
 
     private static void WriteVector3(BinaryWriter writer, Vector3 value)

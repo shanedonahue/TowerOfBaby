@@ -24,7 +24,7 @@ public partial class TerrainLodManager : Node3D
         double SyncWorkMs)
     {
         public string Summary =>
-            $"blocks {IntersectedBlockCount} visible {VisibleBlockCount} finest {VisibleFinestBlockCount} requeued {RequeuedBlockCount} " +
+            $"blocks {IntersectedBlockCount} vis_direct {VisibleBlockCount}/{VisibleFinestBlockCount} finest requeued {RequeuedBlockCount} " +
             $"visible_queued {QueuedVisibleBlockCount} enqueue_ms {EnqueueMs:0.00} sync_ms {SyncWorkMs:0.00}";
     }
 
@@ -180,13 +180,18 @@ public partial class TerrainLodManager : Node3D
     private int _lastDeformRequeuedBlockCount;
     private int _lastDeformQueuedVisibleBlockCount;
     private int _lastDeformRefreshedTriangleCount;
+    private int _lastDeformVisibleCommitCount;
+    private int _lastDeformSeamRefreshCount;
     private double _lastDeformRegistrationMs;
     private double _lastDeformEnqueueMs;
     private double _lastDeformSyncWorkMs;
     private double _lastDeformAsyncRebuildMs;
     private double _lastDeformVisualApplyMs;
     private double _lastDeformCollisionRebuildMs;
+    private double _lastDeformVisibleConvergenceMs;
     private long _lastDeformOperationSequence;
+    private ulong _lastDeformRegistrationStartUsec;
+    private int _pendingDeformVisibleCommitCount;
     private string _lastEditOperationPrefix = "none";
     private long _refinementHandoffCount;
     private long _releaseHysteresisDeferralCount;
@@ -375,6 +380,7 @@ public partial class TerrainLodManager : Node3D
             mutation,
             stamp,
             operationStartUsec,
+            registrationStartUsec,
             (Time.GetTicksUsec() - registrationStartUsec) / 1000.0);
     }
 
@@ -388,6 +394,7 @@ public partial class TerrainLodManager : Node3D
             mutation,
             null,
             operationStartUsec,
+            registrationStartUsec,
             (Time.GetTicksUsec() - registrationStartUsec) / 1000.0);
     }
 
@@ -480,6 +487,7 @@ public partial class TerrainLodManager : Node3D
         TerrainEditRegionMutationResult mutation,
         TerrainEditStampData? stamp = null,
         ulong operationStartUsec = 0,
+        ulong registrationStartUsec = 0,
         double registrationMs = 0.0)
     {
         if (!mutation.Changed)
@@ -498,12 +506,17 @@ public partial class TerrainLodManager : Node3D
             _lastDeformRequeuedBlockCount = 0;
             _lastDeformQueuedVisibleBlockCount = 0;
             _lastDeformRefreshedTriangleCount = 0;
+            _lastDeformVisibleCommitCount = 0;
+            _lastDeformSeamRefreshCount = 0;
             _lastDeformRegistrationMs = registrationMs;
             _lastDeformEnqueueMs = 0.0;
             _lastDeformSyncWorkMs = 0.0;
             _lastDeformAsyncRebuildMs = 0.0;
             _lastDeformVisualApplyMs = 0.0;
             _lastDeformCollisionRebuildMs = 0.0;
+            _lastDeformVisibleConvergenceMs = 0.0;
+            _lastDeformRegistrationStartUsec = registrationStartUsec;
+            _pendingDeformVisibleCommitCount = 0;
             _lastEditOperationPrefix = $"{operation} none";
             RefreshLastEditOperationSummary();
             _lastEditRegionSummary = _lastEditOperationSummary;
@@ -512,7 +525,7 @@ public partial class TerrainLodManager : Node3D
         }
 
         long operationSequence = ++_deformOperationSequence;
-        TerrainEditInvalidationStats invalidation = InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, operationSequence);
+        TerrainEditInvalidationStats invalidation = InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, stamp, operationSequence);
         double dirtyBoundsVolume = ComputeBoundsVolume(mutation.DirtyWorldBounds);
         int estimatedEditedSamples = EstimateEditedSampleCount(stamp, mutation.DirtyWorldBounds);
         int detailPromotions = invalidation.VisibleFinestBlockCount;
@@ -537,19 +550,27 @@ public partial class TerrainLodManager : Node3D
         _lastDeformRequeuedBlockCount = invalidation.RequeuedBlockCount;
         _lastDeformQueuedVisibleBlockCount = invalidation.QueuedVisibleBlockCount;
         _lastDeformRefreshedTriangleCount = 0;
+        _lastDeformVisibleCommitCount = 0;
+        _lastDeformSeamRefreshCount = 0;
         _lastDeformRegistrationMs = registrationMs;
         _lastDeformEnqueueMs = invalidation.EnqueueMs;
         _lastDeformSyncWorkMs = invalidation.SyncWorkMs;
         _lastDeformAsyncRebuildMs = 0.0;
         _lastDeformVisualApplyMs = 0.0;
         _lastDeformCollisionRebuildMs = 0.0;
+        _lastDeformVisibleConvergenceMs = 0.0;
+        _lastDeformRegistrationStartUsec = registrationStartUsec;
+        _pendingDeformVisibleCommitCount = invalidation.VisibleBlockCount;
         _lastEditOperationPrefix = $"{operation} {mutation.Summary} {invalidation.Summary} est_samples {estimatedEditedSamples}";
         RefreshLastEditOperationSummary();
         _lastEditRegionSummary = _lastEditOperationSummary;
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
 
-    private TerrainEditInvalidationStats InvalidateBlocksForEditMutation(Aabb dirtyWorldBounds, long operationSequence)
+    private TerrainEditInvalidationStats InvalidateBlocksForEditMutation(
+        Aabb dirtyWorldBounds,
+        TerrainEditStampData? stamp,
+        long operationSequence)
     {
         ulong enqueueStartUsec = Time.GetTicksUsec();
         List<TerrainBlockData> displayedBlocks = new();
@@ -560,15 +581,23 @@ public partial class TerrainLodManager : Node3D
 
         foreach (TerrainBlockData block in _blocks.Values)
         {
-            if (!TerrainMetrics.GetBlockBounds(_config, block.Id).Intersects(dirtyWorldBounds))
+            Aabb blockBounds = TerrainMetrics.GetBlockBounds(_config, block.Id);
+            bool intersectsDirtyBounds = blockBounds.Intersects(dirtyWorldBounds);
+            bool intersectsDirectEdit = stamp?.OverlapsPrecisely(blockBounds) ?? intersectsDirtyBounds;
+            if (!intersectsDirtyBounds && !intersectsDirectEdit)
             {
                 continue;
             }
 
-            intersectedBlockCount++;
             if (IsBlockDisplayingVisuals(block))
             {
+                if (!intersectsDirectEdit)
+                {
+                    continue;
+                }
+
                 displayedBlocks.Add(block);
+                intersectedBlockCount++;
                 if (block.Id.Lod == FinestTerrainLod)
                 {
                     visibleFinestBlockCount++;
@@ -577,6 +606,12 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
+            if (!intersectsDirtyBounds)
+            {
+                continue;
+            }
+
+            intersectedBlockCount++;
             if (block.State is TerrainBlockState.Requested or TerrainBlockState.FieldReady or TerrainBlockState.MeshReady)
             {
                 block.InvalidatePendingBuildData();
@@ -622,6 +657,7 @@ public partial class TerrainLodManager : Node3D
             $"{_lastEditOperationPrefix} reg_ms {_lastDeformRegistrationMs:0.00} enqueue_ms {_lastDeformEnqueueMs:0.00} " +
             $"sync_ms {_lastDeformSyncWorkMs:0.00} async_ms {_lastDeformAsyncRebuildMs:0.00} " +
             $"apply_ms {_lastDeformVisualApplyMs:0.00} collision_ms {_lastDeformCollisionRebuildMs:0.00} " +
+            $"commit {_lastDeformVisibleCommitCount} seam {_lastDeformSeamRefreshCount} converge_ms {_lastDeformVisibleConvergenceMs:0.00} " +
             $"tri {_lastDeformRefreshedTriangleCount} total_ms {_lastDeformMs:0.00}";
     }
 
@@ -648,6 +684,29 @@ public partial class TerrainLodManager : Node3D
         RefreshLastEditOperationSummary();
     }
 
+    private void AccumulateDisplayedRefreshCommit(long operationSequence)
+    {
+        if (operationSequence == 0 || operationSequence != _lastDeformOperationSequence)
+        {
+            return;
+        }
+
+        _lastDeformVisibleCommitCount++;
+        _pendingDeformVisibleCommitCount = Math.Max(0, _pendingDeformVisibleCommitCount - 1);
+        RefreshLastEditOperationSummary();
+    }
+
+    private void AccumulateDisplayedRefreshSeamRefresh(long operationSequence, int seamRefreshCount)
+    {
+        if (operationSequence == 0 || operationSequence != _lastDeformOperationSequence || seamRefreshCount <= 0)
+        {
+            return;
+        }
+
+        _lastDeformSeamRefreshCount += seamRefreshCount;
+        RefreshLastEditOperationSummary();
+    }
+
     private void AccumulateDisplayedRefreshCollisionRebuild(long operationSequence, double collisionMs)
     {
         if (operationSequence == 0 || operationSequence != _lastDeformOperationSequence)
@@ -656,6 +715,22 @@ public partial class TerrainLodManager : Node3D
         }
 
         _lastDeformCollisionRebuildMs += collisionMs;
+        RefreshLastEditOperationSummary();
+    }
+
+    private void TryFinalizeDisplayedRefreshConvergence(long operationSequence)
+    {
+        if (operationSequence == 0 ||
+            operationSequence != _lastDeformOperationSequence ||
+            _lastDeformVisibleBlockCount <= 0 ||
+            _pendingDeformVisibleCommitCount > 0 ||
+            _lastDeformVisibleConvergenceMs > 0.0 ||
+            _lastDeformRegistrationStartUsec == 0)
+        {
+            return;
+        }
+
+        _lastDeformVisibleConvergenceMs = (Time.GetTicksUsec() - _lastDeformRegistrationStartUsec) / 1000.0;
         RefreshLastEditOperationSummary();
     }
 
@@ -1517,6 +1592,8 @@ public partial class TerrainLodManager : Node3D
     {
         int commitBudget = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame);
         List<TerrainBlockId> deferredCommitRequeues = new();
+        HashSet<TerrainBlockId> displayedRefreshSeamRoots = new();
+        HashSet<TerrainBlockId> currentDeformSeamRoots = new();
         while (_lastCommitCount < commitBudget &&
                TryDequeueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1557,7 +1634,7 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
-            CommitDisplayedRefreshBlock(block);
+            CommitDisplayedRefreshBlock(block, displayedRefreshSeamRoots, currentDeformSeamRoots);
         }
 
         foreach (TerrainBlockId deferredBlockId in deferredCommitRequeues)
@@ -1569,9 +1646,34 @@ public partial class TerrainLodManager : Node3D
                 EnqueueCommitDispatch(deferredBlockId);
             }
         }
+
+        if (displayedRefreshSeamRoots.Count > 0)
+        {
+            HashSet<TerrainBlockId> refreshedSeamBlocks = RefreshVisibleMixedLodSeamsImmediately(
+                CollectImmediateSeamCandidates(displayedRefreshSeamRoots));
+            if (currentDeformSeamRoots.Count > 0)
+            {
+                HashSet<TerrainBlockId> currentDeformCandidates = CollectImmediateSeamCandidates(currentDeformSeamRoots);
+                int currentDeformRefreshCount = 0;
+                foreach (TerrainBlockId refreshedBlockId in refreshedSeamBlocks)
+                {
+                    if (currentDeformCandidates.Contains(refreshedBlockId))
+                    {
+                        currentDeformRefreshCount++;
+                    }
+                }
+
+                AccumulateDisplayedRefreshSeamRefresh(_lastDeformOperationSequence, currentDeformRefreshCount);
+            }
+        }
+
+        TryFinalizeDisplayedRefreshConvergence(_lastDeformOperationSequence);
     }
 
-    private void CommitDisplayedRefreshBlock(TerrainBlockData block)
+    private void CommitDisplayedRefreshBlock(
+        TerrainBlockData block,
+        HashSet<TerrainBlockId> displayedRefreshSeamRoots,
+        HashSet<TerrainBlockId> currentDeformSeamRoots)
     {
         if (block.Renderer == null || !IsInstanceValid(block.Renderer))
         {
@@ -1589,11 +1691,17 @@ public partial class TerrainLodManager : Node3D
         ulong applyStartUsec = Time.GetTicksUsec();
         block.Renderer.ApplyVisualMesh(mesh, _activeTerrainDebugView, _surfaceColorizer);
         block.RefreshDisplayedContent(mesh, collisionPending: queueCollisionRefresh);
-        MarkVisibleMixedLodSeamsDirtyAround(block.Id);
+        displayedRefreshSeamRoots.Add(block.Id);
+        if (operationSequence == _lastDeformOperationSequence)
+        {
+            currentDeformSeamRoots.Add(block.Id);
+        }
+
         double applyMs = (Time.GetTicksUsec() - applyStartUsec) / 1000.0;
         _lastCommitMs += applyMs;
         _lastCommitCount++;
         AccumulateDisplayedRefreshVisualApply(operationSequence, applyMs, mesh.TotalTriangleCount);
+        AccumulateDisplayedRefreshCommit(operationSequence);
         if (queueCollisionRefresh)
         {
             block.SetPendingCollisionRefreshOperation(operationSequence);
@@ -1793,6 +1901,48 @@ public partial class TerrainLodManager : Node3D
         {
             RefreshVisibleMixedLodSeam(blockId);
         }
+    }
+
+    private HashSet<TerrainBlockId> CollectImmediateSeamCandidates(IEnumerable<TerrainBlockId> rootBlockIds)
+    {
+        HashSet<TerrainBlockId> candidates = new();
+        foreach (TerrainBlockId rootBlockId in rootBlockIds)
+        {
+            foreach (TerrainBlockId candidate in EnumeratePotentialSeamBlocks(rootBlockId))
+            {
+                candidates.Add(candidate);
+            }
+        }
+
+        return candidates;
+    }
+
+    private HashSet<TerrainBlockId> RefreshVisibleMixedLodSeamsImmediately(IReadOnlyCollection<TerrainBlockId> candidateBlockIds)
+    {
+        HashSet<TerrainBlockId> refreshed = new();
+        if (_allVisibleMixedLodSeamsDirty || candidateBlockIds.Count == 0)
+        {
+            return refreshed;
+        }
+
+        List<TerrainBlockId> orderedCandidates = new(candidateBlockIds);
+        orderedCandidates.Sort(CompareTerrainBlockIds);
+        foreach (TerrainBlockId blockId in orderedCandidates)
+        {
+            _dirtyVisibleMixedLodSeamBlocks.Remove(blockId);
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+                !IsBlockDisplayingVisuals(block) ||
+                block.Renderer == null ||
+                !IsInstanceValid(block.Renderer))
+            {
+                continue;
+            }
+
+            RefreshVisibleMixedLodSeam(blockId);
+            refreshed.Add(blockId);
+        }
+
+        return refreshed;
     }
 
     private void MarkAllVisibleMixedLodSeamsDirty()
@@ -3438,6 +3588,8 @@ public partial class TerrainLodManager : Node3D
             LastDeformRequeuedBlockCount = _lastDeformRequeuedBlockCount,
             LastDeformQueuedVisibleBlockCount = _lastDeformQueuedVisibleBlockCount,
             LastDeformRefreshedTriangleCount = _lastDeformRefreshedTriangleCount,
+            LastDeformVisibleCommitCount = _lastDeformVisibleCommitCount,
+            LastDeformSeamRefreshCount = _lastDeformSeamRefreshCount,
             LastDeformSyncRefreshMs = _lastDeformSyncWorkMs,
             LastDeformRegistrationMs = _lastDeformRegistrationMs,
             LastDeformEnqueueMs = _lastDeformEnqueueMs,
@@ -3445,6 +3597,7 @@ public partial class TerrainLodManager : Node3D
             LastDeformAsyncRebuildMs = _lastDeformAsyncRebuildMs,
             LastDeformVisualApplyMs = _lastDeformVisualApplyMs,
             LastDeformCollisionRebuildMs = _lastDeformCollisionRebuildMs,
+            LastDeformVisibleConvergenceMs = _lastDeformVisibleConvergenceMs,
             TrackedBiomeSummary = viewerSummary,
             TrackedDetailSummary = BuildLifecycleSummary(),
             TrackedCoverageStateSummary = lodSummary,

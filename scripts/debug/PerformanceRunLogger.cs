@@ -592,6 +592,7 @@ public partial class PerformanceRunLogger : Node
                         $"hidden_requeue {latestSnapshot.LastDeformRequeuedBlockCount} visible_queue {latestSnapshot.LastDeformQueuedVisibleBlockCount} " +
                         $"reg/enqueue/sync {latestSnapshot.LastDeformRegistrationMs:0.00}/{latestSnapshot.LastDeformEnqueueMs:0.00}/{latestSnapshot.LastDeformSyncWorkMs:0.00} ms " +
                         $"async/apply/collision {latestSnapshot.LastDeformAsyncRebuildMs:0.00}/{latestSnapshot.LastDeformVisualApplyMs:0.00}/{latestSnapshot.LastDeformCollisionRebuildMs:0.00} ms " +
+                        $"commit/seam/converge {latestSnapshot.LastDeformVisibleCommitCount}/{latestSnapshot.LastDeformSeamRefreshCount}/{latestSnapshot.LastDeformVisibleConvergenceMs:0.00} ms " +
                         $"tri {latestSnapshot.LastDeformRefreshedTriangleCount} samples {latestSnapshot.LastDeformEditedSampleCount} " +
                         $"dirty {latestSnapshot.LastDeformDirtyBoundsVolume:0.00} detail {latestSnapshot.LastDeformEditDetailPromotionCount}");
                 }

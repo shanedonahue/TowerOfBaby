@@ -45,6 +45,10 @@ public readonly record struct VoxelEditStats(
 
 public static class VoxelTerrainEditing
 {
+    private const float NearSurfaceMaterialBias = 0.55f;
+    private const float FlatExposedUpDot = 0.74f;
+    private const float SlopedExposedUpDot = 0.42f;
+
     public static VoxelEditStats ApplySphere(
         VoxelChunkData data,
         VoxelSphereEdit edit,
@@ -118,11 +122,15 @@ public static class VoxelTerrainEditing
                     float density = data.GetDensity(x, y, z);
                     float distance = position.DistanceTo(edit.Center);
                     float paintInfluence = 1.0f - Mathf.Clamp(distance / retextureRadius, 0.0f, 1.0f);
-                    VoxelMaterialId nextMaterial = materialResolver(position, density);
+                    VoxelMaterialId terrainMaterial = materialResolver(position, density);
+                    VoxelMaterialId nextMaterial = terrainMaterial;
                     if ((paintInfluence * edit.PaintStrength) >= 0.18f &&
-                        density >= data.IsoLevel - (data.VoxelSize * 0.55f))
+                        density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
-                        nextMaterial = VoxelMaterialId.Scorched;
+                        nextMaterial = ResolveEditedSurfaceMaterial(
+                            terrainMaterial,
+                            position - edit.Center,
+                            edit.DeltaDensity);
                     }
 
                     if (data.GetMaterial(x, y, z) != nextMaterial)
@@ -228,11 +236,21 @@ public static class VoxelTerrainEditing
 
                     materialSamplesTouched++;
                     float density = data.GetDensity(x, y, z);
-                    VoxelMaterialId nextMaterial = materialResolver(position, density);
+                    VoxelMaterialId terrainMaterial = materialResolver(position, density);
+                    VoxelMaterialId nextMaterial = terrainMaterial;
                     if ((paintInfluence * edit.PaintStrength) >= 0.16f &&
-                        density >= data.IsoLevel - (data.VoxelSize * 0.55f))
+                        density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
-                        nextMaterial = VoxelMaterialId.Scorched;
+                        Vector3 exposureNormal = normal;
+                        if ((position - edit.Center).Dot(normal) < 0.0f)
+                        {
+                            exposureNormal = -normal;
+                        }
+
+                        nextMaterial = ResolveEditedSurfaceMaterial(
+                            terrainMaterial,
+                            exposureNormal,
+                            edit.DensityDelta);
                     }
 
                     if (data.GetMaterial(x, y, z) != nextMaterial)
@@ -302,6 +320,49 @@ public static class VoxelTerrainEditing
         float radialWeight = 1.0f - radial;
         radialWeight *= radialWeight;
         return alongWeight * radialWeight;
+    }
+
+    private static VoxelMaterialId ResolveEditedSurfaceMaterial(
+        VoxelMaterialId terrainMaterial,
+        Vector3 exposureNormal,
+        float densityDelta)
+    {
+        float upness = Mathf.Abs(SafeNormalized(exposureNormal, Vector3.Up).Dot(Vector3.Up));
+
+        if (densityDelta > 0.0f)
+        {
+            if (upness >= FlatExposedUpDot)
+            {
+                return terrainMaterial is VoxelMaterialId.Grass or VoxelMaterialId.Soil
+                    ? VoxelMaterialId.Grass
+                    : terrainMaterial;
+            }
+
+            return upness >= SlopedExposedUpDot
+                ? VoxelMaterialId.Soil
+                : VoxelMaterialId.Rock;
+        }
+
+        if (terrainMaterial == VoxelMaterialId.Snow && upness < 0.86f)
+        {
+            terrainMaterial = VoxelMaterialId.Rock;
+        }
+
+        if (upness >= FlatExposedUpDot)
+        {
+            return terrainMaterial is VoxelMaterialId.Rock or VoxelMaterialId.Cliff or VoxelMaterialId.Snow
+                ? VoxelMaterialId.Rock
+                : VoxelMaterialId.Soil;
+        }
+
+        if (upness >= SlopedExposedUpDot)
+        {
+            return terrainMaterial is VoxelMaterialId.Grass or VoxelMaterialId.Soil
+                ? VoxelMaterialId.Soil
+                : VoxelMaterialId.Rock;
+        }
+
+        return VoxelMaterialId.Cliff;
     }
 
     private static Vector3 SafeNormalized(Vector3 value, Vector3 fallback)
