@@ -89,7 +89,7 @@ public static class TerrainMixedLodSeamModeExtensions
 {
     public static bool PrefersTransitionMeshes(this TerrainMixedLodSeamMode mode)
     {
-        return mode == TerrainMixedLodSeamMode.TransitionPreferred;
+        return mode == TerrainMixedLodSeamMode.TransitionPreferred && OS.IsDebugBuild();
     }
 
     public static string GetDisplayName(this TerrainMixedLodSeamMode mode)
@@ -97,7 +97,7 @@ public static class TerrainMixedLodSeamModeExtensions
         return mode switch
         {
             TerrainMixedLodSeamMode.SkirtsOnly => "Skirts Only",
-            TerrainMixedLodSeamMode.TransitionPreferred => "Transition Preferred",
+            TerrainMixedLodSeamMode.TransitionPreferred => "Transition Preferred (Experimental)",
             _ => mode.ToString()
         };
     }

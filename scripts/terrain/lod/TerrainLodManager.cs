@@ -25,6 +25,7 @@ public partial class TerrainLodManager : Node3D
     private const int MaxMeshCommitsPerFrame = 16;
     private const int MaxCollisionBuildsPerFrame = 16;
     private const int MaxReleasesPerFrame = 32;
+    private const int MaxCoherentPromotionBatchSuccessors = 8;
     private static readonly (TerrainSeamFace Face, Vector3I Offset)[] SeamNeighborDirections =
     {
         (TerrainSeamFace.NegativeX, new Vector3I(-1, 0, 0)),
@@ -92,6 +93,7 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<TerrainBlockId, int> _collisionDispatchTokens = new();
     private readonly Dictionary<TerrainBlockId, int> _releaseDispatchTokens = new();
     private readonly object _transitionLogLock = new();
+    private readonly HashSet<TerrainBlockId> _dirtyVisibleMixedLodSeamBlocks = new();
 
     private TerrainConfig _config = null!;
     private TerrainChunkStore _chunkStore = null!;
@@ -159,6 +161,7 @@ public partial class TerrainLodManager : Node3D
     private bool _warnedTransitionLogFailure;
     private string _lastSupersededTransitionSummary = "none";
     private string _lastMixedLodSeamSummary = "none";
+    private bool _allVisibleMixedLodSeamsDirty;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -188,9 +191,9 @@ public partial class TerrainLodManager : Node3D
     {
         _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
         _trackedCharacter ??= ResolveTrackedCharacter();
-        RefreshVisibleMixedLodSeamsIfNeeded();
         if (_trackedCharacter == null)
         {
+            RefreshVisibleMixedLodSeamsIfNeeded();
             RefreshLifecycleRates();
             _latestProfileSnapshot = BuildProfileSnapshot();
             return;
@@ -211,6 +214,7 @@ public partial class TerrainLodManager : Node3D
         _lastViewerPosition = _trackedCharacter.GlobalTransform.Origin;
         UpdateDesiredBlocks(_lastViewerPosition);
         DispatchRuntimeWork();
+        RefreshVisibleMixedLodSeamsIfNeeded();
         RefreshLifecycleRates();
         UpdateInitialLoadState();
         _latestProfileSnapshot = BuildProfileSnapshot();
@@ -218,13 +222,32 @@ public partial class TerrainLodManager : Node3D
 
     private void RefreshVisibleMixedLodSeamsIfNeeded()
     {
-        if (_appliedMixedLodSeamMode == MixedLodSeamMode)
+        if (_appliedMixedLodSeamMode != MixedLodSeamMode)
+        {
+            _appliedMixedLodSeamMode = MixedLodSeamMode;
+            MarkAllVisibleMixedLodSeamsDirty();
+        }
+
+        if (_allVisibleMixedLodSeamsDirty)
+        {
+            _allVisibleMixedLodSeamsDirty = false;
+            _dirtyVisibleMixedLodSeamBlocks.Clear();
+            RefreshAllVisibleMixedLodSeams();
+            return;
+        }
+
+        if (_dirtyVisibleMixedLodSeamBlocks.Count == 0)
         {
             return;
         }
 
-        _appliedMixedLodSeamMode = MixedLodSeamMode;
-        RefreshAllVisibleMixedLodSeams();
+        List<TerrainBlockId> dirtyBlockIds = new(_dirtyVisibleMixedLodSeamBlocks);
+        _dirtyVisibleMixedLodSeamBlocks.Clear();
+        dirtyBlockIds.Sort(CompareTerrainBlockIds);
+        foreach (TerrainBlockId blockId in dirtyBlockIds)
+        {
+            RefreshVisibleMixedLodSeam(blockId);
+        }
     }
 
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
@@ -309,7 +332,8 @@ public partial class TerrainLodManager : Node3D
             block.Renderer.SetDebugView(_activeTerrainDebugView, _surfaceColorizer);
         }
 
-        RefreshAllVisibleMixedLodSeams();
+        MarkAllVisibleMixedLodSeamsDirty();
+        RefreshVisibleMixedLodSeamsIfNeeded();
         _latestProfileSnapshot = BuildProfileSnapshot();
         return true;
     }
@@ -447,7 +471,7 @@ public partial class TerrainLodManager : Node3D
             });
         block.Renderer.ApplyMesh(mesh, includeCollision, _activeTerrainDebugView, _surfaceColorizer);
         block.RefreshDisplayedContent(mesh, collisionPending: false);
-        RefreshVisibleMixedLodSeamsAround(block.Id);
+        MarkVisibleMixedLodSeamsDirtyAround(block.Id);
         _lastCommitSummary = $"{block.Id} edit_refresh {operation} tri {mesh.TotalTriangleCount}";
     }
 
@@ -659,6 +683,7 @@ public partial class TerrainLodManager : Node3D
             splitParentsByLod[parentLod] = splitParents;
         }
 
+        ApplyStickyEditRegionSplitParents(splitParentsByLod);
         return splitParentsByLod;
     }
 
@@ -714,6 +739,117 @@ public partial class TerrainLodManager : Node3D
         }
 
         return filtered;
+    }
+
+    private void ApplyStickyEditRegionSplitParents(Dictionary<int, HashSet<TerrainBlockId>> splitParentsByLod)
+    {
+        if (_editRegionManager == null || _editRegionManager.RegionCount == 0 || GetCoarsestLod() <= FinestTerrainLod)
+        {
+            return;
+        }
+
+        Aabb visibleCoverageBounds = BuildBaseDesiredCoverageBounds();
+        TerrainEditRegion[] candidateRegions = _editRegionManager.QueryOverlapping(visibleCoverageBounds);
+        foreach (TerrainEditRegion region in candidateRegions)
+        {
+            if (!IsStickyEditRegion(region) ||
+                !TryIntersectBounds(region.WorldBounds, visibleCoverageBounds, out Aabb overlapBounds))
+            {
+                continue;
+            }
+
+            // Sticky edit regions keep their visible area refined to the finest block LOD even after the
+            // player bubble drifts away, without expanding the coarse residency footprint.
+            foreach (TerrainBlockId finestBlock in EnumerateBlocksOverlappingBounds(overlapBounds, FinestTerrainLod))
+            {
+                for (int parentLod = FinestTerrainLod + 1; parentLod <= GetCoarsestLod(); parentLod++)
+                {
+                    GetOrCreateSplitParentSet(splitParentsByLod, parentLod).Add(GetAncestorBlock(finestBlock, parentLod));
+                }
+            }
+        }
+    }
+
+    private Aabb BuildBaseDesiredCoverageBounds()
+    {
+        int coarsestLod = GetCoarsestLod();
+        int outerRadius = Mathf.Max(1, CoarsestRadiusXZ);
+        int verticalRadius = Mathf.Max(0, _config.VerticalRadius);
+        TerrainBlockId coarsestCenter = GetAncestorBlock(_currentCenterParent, coarsestLod);
+        TerrainBlockId minBlock = new(
+            coarsestLod,
+            coarsestCenter.Index + new Vector3I(-outerRadius, -verticalRadius, -outerRadius));
+        TerrainBlockId maxBlock = new(
+            coarsestLod,
+            coarsestCenter.Index + new Vector3I(outerRadius, verticalRadius, outerRadius));
+        float span = TerrainMetrics.GetBlockSpan(_config, coarsestLod);
+        Vector3 minOrigin = TerrainMetrics.GetBlockOrigin(_config, minBlock);
+        Vector3 maxEnd = TerrainMetrics.GetBlockOrigin(_config, maxBlock) + (Vector3.One * span);
+        return new Aabb(minOrigin, maxEnd - minOrigin);
+    }
+
+    private static HashSet<TerrainBlockId> GetOrCreateSplitParentSet(
+        Dictionary<int, HashSet<TerrainBlockId>> splitParentsByLod,
+        int parentLod)
+    {
+        if (!splitParentsByLod.TryGetValue(parentLod, out HashSet<TerrainBlockId> splitParents))
+        {
+            splitParents = new HashSet<TerrainBlockId>();
+            splitParentsByLod[parentLod] = splitParents;
+        }
+
+        return splitParents;
+    }
+
+    private IEnumerable<TerrainBlockId> EnumerateBlocksOverlappingBounds(Aabb worldBounds, int lod)
+    {
+        Vector3 min = worldBounds.Position;
+        Vector3 maxExclusive = new(
+            Mathf.Max(min.X, worldBounds.End.X - 0.001f),
+            Mathf.Max(min.Y, worldBounds.End.Y - 0.001f),
+            Mathf.Max(min.Z, worldBounds.End.Z - 0.001f));
+        TerrainBlockId minBlock = TerrainMetrics.GetBlockForWorldPosition(_config, lod, min);
+        TerrainBlockId maxBlock = TerrainMetrics.GetBlockForWorldPosition(_config, lod, maxExclusive);
+        for (int z = minBlock.Index.Z; z <= maxBlock.Index.Z; z++)
+        {
+            for (int y = minBlock.Index.Y; y <= maxBlock.Index.Y; y++)
+            {
+                for (int x = minBlock.Index.X; x <= maxBlock.Index.X; x++)
+                {
+                    yield return new TerrainBlockId(lod, new Vector3I(x, y, z));
+                }
+            }
+        }
+    }
+
+    private static bool TryIntersectBounds(Aabb a, Aabb b, out Aabb intersection)
+    {
+        Vector3 aEnd = a.Position + a.Size;
+        Vector3 bEnd = b.Position + b.Size;
+        Vector3 min = new(
+            Mathf.Max(a.Position.X, b.Position.X),
+            Mathf.Max(a.Position.Y, b.Position.Y),
+            Mathf.Max(a.Position.Z, b.Position.Z));
+        Vector3 max = new(
+            Mathf.Min(aEnd.X, bEnd.X),
+            Mathf.Min(aEnd.Y, bEnd.Y),
+            Mathf.Min(aEnd.Z, bEnd.Z));
+        Vector3 size = max - min;
+        if (size.X <= 0.001f || size.Y <= 0.001f || size.Z <= 0.001f)
+        {
+            intersection = default;
+            return false;
+        }
+
+        intersection = new Aabb(min, size);
+        return true;
+    }
+
+    private static bool IsStickyEditRegion(TerrainEditRegion region)
+    {
+        return region != null &&
+               region.Sticky &&
+               region.Source == TerrainDetailRegionSource.Edit;
     }
 
     private HashSet<TerrainBlockId> BuildDesiredSet(IReadOnlyDictionary<int, HashSet<TerrainBlockId>> splitParentsByLod)
@@ -1007,6 +1143,7 @@ public partial class TerrainLodManager : Node3D
     private void ProcessMeshCommitDispatch()
     {
         int commitBudget = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame);
+        List<TerrainBlockId> deferredCommitRequeues = new();
         while (_lastCommitCount < commitBudget &&
                TryDequeueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1022,24 +1159,31 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
-            bool includeCollision = ShouldIncludeCollision(block.Id) && block.TriangleCount > 0;
-            ulong commitStart = Time.GetTicksUsec();
-            block.Renderer.ApplyVisualMesh(block.Mesh, _activeTerrainDebugView, _surfaceColorizer);
-            block.MarkVisible(collisionPending: includeCollision);
-            RecordReplacementVisualsReady(block.Id);
-            TryHideSupersededCoverageAround(block.Id);
-            RefreshVisibleMixedLodSeamsAround(block.Id);
-            _lastCommitMs += (Time.GetTicksUsec() - commitStart) / 1000.0;
-            _lastCommitCount++;
-            if (includeCollision)
+            if (TryResolveCoherentPromotionBatch(block.Id, out TerrainBlockId outgoingParent, out List<TerrainBlockId> promotionBatch, out bool waitForBatch))
             {
-                EnqueueCollisionDispatch(block.Id);
+                if (waitForBatch)
+                {
+                    deferredCommitRequeues.Add(block.Id);
+                    continue;
+                }
+
+                int committedCount = CommitVisibleMeshBatch(promotionBatch, outgoingParent);
+                if (committedCount > 0)
+                {
+                    continue;
+                }
             }
 
-            _lastCommitSummary = $"{block.Id} tri {block.TriangleCount} {(includeCollision ? "collision_queued" : "visual_only")}";
-            if (_startupBlocks.Contains(block.Id))
+            CommitVisibleMeshBlock(block);
+        }
+
+        foreach (TerrainBlockId deferredBlockId in deferredCommitRequeues)
+        {
+            if (_blocks.TryGetValue(deferredBlockId, out TerrainBlockData deferredBlock) &&
+                deferredBlock.Desired &&
+                deferredBlock.State == TerrainBlockState.MeshReady)
             {
-                _startupSatisfiedBlocks.Add(block.Id);
+                EnqueueCommitDispatch(deferredBlockId);
             }
         }
     }
@@ -1141,18 +1285,27 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
+            TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(block.Id);
+            bool visualCoverageReady = HasReadyVisualSuccessorCoverage(block.Id, coverage);
+            if (visualCoverageReady)
+            {
+                TryHideSupersededBlock(block.Id, coverage);
+            }
+
             if (block.IsHeldForRelease(_currentTimeSeconds))
             {
                 _lastReleaseHysteresisDeferralCount++;
                 _releaseHysteresisDeferralCount++;
-                ObserveSupersededBlockTransition(block.Id, block, "release_deferred_hysteresis");
+                ObserveSupersededBlockTransition(
+                    block.Id,
+                    block,
+                    ResolveReleaseDeferralReason(block, coverage),
+                    coverage);
                 QueueDeferredRelease(blockId, deferredRequeues);
                 bypassedDeferredBlockCount++;
                 continue;
             }
 
-            TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(block.Id);
-            bool visualCoverageReady = HasReadyVisualSuccessorCoverage(block.Id, coverage);
             bool physicsCoverageReady = HasReadyPhysicsSuccessorCoverage(block.Id, coverage);
             if (!visualCoverageReady || !physicsCoverageReady)
             {
@@ -1161,7 +1314,7 @@ public partial class TerrainLodManager : Node3D
                 ObserveSupersededBlockTransition(
                     block.Id,
                     block,
-                    visualCoverageReady ? coverage.PhysicsDeferralReason : coverage.VisualDeferralReason,
+                    ResolveReleaseDeferralReason(block, coverage),
                     coverage);
                 QueueDeferredRelease(blockId, deferredRequeues);
                 bypassedDeferredBlockCount++;
@@ -1198,7 +1351,7 @@ public partial class TerrainLodManager : Node3D
         block.CancelPendingData();
         block.Renderer.QueueFree();
         RemoveBlockFromDispatcherQueues(blockId);
-        RefreshVisibleMixedLodSeamsAround(blockId);
+        MarkVisibleMixedLodSeamsDirtyAround(blockId);
         _lastReleaseCount++;
         _recentReleaseTimes.Enqueue(_currentTimeSeconds);
         _lastReleaseSummary = $"{blockId} {reason}";
@@ -1206,23 +1359,38 @@ public partial class TerrainLodManager : Node3D
 
     private void RefreshAllVisibleMixedLodSeams()
     {
+        List<TerrainBlockId> blockIds = new();
         foreach (TerrainBlockData block in _blocks.Values)
         {
-            RefreshVisibleMixedLodSeam(block.Id);
+            if (IsBlockDisplayingVisuals(block))
+            {
+                blockIds.Add(block.Id);
+            }
+        }
+
+        blockIds.Sort(CompareTerrainBlockIds);
+        foreach (TerrainBlockId blockId in blockIds)
+        {
+            RefreshVisibleMixedLodSeam(blockId);
         }
     }
 
-    private void RefreshVisibleMixedLodSeamsAround(TerrainBlockId changedBlockId)
+    private void MarkAllVisibleMixedLodSeamsDirty()
     {
-        HashSet<TerrainBlockId> candidates = new();
-        foreach (TerrainBlockId candidate in EnumeratePotentialSeamBlocks(changedBlockId))
+        _allVisibleMixedLodSeamsDirty = true;
+        _dirtyVisibleMixedLodSeamBlocks.Clear();
+    }
+
+    private void MarkVisibleMixedLodSeamsDirtyAround(TerrainBlockId changedBlockId)
+    {
+        if (_allVisibleMixedLodSeamsDirty)
         {
-            candidates.Add(candidate);
+            return;
         }
 
-        foreach (TerrainBlockId candidate in candidates)
+        foreach (TerrainBlockId candidate in EnumeratePotentialSeamBlocks(changedBlockId))
         {
-            RefreshVisibleMixedLodSeam(candidate);
+            _dirtyVisibleMixedLodSeamBlocks.Add(candidate);
         }
     }
 
@@ -1699,6 +1867,80 @@ public partial class TerrainLodManager : Node3D
         return descendants.Count > 0;
     }
 
+    private bool TryResolveCoherentPromotionBatch(
+        TerrainBlockId blockId,
+        out TerrainBlockId outgoingParent,
+        out List<TerrainBlockId> meshReadyBatch,
+        out bool waitForBatch)
+    {
+        outgoingParent = default;
+        meshReadyBatch = null;
+        waitForBatch = false;
+        if (!TryGetVisibleOutgoingDirectParent(blockId, out outgoingParent))
+        {
+            return false;
+        }
+
+        List<TerrainBlockId> successors = GetDesiredSuccessors(outgoingParent);
+        if (successors.Count <= 1 || successors.Count > MaxCoherentPromotionBatchSuccessors)
+        {
+            return false;
+        }
+
+        meshReadyBatch = new List<TerrainBlockId>(successors.Count);
+        foreach (TerrainBlockId successorId in successors)
+        {
+            if (!_blocks.TryGetValue(successorId, out TerrainBlockData successor) || !successor.Desired)
+            {
+                meshReadyBatch = null;
+                return false;
+            }
+
+            if (successor.State == TerrainBlockState.Visible)
+            {
+                continue;
+            }
+
+            if (successor.State != TerrainBlockState.MeshReady)
+            {
+                meshReadyBatch = null;
+                waitForBatch = true;
+                return true;
+            }
+
+            meshReadyBatch.Add(successorId);
+        }
+
+        if (meshReadyBatch.Count == 0)
+        {
+            meshReadyBatch = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetVisibleOutgoingDirectParent(TerrainBlockId childBlockId, out TerrainBlockId outgoingParent)
+    {
+        outgoingParent = default;
+        if (childBlockId.Lod >= GetCoarsestLod())
+        {
+            return false;
+        }
+
+        TerrainBlockId parentId = GetParentBlock(childBlockId);
+        if (!_blocks.TryGetValue(parentId, out TerrainBlockData parent) ||
+            parent.Desired ||
+            parent.State != TerrainBlockState.Releasable ||
+            !IsBlockDisplayingVisuals(parent))
+        {
+            return false;
+        }
+
+        outgoingParent = parentId;
+        return true;
+    }
+
     private static TerrainBlockId GetParentBlock(TerrainBlockId childBlockId)
     {
         Vector3I parentIndex = new(
@@ -1813,12 +2055,23 @@ public partial class TerrainLodManager : Node3D
         if (block.State == TerrainBlockState.Releasable)
         {
             block.RestoreVisibility();
-            if (!block.Renderer.HasVisuals && block.Renderer.HasCachedVisualData)
+            if (block.Renderer != null &&
+                IsInstanceValid(block.Renderer) &&
+                !block.Renderer.HasVisuals &&
+                block.Renderer.HasCachedVisualData)
             {
                 block.Renderer.RestoreCachedVisuals(_activeTerrainDebugView, _surfaceColorizer);
             }
 
-            RefreshVisibleMixedLodSeamsAround(blockId);
+            if (block.Renderer != null &&
+                IsInstanceValid(block.Renderer) &&
+                block.Renderer.HasVisuals)
+            {
+                RecordReplacementVisualsReady(block.Id);
+                TryHideSupersededCoverageAround(block.Id);
+            }
+
+            MarkVisibleMixedLodSeamsDirtyAround(blockId);
             EnqueueDispatcherForCurrentState(block);
             return;
         }
@@ -2517,6 +2770,8 @@ public partial class TerrainLodManager : Node3D
             $"removed_to_releasable_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.MarkReleasableAtSeconds)} " +
             $"removed_to_visual_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.ReplacementVisualsReadyAtSeconds)} " +
             $"removed_to_collision_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.ReplacementCollisionReadyAtSeconds)} " +
+            $"visual_to_hide_ms={FormatTimestamp(transition.ReplacementVisualsReadyAtSeconds, transition.HiddenAtSeconds)} " +
+            $"visual_to_release_ms={FormatTimestamp(transition.ReplacementVisualsReadyAtSeconds, transition.ReleasedAtSeconds)} " +
             $"removed_to_hide_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.HiddenAtSeconds)} " +
             $"removed_to_release_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.ReleasedAtSeconds)} " +
             $"age_ms={ElapsedMilliseconds(transition.RemovedAtSeconds, _currentTimeSeconds).ToString("0.000", CultureInfo.InvariantCulture)}";
@@ -2628,11 +2883,16 @@ public partial class TerrainLodManager : Node3D
             : 0.0;
     }
 
+    private static string FormatTimestamp(double? startedAtSeconds, double? finishedAtSeconds)
+    {
+        return startedAtSeconds.HasValue && finishedAtSeconds.HasValue
+            ? ElapsedMilliseconds(startedAtSeconds.Value, finishedAtSeconds.Value).ToString("0.000", CultureInfo.InvariantCulture)
+            : "na";
+    }
+
     private static string FormatTimestamp(double startedAtSeconds, double? finishedAtSeconds)
     {
-        return finishedAtSeconds.HasValue
-            ? ElapsedMilliseconds(startedAtSeconds, finishedAtSeconds.Value).ToString("0.000", CultureInfo.InvariantCulture)
-            : "na";
+        return FormatTimestamp((double?)startedAtSeconds, finishedAtSeconds);
     }
 
     private static string FormatBool(bool value)
@@ -2698,6 +2958,7 @@ public partial class TerrainLodManager : Node3D
         int activeEditStampCount = _editRegionManager?.StampCount ?? 0;
         int maxEditRegionDetailLevel = _editRegionManager?.MaxDetailLevel ?? 0;
         string activeEditRegionSummary = _editRegionManager?.BuildDebugSummary() ?? "none";
+        VisibleEditedBlockProfileSummary visibleEditedBlocks = BuildVisibleEditedBlockProfileSummary();
 
         return new TerrainWorldProfileSnapshot
         {
@@ -2734,6 +2995,11 @@ public partial class TerrainLodManager : Node3D
             ActiveEditStampCount = activeEditStampCount,
             MaxEditRegionDetailLevel = maxEditRegionDetailLevel,
             ActiveEditRegionSummary = activeEditRegionSummary,
+            VisibleEditedStickyRegionCount = visibleEditedBlocks.StickyRegionCount,
+            VisibleEditedBlockCount = visibleEditedBlocks.VisibleBlockCount,
+            VisibleEditedFinestBlockCount = visibleEditedBlocks.FinestBlockCount,
+            VisibleEditedLaggingBlockCount = visibleEditedBlocks.LaggingBlockCount,
+            VisibleEditedBlockSummary = visibleEditedBlocks.Summary,
             NearPlayerBubbleParentCount = _currentBubbleParentCount,
             RefinedParentCount = CountTotalSplitParents(),
             RefinedSameLodBlockCount = _currentRefinedSameLodBlockCount,
@@ -2863,6 +3129,87 @@ public partial class TerrainLodManager : Node3D
             suppressedFaceCount,
             triangleCount,
             _lastMixedLodSeamSummary);
+    }
+
+    private VisibleEditedBlockProfileSummary BuildVisibleEditedBlockProfileSummary()
+    {
+        if (_editRegionManager == null || _editRegionManager.RegionCount == 0)
+        {
+            return new VisibleEditedBlockProfileSummary(0, 0, 0, 0, "none");
+        }
+
+        HashSet<string> stickyRegionIds = new();
+        List<TerrainBlockId> affectedBlockIds = new();
+        int finestBlockCount = 0;
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (!IsBlockDisplayingVisuals(block))
+            {
+                continue;
+            }
+
+            bool affectedByStickyEdit = false;
+            foreach (TerrainEditRegion region in GetEditRegionsForBlock(block.Id))
+            {
+                if (!IsStickyEditRegion(region))
+                {
+                    continue;
+                }
+
+                stickyRegionIds.Add(region.Id);
+                affectedByStickyEdit = true;
+            }
+
+            if (!affectedByStickyEdit)
+            {
+                continue;
+            }
+
+            affectedBlockIds.Add(block.Id);
+            if (block.Id.Lod == FinestTerrainLod)
+            {
+                finestBlockCount++;
+            }
+        }
+
+        if (affectedBlockIds.Count == 0)
+        {
+            return new VisibleEditedBlockProfileSummary(stickyRegionIds.Count, 0, 0, 0, "none");
+        }
+
+        affectedBlockIds.Sort(CompareTerrainBlockIds);
+        int laggingBlockCount = affectedBlockIds.Count - finestBlockCount;
+        StringBuilder summary = new();
+        summary.Append("sticky ");
+        summary.Append(stickyRegionIds.Count);
+        summary.Append(" vis ");
+        summary.Append(affectedBlockIds.Count);
+        summary.Append(" finest ");
+        summary.Append(finestBlockCount);
+        if (laggingBlockCount > 0)
+        {
+            summary.Append(" lag ");
+            summary.Append(laggingBlockCount);
+        }
+
+        summary.Append(" top ");
+        int previewCount = Math.Min(3, affectedBlockIds.Count);
+        for (int i = 0; i < previewCount; i++)
+        {
+            if (i > 0)
+            {
+                summary.Append(" | ");
+            }
+
+            summary.Append(affectedBlockIds[i]);
+        }
+
+        return new VisibleEditedBlockProfileSummary(
+            stickyRegionIds.Count,
+            affectedBlockIds.Count,
+            finestBlockCount,
+            laggingBlockCount,
+            summary.ToString());
     }
 
     private string BuildMixedLodSeamSummary(MixedLodSeamProfileSummary summary)
@@ -3114,30 +3461,32 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
-    private void TryHideSupersededBlock(TerrainBlockId blockId)
+    private bool TryHideSupersededBlock(
+        TerrainBlockId blockId,
+        TerrainLodSuccessorCoverageStatus? coverageOverride = null)
     {
         if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
         {
-            return;
+            return false;
         }
 
-        TerrainLodSuccessorCoverageStatus coverage = EvaluateSuccessorCoverage(blockId);
+        TerrainLodSuccessorCoverageStatus coverage = coverageOverride ?? EvaluateSuccessorCoverage(blockId);
         if (block.State != TerrainBlockState.Releasable)
         {
             ObserveSupersededBlockTransition(blockId, block, $"hide_deferred_{SanitizeState(block.State)}", coverage);
-            return;
+            return false;
         }
 
         if (block.Renderer == null || !IsInstanceValid(block.Renderer))
         {
             ObserveSupersededBlockTransition(blockId, block, "hide_deferred_renderer_missing", coverage);
-            return;
+            return false;
         }
 
         if (!block.Renderer.HasVisuals)
         {
             ObserveSupersededBlockTransition(blockId, block, "hide_not_needed_visuals_already_hidden", coverage);
-            return;
+            return false;
         }
 
         if (!HasReadyVisualSuccessorCoverage(blockId, coverage))
@@ -3147,12 +3496,95 @@ public partial class TerrainLodManager : Node3D
                 block,
                 coverage.VisualDeferralReason,
                 coverage);
-            return;
+            return false;
         }
 
         block.Renderer.HideVisuals();
         RecordSupersededBlockHidden(blockId, block, coverage);
-        RefreshVisibleMixedLodSeamsAround(blockId);
+        MarkVisibleMixedLodSeamsDirtyAround(blockId);
+        return true;
+    }
+
+    private string ResolveReleaseDeferralReason(
+        TerrainBlockData block,
+        TerrainLodSuccessorCoverageStatus coverage)
+    {
+        if (block.Renderer != null &&
+            IsInstanceValid(block.Renderer) &&
+            !block.Renderer.HasVisuals)
+        {
+            return null;
+        }
+
+        return coverage.VisualCoverageReady
+            ? coverage.PhysicsDeferralReason
+            : coverage.VisualDeferralReason;
+    }
+
+    private int CommitVisibleMeshBatch(IReadOnlyList<TerrainBlockId> batchBlockIds, TerrainBlockId outgoingParent)
+    {
+        int committedCount = 0;
+        foreach (TerrainBlockId batchBlockId in batchBlockIds)
+        {
+            if (!_blocks.TryGetValue(batchBlockId, out TerrainBlockData batchBlock) ||
+                !batchBlock.Desired ||
+                batchBlock.State != TerrainBlockState.MeshReady)
+            {
+                continue;
+            }
+
+            CommitVisibleMeshBlock(batchBlock);
+            committedCount++;
+        }
+
+        if (committedCount > 1)
+        {
+            _lastCommitSummary = $"promotion batch {outgoingParent} count {committedCount}";
+            WritePromotionBatchDiagnosticsLog(outgoingParent, batchBlockIds, committedCount);
+        }
+
+        return committedCount;
+    }
+
+    private void CommitVisibleMeshBlock(TerrainBlockData block)
+    {
+        bool includeCollision = ShouldIncludeCollision(block.Id) && block.TriangleCount > 0;
+        ulong commitStart = Time.GetTicksUsec();
+        block.Renderer.ApplyVisualMesh(block.Mesh, _activeTerrainDebugView, _surfaceColorizer);
+        block.MarkVisible(collisionPending: includeCollision);
+        RecordReplacementVisualsReady(block.Id);
+        TryHideSupersededCoverageAround(block.Id);
+        MarkVisibleMixedLodSeamsDirtyAround(block.Id);
+        _lastCommitMs += (Time.GetTicksUsec() - commitStart) / 1000.0;
+        _lastCommitCount++;
+        if (includeCollision)
+        {
+            EnqueueCollisionDispatch(block.Id);
+        }
+
+        _lastCommitSummary = $"{block.Id} tri {block.TriangleCount} {(includeCollision ? "collision_queued" : "visual_only")}";
+        if (_startupBlocks.Contains(block.Id))
+        {
+            _startupSatisfiedBlocks.Add(block.Id);
+        }
+    }
+
+    private void WritePromotionBatchDiagnosticsLog(
+        TerrainBlockId outgoingParent,
+        IReadOnlyList<TerrainBlockId> batchBlockIds,
+        int committedCount)
+    {
+        if (committedCount <= 1 || !EnsureTransitionLogWriter())
+        {
+            return;
+        }
+
+        lock (_transitionLogLock)
+        {
+            _transitionLogWriter!.WriteLine(
+                $"{TransitionLogPrefix} event=promotion_batch parent={outgoingParent} count={committedCount} " +
+                $"successors={string.Join("|", batchBlockIds)}");
+        }
     }
 
     private readonly record struct SupersededTransitionProfileSummary(
@@ -3173,6 +3605,13 @@ public partial class TerrainLodManager : Node3D
         int TriangleCount,
         string LastSummary);
 
+    private readonly record struct VisibleEditedBlockProfileSummary(
+        int StickyRegionCount,
+        int VisibleBlockCount,
+        int FinestBlockCount,
+        int LaggingBlockCount,
+        string Summary);
+
     private enum SupersededTransitionWaitState
     {
         MarkReleasable = 0,
@@ -3180,6 +3619,29 @@ public partial class TerrainLodManager : Node3D
         Hide = 2,
         PhysicsCoverage = 3,
         Release = 4
+    }
+
+    private static int CompareTerrainBlockIds(TerrainBlockId a, TerrainBlockId b)
+    {
+        int lod = a.Lod.CompareTo(b.Lod);
+        if (lod != 0)
+        {
+            return lod;
+        }
+
+        int x = a.Index.X.CompareTo(b.Index.X);
+        if (x != 0)
+        {
+            return x;
+        }
+
+        int y = a.Index.Y.CompareTo(b.Index.Y);
+        if (y != 0)
+        {
+            return y;
+        }
+
+        return a.Index.Z.CompareTo(b.Index.Z);
     }
 
     private readonly record struct CompletedFieldBuildResult(

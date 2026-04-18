@@ -337,6 +337,8 @@ public partial class FpsOverlay : CanvasLayer
                 $"Churn set/create/release {snapshot.BlockSetChangeRatePerSecond:0.0}/{snapshot.BlockCreateRatePerSecond:0.0}/{snapshot.BlockReleaseRatePerSecond:0.0} per s");
             _detailBuilder.AppendLine(
                 $"Edits active {snapshot.ActiveEditRegionCount} stamps {snapshot.ActiveEditStampCount} max {snapshot.MaxEditRegionDetailLevel}  {TrimForOverlay(snapshot.ActiveEditRegionSummary, 84)}");
+            _detailBuilder.AppendLine(
+                $"Edit vis {snapshot.VisibleEditedBlockCount} sticky {snapshot.VisibleEditedStickyRegionCount} finest/lag {snapshot.VisibleEditedFinestBlockCount}/{snapshot.VisibleEditedLaggingBlockCount}  {TrimForOverlay(snapshot.VisibleEditedBlockSummary, 84)}");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
             _detailBuilder.AppendLine($"Viewer {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
             _detailBuilder.AppendLine($"Lifecycle {TrimForOverlay(snapshot.TrackedDetailSummary, 84)}");

@@ -173,6 +173,11 @@ public sealed class TerrainWorldProfileSnapshot
     public int ActiveEditStampCount { get; init; }
     public int MaxEditRegionDetailLevel { get; init; }
     public string ActiveEditRegionSummary { get; init; } = string.Empty;
+    public int VisibleEditedStickyRegionCount { get; init; }
+    public int VisibleEditedBlockCount { get; init; }
+    public int VisibleEditedFinestBlockCount { get; init; }
+    public int VisibleEditedLaggingBlockCount { get; init; }
+    public string VisibleEditedBlockSummary { get; init; } = string.Empty;
     public string TrackedRenderDirtyBoundsSummary { get; init; } = string.Empty;
     public string TrackedCollisionDirtyBoundsSummary { get; init; } = string.Empty;
     public string TrackedCoverageStateSummary { get; init; } = string.Empty;
