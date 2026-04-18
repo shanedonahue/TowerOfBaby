@@ -83,6 +83,21 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "1,32,1")] public int ReleasesPerFrame = 2;
     [Export] public bool GenerateCollisionForCoarseLods;
 
+    [ExportGroup("Startup")]
+    [Export] public bool RestorePlayerPositionFromStartupState = true;
+    [Export] public bool EnableStartupStatePersistence = true;
+    [Export(PropertyHint.Range, "-1,16,1")] public int StartupCriticalRadiusXZ = -1;
+    [Export(PropertyHint.Range, "1,32,1")] public int StartupCreateBlocksPerFrame = 8;
+    [Export(PropertyHint.Range, "1,8,1")] public int StartupFieldWorkerJobs = 4;
+    [Export(PropertyHint.Range, "1,8,1")] public int StartupMeshWorkerJobs = 4;
+    [Export(PropertyHint.Range, "1,16,1")] public int StartupFieldResultAppliesPerFrame = 8;
+    [Export(PropertyHint.Range, "1,16,1")] public int StartupMeshResultAppliesPerFrame = 8;
+    [Export(PropertyHint.Range, "1,16,1")] public int StartupMeshCommitsPerFrame = 8;
+    [Export(PropertyHint.Range, "1,16,1")] public int StartupCollisionBuildsPerFrame = 4;
+
+    [ExportGroup("Shutdown")]
+    [Export(PropertyHint.Range, "0,64,1")] public int ShutdownStartupSnapshotBlockCap = 16;
+
     [ExportGroup("Seams")]
     [Export] public TerrainMixedLodSeamMode MixedLodSeamMode = TerrainMixedLodSeamMode.SkirtsOnly;
 
@@ -93,6 +108,8 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<int, TerrainBlockId> _targetStableCentersByLod = new();
     private readonly HashSet<TerrainBlockId> _startupBlocks = new();
     private readonly HashSet<TerrainBlockId> _startupSatisfiedBlocks = new();
+    private readonly HashSet<TerrainBlockId> _startupSnapshotBlocks = new();
+    private readonly HashSet<TerrainBlockId> _persistedLodBlocks = new();
     private readonly StringBuilder _debugBuilder = new();
     private readonly Queue<double> _recentCreationTimes = new();
     private readonly Queue<double> _recentReleaseTimes = new();
@@ -136,6 +153,7 @@ public partial class TerrainLodManager : Node3D
     private string _lastEditRegionSummary = "none";
     private bool _selectionInitialized;
     private bool _initialLoadComplete;
+    private bool _startupRestoreStateInitialized;
     private int _lastDesiredBlockCount;
     private int _lastDesiredSetChangeCount;
     private int _hysteresisRetainedBlockCount;
@@ -148,6 +166,9 @@ public partial class TerrainLodManager : Node3D
     private int _lastCommitCount;
     private int _lastCollisionCount;
     private int _lastReleaseCount;
+    private int _lastStartupChunkLoadCount;
+    private int _lastPersistedChunkLoadCount;
+    private int _lastGeneratedChunkLoadCount;
     private int _lastReleaseHysteresisDeferralCount;
     private int _lastReleaseCoverageDeferralCount;
     private int _lastReleaseRequeueCount;
@@ -158,6 +179,9 @@ public partial class TerrainLodManager : Node3D
     private double _lastCommitMs;
     private double _lastCollisionMs;
     private double _lastReleaseMs;
+    private double _lastStartupChunkLoadMs;
+    private double _lastPersistedChunkLoadMs;
+    private double _lastGeneratedChunkLoadMs;
     private double _lastReleaseDeferredAgeMsTotal;
     private double _blockCreateRatePerSecond;
     private double _blockReleaseRatePerSecond;
@@ -201,6 +225,9 @@ public partial class TerrainLodManager : Node3D
     private long _releaseDeferredAgeSampleCount;
     private double _releaseDeferredAgeMsTotal;
     private long _blockInstanceVersionSequence;
+    private long _startupRestoredBlockCount;
+    private long _persistedRestoredBlockCount;
+    private long _procedurallyGeneratedBlockCount;
     private int _activeFieldWorkerJobs;
     private int _activeMeshWorkerJobs;
     private int _dispatchSequence;
@@ -214,10 +241,16 @@ public partial class TerrainLodManager : Node3D
     private string _lastMixedLodSeamSummary = "none";
     private bool _allVisibleMixedLodSeamsDirty;
     private float _lastConfiguredSurfaceWaterLevel = float.NaN;
+    private double _startupSelectionStartSeconds = -1.0;
+    private double _startupFirstVisibleTerrainMs = -1.0;
+    private double _startupCompleteMs = -1.0;
+    private int _shutdownState;
+    private string _lastShutdownSaveSummary = "not_run";
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
     public TerrainVisualDebugMode ActiveTerrainDebugView => _activeTerrainDebugView;
+    private bool IsShuttingDown => Volatile.Read(ref _shutdownState) != 0;
 
     public override void _Ready()
     {
@@ -232,19 +265,29 @@ public partial class TerrainLodManager : Node3D
         _activeTerrainDebugView = ResolveTerrainDebugView(_terrainWorld?.TerrainDebugView ?? TerrainVisualDebugMode.Lit);
         ConfigureSharedSurfaceWaterLevel();
         _trackedCharacter = ResolveTrackedCharacter();
+        LoadPersistedLodRestoreKeys();
+        TryInitializeStartupRestoreState();
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
 
     public override void _ExitTree()
     {
+        BeginShutdown();
+        SaveStartupState();
         CloseTransitionLogWriter();
     }
 
     public override void _Process(double delta)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
         ConfigureSharedSurfaceWaterLevel();
         _trackedCharacter ??= ResolveTrackedCharacter();
+        TryInitializeStartupRestoreState();
         if (_trackedCharacter == null)
         {
             RefreshVisibleMixedLodSeamsIfNeeded();
@@ -259,11 +302,17 @@ public partial class TerrainLodManager : Node3D
         _lastCommitCount = 0;
         _lastCollisionCount = 0;
         _lastReleaseCount = 0;
+        _lastStartupChunkLoadCount = 0;
+        _lastPersistedChunkLoadCount = 0;
+        _lastGeneratedChunkLoadCount = 0;
         _lastFieldBuildMs = 0.0;
         _lastMeshBuildMs = 0.0;
         _lastCommitMs = 0.0;
         _lastCollisionMs = 0.0;
         _lastReleaseMs = 0.0;
+        _lastStartupChunkLoadMs = 0.0;
+        _lastPersistedChunkLoadMs = 0.0;
+        _lastGeneratedChunkLoadMs = 0.0;
 
         _lastViewerPosition = _trackedCharacter.GlobalTransform.Origin;
         UpdateDesiredBlocks(_lastViewerPosition);
@@ -319,6 +368,8 @@ public partial class TerrainLodManager : Node3D
         _debugBuilder.AppendLine($"Debug {_activeTerrainDebugView.GetDisplayName()}");
         _debugBuilder.AppendLine(_lastSelectionSummary);
         _debugBuilder.AppendLine(_lastTierSelectionSummary);
+        _debugBuilder.AppendLine($"Startup {BuildStartupSummary()}");
+        _debugBuilder.AppendLine($"Shutdown {_lastShutdownSaveSummary}");
         _debugBuilder.AppendLine($"Lifecycle {BuildLifecycleSummary()}");
         _debugBuilder.AppendLine($"Edits {_lastEditRegionSummary}");
         _debugBuilder.AppendLine($"Handoff {_lastRefinementHandoffSummary}");
@@ -330,6 +381,11 @@ public partial class TerrainLodManager : Node3D
 
     public void ApplyBrush(Vector3 worldCenter, bool additive)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         float strength = additive
             ? (_terrainWorld?.BuildStrength ?? 2.8f)
             : (_terrainWorld?.CarveStrength ?? -3.4f);
@@ -345,6 +401,11 @@ public partial class TerrainLodManager : Node3D
 
     public void ApplySlash(VoxelSlashEdit edit)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         ApplyImpact(TerrainImpactRequest.CreateSlash(
             TerrainImpactKind.Custom,
             edit.Center,
@@ -365,6 +426,11 @@ public partial class TerrainLodManager : Node3D
 
     public void ApplyImpact(TerrainImpactRequest impact)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         ulong operationStartUsec = Time.GetTicksUsec();
         TerrainEditStampData stamp = impact.ToStamp(_config.BaseVoxelSize);
         ulong registrationStartUsec = Time.GetTicksUsec();
@@ -386,6 +452,11 @@ public partial class TerrainLodManager : Node3D
 
     public void ClearPersistedEditRegions()
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         ulong operationStartUsec = Time.GetTicksUsec();
         ulong registrationStartUsec = Time.GetTicksUsec();
         TerrainEditRegionMutationResult mutation = _editRegionManager.ClearAll();
@@ -400,6 +471,11 @@ public partial class TerrainLodManager : Node3D
 
     public bool SetTerrainDebugView(TerrainVisualDebugMode debugView)
     {
+        if (IsShuttingDown)
+        {
+            return false;
+        }
+
         TerrainVisualDebugMode resolvedDebugView = ResolveTerrainDebugView(debugView);
         if (_activeTerrainDebugView == resolvedDebugView)
         {
@@ -736,7 +812,7 @@ public partial class TerrainLodManager : Node3D
 
     private bool EnqueueDisplayedRefreshForCurrentState(TerrainBlockData block)
     {
-        if (!block.DisplayedRefreshDirty || !IsBlockDisplayingVisuals(block))
+        if (IsShuttingDown || !block.DisplayedRefreshDirty || !IsBlockDisplayingVisuals(block))
         {
             return false;
         }
@@ -766,6 +842,156 @@ public partial class TerrainLodManager : Node3D
     {
         return _editRegionManager?.QueryOverlapping(TerrainMetrics.GetBlockBounds(_config, blockId))
             ?? Array.Empty<TerrainEditRegion>();
+    }
+
+    private TerrainBlockFieldLoadResult AcquireRequestedField(TerrainBlockId blockId, IReadOnlyList<TerrainEditRegion> editRegions)
+    {
+        if (_startupSnapshotBlocks.Contains(blockId) &&
+            _chunkStore.TryLoadStartupLodBlock(blockId, out VoxelChunkData startupField))
+        {
+            return new TerrainBlockFieldLoadResult(startupField, TerrainChunkLoadSource.StartupSnapshot);
+        }
+
+        if (_persistedLodBlocks.Contains(blockId) &&
+            _chunkStore.TryLoadLodBlock(blockId, out VoxelChunkData persistedField))
+        {
+            return new TerrainBlockFieldLoadResult(persistedField, TerrainChunkLoadSource.PersistedChunk);
+        }
+
+        return new TerrainBlockFieldLoadResult(
+            _mesher.BuildField(blockId, editRegions),
+            TerrainChunkLoadSource.ProceduralGeneration);
+    }
+
+    private void RecordFieldLoad(TerrainChunkLoadSource source, double workerMs)
+    {
+        switch (source)
+        {
+            case TerrainChunkLoadSource.StartupSnapshot:
+                _lastStartupChunkLoadCount++;
+                _lastStartupChunkLoadMs += workerMs;
+                _startupRestoredBlockCount++;
+                break;
+            case TerrainChunkLoadSource.PersistedChunk:
+                _lastPersistedChunkLoadCount++;
+                _lastPersistedChunkLoadMs += workerMs;
+                _persistedRestoredBlockCount++;
+                break;
+            case TerrainChunkLoadSource.ProceduralGeneration:
+                _lastGeneratedChunkLoadCount++;
+                _lastGeneratedChunkLoadMs += workerMs;
+                _procedurallyGeneratedBlockCount++;
+                break;
+        }
+    }
+
+    private int CountShutdownSaveCandidates()
+    {
+        return _blocks.Count;
+    }
+
+    private ShutdownStartupSaveSummary BuildStartupStateSnapshots(Vector3 viewerPosition, int blockCap)
+    {
+        List<ShutdownSaveCandidate> candidates = BuildShutdownSaveCandidates(viewerPosition);
+        List<TerrainLodStartupBlockSnapshot> snapshots = new(Mathf.Min(blockCap, candidates.Count));
+        int consideredCount = 0;
+        int skippedCount = 0;
+
+        if (blockCap <= 0)
+        {
+            skippedCount = candidates.Count;
+            return new ShutdownStartupSaveSummary(snapshots, consideredCount, skippedCount, HitCap: false);
+        }
+
+        foreach (ShutdownSaveCandidate candidate in candidates)
+        {
+            consideredCount++;
+            if (!TryBuildStartupStateSnapshot(candidate.BlockId, out TerrainLodStartupBlockSnapshot snapshot))
+            {
+                skippedCount++;
+                continue;
+            }
+
+            snapshots.Add(snapshot);
+            if (snapshots.Count >= blockCap)
+            {
+                return new ShutdownStartupSaveSummary(snapshots, consideredCount, skippedCount, HitCap: true);
+            }
+        }
+
+        return new ShutdownStartupSaveSummary(snapshots, consideredCount, skippedCount, HitCap: false);
+    }
+
+    private List<ShutdownSaveCandidate> BuildShutdownSaveCandidates(Vector3 viewerPosition)
+    {
+        List<ShutdownSaveCandidate> candidates = new(_blocks.Count);
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            bool visible = IsBlockDisplayingVisuals(block);
+            bool collisionCritical = ShouldIncludeCollision(block.Id, viewerPosition);
+            float distance = TerrainMetrics.DistanceSquaredToBlock(_config, block.Id, viewerPosition);
+            candidates.Add(new ShutdownSaveCandidate(block.Id, visible, collisionCritical, distance));
+        }
+
+        candidates.Sort((a, b) =>
+        {
+            int visibleCompare = CompareTrueFirst(a.Visible, b.Visible);
+            if (visibleCompare != 0)
+            {
+                return visibleCompare;
+            }
+
+            int collisionCompare = CompareTrueFirst(a.CollisionCritical, b.CollisionCritical);
+            if (collisionCompare != 0)
+            {
+                return collisionCompare;
+            }
+
+            int distanceCompare = a.DistanceSquared.CompareTo(b.DistanceSquared);
+            if (distanceCompare != 0)
+            {
+                return distanceCompare;
+            }
+
+            return CompareTerrainBlockIds(a.BlockId, b.BlockId);
+        });
+        return candidates;
+    }
+
+    private bool TryBuildStartupStateSnapshot(TerrainBlockId blockId, out TerrainLodStartupBlockSnapshot snapshot)
+    {
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+            !CanSaveBlockForShutdown(block) ||
+            !block.TryGetPersistableField(out VoxelChunkData field))
+        {
+            snapshot = default;
+            return false;
+        }
+
+        snapshot = new TerrainLodStartupBlockSnapshot(
+            blockId,
+            WasVisible: IsBlockDisplayingVisuals(block),
+            field);
+        return true;
+    }
+
+    private bool CanSaveBlockForShutdown(TerrainBlockData block)
+    {
+        return block != null &&
+               !block.FieldBuildRunning &&
+               !block.MeshBuildRunning &&
+               !block.DisplayedRefreshDirty &&
+               block.State is TerrainBlockState.FieldReady or TerrainBlockState.MeshReady or TerrainBlockState.Visible or TerrainBlockState.Releasable;
+    }
+
+    private static int CompareTrueFirst(bool a, bool b)
+    {
+        if (a == b)
+        {
+            return 0;
+        }
+
+        return a ? -1 : 1;
     }
 
     private void ConfigureSharedSurfaceWaterLevel()
@@ -819,6 +1045,116 @@ public partial class TerrainLodManager : Node3D
         return null;
     }
 
+    private void LoadPersistedLodRestoreKeys()
+    {
+        _persistedLodBlocks.Clear();
+        foreach (TerrainBlockId blockId in _chunkStore.LoadPersistedLodBlockKeys())
+        {
+            _persistedLodBlocks.Add(blockId);
+        }
+    }
+
+    private void TryInitializeStartupRestoreState()
+    {
+        if (IsShuttingDown || _startupRestoreStateInitialized || _trackedCharacter == null)
+        {
+            return;
+        }
+
+        _startupRestoreStateInitialized = true;
+        if (!_chunkStore.TryLoadLodStartupState(out TerrainLodStartupState startupState))
+        {
+            return;
+        }
+
+        if (RestorePlayerPositionFromStartupState)
+        {
+            Transform3D transform = _trackedCharacter.GlobalTransform;
+            transform.Origin = startupState.PlayerPosition;
+            _trackedCharacter.GlobalTransform = transform;
+        }
+
+        _startupSnapshotBlocks.Clear();
+        foreach (TerrainLodStartupBlockDescriptor block in startupState.Blocks)
+        {
+            _startupSnapshotBlocks.Add(block.BlockId);
+        }
+    }
+
+    private void BeginShutdown()
+    {
+        if (Interlocked.Exchange(ref _shutdownState, 1) != 0)
+        {
+            return;
+        }
+
+        _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
+        CancelPendingRuntimeWorkForShutdown();
+    }
+
+    private void CancelPendingRuntimeWorkForShutdown()
+    {
+        _createDispatcherQueue.Clear();
+        _fieldBuildDispatcherQueue.Clear();
+        _meshBuildDispatcherQueue.Clear();
+        _commitDispatcherQueue.Clear();
+        _collisionDispatcherQueue.Clear();
+        _releaseDispatcherQueue.Clear();
+        _createDispatchTokens.Clear();
+        _fieldBuildDispatchTokens.Clear();
+        _meshBuildDispatchTokens.Clear();
+        _commitDispatchTokens.Clear();
+        _collisionDispatchTokens.Clear();
+        _releaseDispatchTokens.Clear();
+
+        while (_completedFieldBuildResults.TryDequeue(out _))
+        {
+        }
+
+        while (_completedMeshBuildResults.TryDequeue(out _))
+        {
+        }
+    }
+
+    private void SaveStartupState()
+    {
+        if (!EnableStartupStatePersistence)
+        {
+            _lastShutdownSaveSummary = "persistence_disabled";
+            return;
+        }
+
+        _trackedCharacter ??= ResolveTrackedCharacter();
+        if (_trackedCharacter == null)
+        {
+            _lastShutdownSaveSummary = "viewer_missing";
+            return;
+        }
+
+        Vector3 viewerPosition = _trackedCharacter.GlobalPosition;
+        int candidateCount = CountShutdownSaveCandidates();
+        int blockCap = Mathf.Max(0, ShutdownStartupSnapshotBlockCap);
+        GD.Print(
+            $"Terrain LOD shutdown save start | candidates {candidateCount} | cap {blockCap} | active_workers field/mesh {Volatile.Read(ref _activeFieldWorkerJobs)}/{Volatile.Read(ref _activeMeshWorkerJobs)}");
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        ShutdownStartupSaveSummary summary = BuildStartupStateSnapshots(viewerPosition, blockCap);
+        _chunkStore.SaveLodStartupState(viewerPosition, summary.Blocks);
+        stopwatch.Stop();
+
+        _startupSnapshotBlocks.Clear();
+        foreach (TerrainLodStartupBlockSnapshot block in summary.Blocks)
+        {
+            _startupSnapshotBlocks.Add(block.BlockId);
+        }
+
+        _lastShutdownSaveSummary =
+            $"considered {summary.ConsideredCount}/{candidateCount} saved {summary.Blocks.Count} skipped {summary.SkippedCount} " +
+            $"cap {blockCap} {(summary.HitCap ? "hit" : "not_hit")} persist_ms {stopwatch.Elapsed.TotalMilliseconds:0.00}";
+        GD.Print(
+            $"Terrain LOD shutdown save end | considered {summary.ConsideredCount}/{candidateCount} | saved {summary.Blocks.Count} | skipped {summary.SkippedCount} | cap {blockCap} | hit_cap {(summary.HitCap ? "yes" : "no")} | ms {stopwatch.Elapsed.TotalMilliseconds:0.00}");
+    }
+
     private void UpdateDesiredBlocks(Vector3 viewerPosition)
     {
         TerrainBlockId viewerParent = ComputeSelectionCenterParent(viewerPosition);
@@ -830,6 +1166,9 @@ public partial class TerrainLodManager : Node3D
             _activeSplitParentsByLod.Clear();
             _currentStableCentersByLod.Clear();
             _targetStableCentersByLod.Clear();
+            _startupSelectionStartSeconds = _currentTimeSeconds;
+            _startupFirstVisibleTerrainMs = -1.0;
+            _startupCompleteMs = -1.0;
             UpdateStableCenterParents(viewerPosition, viewerParent);
             _selectionInitialized = true;
             _lastDesiredSetChangeCount = 0;
@@ -854,10 +1193,12 @@ public partial class TerrainLodManager : Node3D
 
         if (_startupBlocks.Count == 0)
         {
-            foreach (TerrainBlockId blockId in desired)
+            foreach (TerrainBlockId blockId in BuildStartupCriticalSet(desired, viewerPosition))
             {
                 _startupBlocks.Add(blockId);
             }
+
+            RefreshStartupSatisfiedBlocks();
         }
 
         ApplyDesiredSetChanges(desired);
@@ -865,6 +1206,113 @@ public partial class TerrainLodManager : Node3D
         _hysteresisRetainedBlockCount = CountHysteresisRetainedBlocks();
         _lastSelectionSummary = BuildSelectionSummary(_currentCenterParent, _targetCenterParent, viewerParent, desired.Count);
         _lastTierSelectionSummary = BuildTierSelectionSummary();
+    }
+
+    private HashSet<TerrainBlockId> BuildStartupCriticalSet(IEnumerable<TerrainBlockId> desired, Vector3 viewerPosition)
+    {
+        HashSet<TerrainBlockId> critical = new();
+        TerrainBlockId nearestBlock = default;
+        float nearestDistance = float.MaxValue;
+        bool hasNearest = false;
+
+        foreach (TerrainBlockId blockId in desired)
+        {
+            float distance = TerrainMetrics.DistanceSquaredToBlock(_config, blockId, viewerPosition);
+            if (!hasNearest || distance < nearestDistance)
+            {
+                nearestBlock = blockId;
+                nearestDistance = distance;
+                hasNearest = true;
+            }
+
+            if (IsStartupCriticalBlock(blockId, viewerPosition))
+            {
+                critical.Add(blockId);
+            }
+        }
+
+        if (critical.Count == 0 && hasNearest)
+        {
+            critical.Add(nearestBlock);
+        }
+
+        return critical;
+    }
+
+    private bool IsStartupCriticalBlock(TerrainBlockId blockId, Vector3 viewerPosition)
+    {
+        if (ShouldIncludeCollision(blockId, viewerPosition))
+        {
+            return true;
+        }
+
+        float referenceSpan = TerrainMetrics.GetBlockSpan(_config, GetSelectionCenterLod());
+        float horizontalRadius = Mathf.Max(1, GetStartupCriticalRadius()) * referenceSpan;
+        float verticalRadius = Mathf.Max(referenceSpan, (Mathf.Max(0, VerticalRadius) + 1) * referenceSpan);
+        Aabb bounds = TerrainMetrics.GetBlockBounds(_config, blockId);
+        Vector3 min = bounds.Position;
+        Vector3 max = bounds.End;
+        Vector3 clamped = new(
+            Mathf.Clamp(viewerPosition.X, min.X, max.X),
+            Mathf.Clamp(viewerPosition.Y, min.Y, max.Y),
+            Mathf.Clamp(viewerPosition.Z, min.Z, max.Z));
+        Vector3 delta = viewerPosition - clamped;
+        Vector2 horizontalDelta = new(delta.X, delta.Z);
+        return horizontalDelta.Length() <= horizontalRadius &&
+               Mathf.Abs(delta.Y) <= verticalRadius;
+    }
+
+    private int GetStartupCriticalRadius()
+    {
+        if (StartupCriticalRadiusXZ >= 0)
+        {
+            return Mathf.Max(0, StartupCriticalRadiusXZ);
+        }
+
+        return Mathf.Max(GetSelectionCenterRadius() + 1, CollisionSafetyRadiusXZ + 1);
+    }
+
+    private void RefreshStartupSatisfiedBlocks()
+    {
+        foreach (TerrainBlockId blockId in _startupBlocks)
+        {
+            UpdateStartupSatisfiedState(blockId);
+        }
+    }
+
+    private void UpdateStartupSatisfiedState(TerrainBlockId blockId)
+    {
+        if (!_startupBlocks.Contains(blockId))
+        {
+            return;
+        }
+
+        if (IsStartupBlockReady(blockId))
+        {
+            _startupSatisfiedBlocks.Add(blockId);
+        }
+    }
+
+    private bool IsStartupBlockReady(TerrainBlockId blockId)
+    {
+        if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+            block.Renderer == null ||
+            !IsInstanceValid(block.Renderer))
+        {
+            return false;
+        }
+
+        if (block.State != TerrainBlockState.Visible && block.State != TerrainBlockState.Releasable)
+        {
+            return false;
+        }
+
+        if (block.TriangleCount <= 0)
+        {
+            return true;
+        }
+
+        return !ShouldIncludeCollision(blockId) || block.Renderer.HasCollision;
     }
 
     private TerrainBlockId ComputeSelectionCenterParent(Vector3 viewerPosition)
@@ -1252,8 +1700,74 @@ public partial class TerrainLodManager : Node3D
         _recentCreationTimes.Enqueue(_currentTimeSeconds);
     }
 
+    private bool IsStartupBoostActive()
+    {
+        return _selectionInitialized && !_initialLoadComplete;
+    }
+
+    private int GetCurrentCreateBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(CreateBlocksPerFrame, StartupCreateBlocksPerFrame)
+            : CreateBlocksPerFrame;
+        return Mathf.Clamp(configured, 1, MaxCreateBlocksPerFrame);
+    }
+
+    private int GetCurrentFieldWorkerBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(FieldWorkerJobs, StartupFieldWorkerJobs)
+            : FieldWorkerJobs;
+        return Mathf.Clamp(configured, 1, MaxFieldWorkerJobs);
+    }
+
+    private int GetCurrentMeshWorkerBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(MeshWorkerJobs, StartupMeshWorkerJobs)
+            : MeshWorkerJobs;
+        return Mathf.Clamp(configured, 1, MaxMeshWorkerJobs);
+    }
+
+    private int GetCurrentFieldResultApplyBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(FieldResultAppliesPerFrame, StartupFieldResultAppliesPerFrame)
+            : FieldResultAppliesPerFrame;
+        return Mathf.Clamp(configured, 1, MaxFieldResultAppliesPerFrame);
+    }
+
+    private int GetCurrentMeshResultApplyBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(MeshResultAppliesPerFrame, StartupMeshResultAppliesPerFrame)
+            : MeshResultAppliesPerFrame;
+        return Mathf.Clamp(configured, 1, MaxMeshResultAppliesPerFrame);
+    }
+
+    private int GetCurrentMeshCommitBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(MeshCommitsPerFrame, StartupMeshCommitsPerFrame)
+            : MeshCommitsPerFrame;
+        return Mathf.Clamp(configured, 1, MaxMeshCommitsPerFrame);
+    }
+
+    private int GetCurrentCollisionBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(CollisionBuildsPerFrame, StartupCollisionBuildsPerFrame)
+            : CollisionBuildsPerFrame;
+        return Mathf.Clamp(configured, 1, MaxCollisionBuildsPerFrame);
+    }
+
     private void DispatchRuntimeWork()
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         _lastReleaseHysteresisDeferralCount = 0;
         _lastReleaseCoverageDeferralCount = 0;
         _lastReleaseRequeueCount = 0;
@@ -1273,7 +1787,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ProcessCreateDispatch()
     {
-        int createBudget = Mathf.Clamp(CreateBlocksPerFrame, 1, MaxCreateBlocksPerFrame);
+        int createBudget = GetCurrentCreateBudget();
         while (_lastCreateCount < createBudget &&
                TryDequeueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1290,7 +1804,7 @@ public partial class TerrainLodManager : Node3D
 
     private void StartFieldBuildWorkers()
     {
-        int workerBudget = Mathf.Clamp(FieldWorkerJobs, 1, MaxFieldWorkerJobs);
+        int workerBudget = GetCurrentFieldWorkerBudget();
         while (Volatile.Read(ref _activeFieldWorkerJobs) < workerBudget &&
                TryDequeueBlockDispatch(_fieldBuildDispatcherQueue, _fieldBuildDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1337,14 +1851,24 @@ public partial class TerrainLodManager : Node3D
                 Stopwatch stopwatch = Stopwatch.StartNew();
                 try
                 {
-                    VoxelChunkData field = _mesher.BuildField(blockId, editRegions);
+                    TerrainBlockFieldLoadResult fieldResult = buildPurpose == TerrainBlockBuildPurpose.RequestedContent
+                        ? AcquireRequestedField(blockId, editRegions)
+                        : new TerrainBlockFieldLoadResult(
+                            _mesher.BuildField(blockId, editRegions),
+                            TerrainChunkLoadSource.Resident);
+                    if (IsShuttingDown)
+                    {
+                        return;
+                    }
+
                     _completedFieldBuildResults.Enqueue(
                         new CompletedFieldBuildResult(
                             blockId,
                             instanceVersion,
                             revision,
-                            field,
+                            fieldResult.Field,
                             stopwatch.Elapsed.TotalMilliseconds,
+                            fieldResult.Source,
                             buildPurpose,
                             displayedRefreshRevision,
                             displayedRefreshOperationSequence,
@@ -1352,6 +1876,11 @@ public partial class TerrainLodManager : Node3D
                 }
                 catch
                 {
+                    if (IsShuttingDown)
+                    {
+                        return;
+                    }
+
                     _completedFieldBuildResults.Enqueue(
                         new CompletedFieldBuildResult(
                             blockId,
@@ -1359,6 +1888,7 @@ public partial class TerrainLodManager : Node3D
                             revision,
                             null,
                             stopwatch.Elapsed.TotalMilliseconds,
+                            TerrainChunkLoadSource.Resident,
                             buildPurpose,
                             displayedRefreshRevision,
                             displayedRefreshOperationSequence,
@@ -1374,7 +1904,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ApplyCompletedFieldBuildResults()
     {
-        int applyBudget = Mathf.Clamp(FieldResultAppliesPerFrame, 1, MaxFieldResultAppliesPerFrame);
+        int applyBudget = GetCurrentFieldResultApplyBudget();
         while (_completedFieldBuildResults.TryPeek(out CompletedFieldBuildResult nextResult))
         {
             bool needsBudget = IsCurrentFieldBuildResult(nextResult);
@@ -1411,6 +1941,7 @@ public partial class TerrainLodManager : Node3D
                 block.SetField(result.Field);
                 _lastFieldBuildCount++;
                 _lastFieldBuildMs += result.WorkerBuildMs;
+                RecordFieldLoad(result.Source, result.WorkerBuildMs);
                 EnqueueMeshBuildDispatch(block.Id);
                 continue;
             }
@@ -1440,7 +1971,7 @@ public partial class TerrainLodManager : Node3D
 
     private void StartMeshBuildWorkers()
     {
-        int workerBudget = Mathf.Clamp(MeshWorkerJobs, 1, MaxMeshWorkerJobs);
+        int workerBudget = GetCurrentMeshWorkerBudget();
         while (Volatile.Read(ref _activeMeshWorkerJobs) < workerBudget &&
                TryDequeueBlockDispatch(_meshBuildDispatcherQueue, _meshBuildDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1488,6 +2019,11 @@ public partial class TerrainLodManager : Node3D
                 try
                 {
                     VoxelMeshBuildResult mesh = _mesher.BuildMesh(field);
+                    if (IsShuttingDown)
+                    {
+                        return;
+                    }
+
                     _completedMeshBuildResults.Enqueue(
                         new CompletedMeshBuildResult(
                             blockId,
@@ -1502,6 +2038,11 @@ public partial class TerrainLodManager : Node3D
                 }
                 catch
                 {
+                    if (IsShuttingDown)
+                    {
+                        return;
+                    }
+
                     _completedMeshBuildResults.Enqueue(
                         new CompletedMeshBuildResult(
                             blockId,
@@ -1524,7 +2065,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ApplyCompletedMeshBuildResults()
     {
-        int applyBudget = Mathf.Clamp(MeshResultAppliesPerFrame, 1, MaxMeshResultAppliesPerFrame);
+        int applyBudget = GetCurrentMeshResultApplyBudget();
         while (_completedMeshBuildResults.TryPeek(out CompletedMeshBuildResult nextResult))
         {
             bool needsBudget = IsCurrentMeshBuildResult(nextResult);
@@ -1590,7 +2131,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ProcessMeshCommitDispatch()
     {
-        int commitBudget = Mathf.Clamp(MeshCommitsPerFrame, 1, MaxMeshCommitsPerFrame);
+        int commitBudget = GetCurrentMeshCommitBudget();
         List<TerrainBlockId> deferredCommitRequeues = new();
         HashSet<TerrainBlockId> displayedRefreshSeamRoots = new();
         HashSet<TerrainBlockId> currentDeformSeamRoots = new();
@@ -1736,7 +2277,7 @@ public partial class TerrainLodManager : Node3D
 
     private void ProcessCollisionDispatch()
     {
-        int collisionBudget = Mathf.Clamp(CollisionBuildsPerFrame, 1, MaxCollisionBuildsPerFrame);
+        int collisionBudget = GetCurrentCollisionBudget();
         while (_lastCollisionCount < collisionBudget &&
                TryDequeueBlockDispatch(_collisionDispatcherQueue, _collisionDispatchTokens, out TerrainBlockId blockId))
         {
@@ -1757,6 +2298,7 @@ public partial class TerrainLodManager : Node3D
             _lastCollisionCount++;
             long refreshOperationSequence = block.ConsumePendingCollisionRefreshOperation();
             block.MarkCollisionReady();
+            UpdateStartupSatisfiedState(block.Id);
             AccumulateDisplayedRefreshCollisionRebuild(refreshOperationSequence, collisionMs);
             if (block.State == TerrainBlockState.Visible && block.Desired)
             {
@@ -2684,6 +3226,7 @@ public partial class TerrainLodManager : Node3D
                 TryHideSupersededCoverageAround(block.Id);
             }
 
+            UpdateStartupSatisfiedState(block.Id);
             MarkVisibleMixedLodSeamsDirtyAround(blockId);
             EnqueueDispatcherForCurrentState(block);
             return;
@@ -2754,31 +3297,61 @@ public partial class TerrainLodManager : Node3D
 
     private void EnqueueCreateDispatch(TerrainBlockId blockId)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, blockId, farthestFirst: false);
     }
 
     private void EnqueueFieldBuildDispatch(TerrainBlockId blockId, bool urgent = false)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_fieldBuildDispatcherQueue, _fieldBuildDispatchTokens, blockId, farthestFirst: false, urgent);
     }
 
     private void EnqueueMeshBuildDispatch(TerrainBlockId blockId, bool urgent = false)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_meshBuildDispatcherQueue, _meshBuildDispatchTokens, blockId, farthestFirst: false, urgent);
     }
 
     private void EnqueueCommitDispatch(TerrainBlockId blockId, bool urgent = false)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, blockId, farthestFirst: false, urgent);
     }
 
     private void EnqueueCollisionDispatch(TerrainBlockId blockId, bool urgent = false)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_collisionDispatcherQueue, _collisionDispatchTokens, blockId, farthestFirst: false, urgent);
     }
 
     private void EnqueueReleaseDispatch(TerrainBlockId blockId)
     {
+        if (IsShuttingDown)
+        {
+            return;
+        }
+
         EnqueueBlockDispatch(_releaseDispatcherQueue, _releaseDispatchTokens, blockId, farthestFirst: true);
     }
 
@@ -2821,13 +3394,18 @@ public partial class TerrainLodManager : Node3D
     {
         float distance = TerrainMetrics.DistanceSquaredToBlock(_config, blockId, _lastViewerPosition);
         return new BlockDispatchPriority(
-            urgent ? 0 : 1,
+            urgent ? 0 : (_startupBlocks.Contains(blockId) && IsStartupBoostActive() && !farthestFirst ? 1 : 2),
             blockId.Lod,
             farthestFirst ? -distance : distance,
             token);
     }
 
     private bool ShouldIncludeCollision(TerrainBlockId blockId)
+    {
+        return ShouldIncludeCollision(blockId, _lastViewerPosition);
+    }
+
+    private bool ShouldIncludeCollision(TerrainBlockId blockId, Vector3 viewerPosition)
     {
         if (blockId.Lod > GetMaxCollisionLod())
         {
@@ -2841,10 +3419,10 @@ public partial class TerrainLodManager : Node3D
         Vector3 min = bounds.Position;
         Vector3 max = bounds.End;
         Vector3 clamped = new(
-            Mathf.Clamp(_lastViewerPosition.X, min.X, max.X),
-            Mathf.Clamp(_lastViewerPosition.Y, min.Y, max.Y),
-            Mathf.Clamp(_lastViewerPosition.Z, min.Z, max.Z));
-        Vector3 delta = _lastViewerPosition - clamped;
+            Mathf.Clamp(viewerPosition.X, min.X, max.X),
+            Mathf.Clamp(viewerPosition.Y, min.Y, max.Y),
+            Mathf.Clamp(viewerPosition.Z, min.Z, max.Z));
+        Vector3 delta = viewerPosition - clamped;
         Vector2 horizontalDelta = new(delta.X, delta.Z);
         return horizontalDelta.Length() <= horizontalSafetyRadius &&
                Mathf.Abs(delta.Y) <= verticalSafetyRadius;
@@ -2904,11 +3482,13 @@ public partial class TerrainLodManager : Node3D
             if (!_initialLoadComplete)
             {
                 _initialLoadComplete = true;
+                _startupCompleteMs = 0.0;
                 EmitSignal(SignalName.InitialLoadCompleted);
             }
             return;
         }
 
+        RefreshStartupSatisfiedBlocks();
         InitialLoadProgress = Mathf.Clamp(
             (float)_startupSatisfiedBlocks.Count / _startupBlocks.Count,
             0.0f,
@@ -2916,6 +3496,9 @@ public partial class TerrainLodManager : Node3D
         if (!_initialLoadComplete && _startupSatisfiedBlocks.Count >= _startupBlocks.Count)
         {
             _initialLoadComplete = true;
+            _startupCompleteMs = _startupSelectionStartSeconds >= 0.0
+                ? Math.Max(0.0, (_currentTimeSeconds - _startupSelectionStartSeconds) * 1000.0)
+                : 0.0;
             EmitSignal(SignalName.InitialLoadCompleted);
         }
     }
@@ -2982,13 +3565,23 @@ public partial class TerrainLodManager : Node3D
         ObserveSupersededBlockTransition(blockId, block, "marked_releasable");
     }
 
-    private void RecordReplacementVisualsReady(TerrainBlockId _)
+    private void RecordReplacementVisualsReady(TerrainBlockId blockId)
     {
+        if (_startupFirstVisibleTerrainMs < 0.0 &&
+            _startupSelectionStartSeconds >= 0.0 &&
+            _blocks.TryGetValue(blockId, out TerrainBlockData block) &&
+            IsBlockDisplayingVisuals(block))
+        {
+            _startupFirstVisibleTerrainMs = Math.Max(0.0, (_currentTimeSeconds - _startupSelectionStartSeconds) * 1000.0);
+        }
+
+        UpdateStartupSatisfiedState(blockId);
         RefreshSupersededBlockTransitionTelemetry();
     }
 
-    private void RecordReplacementCollisionReady(TerrainBlockId _)
+    private void RecordReplacementCollisionReady(TerrainBlockId blockId)
     {
+        UpdateStartupSatisfiedState(blockId);
         RefreshSupersededBlockTransitionTelemetry();
     }
 
@@ -3600,8 +4193,8 @@ public partial class TerrainLodManager : Node3D
             RunningMeshBuildCount = Volatile.Read(ref _activeMeshWorkerJobs),
             PendingMeshCommitCount = meshReady,
             ToReleaseCount = releasable,
-            LastChunkLoadCount = _lastFieldBuildCount,
-            LastChunkLoadMs = _lastFieldBuildMs,
+            LastChunkLoadCount = _lastStartupChunkLoadCount + _lastPersistedChunkLoadCount + _lastGeneratedChunkLoadCount,
+            LastChunkLoadMs = _lastStartupChunkLoadMs + _lastPersistedChunkLoadMs + _lastGeneratedChunkLoadMs,
             LastMeshWorkerBuildCount = _lastMeshBuildCount,
             LastMeshWorkerBuildMs = _lastMeshBuildMs,
             LastChunkActivationCount = _lastCommitCount,
@@ -3614,6 +4207,12 @@ public partial class TerrainLodManager : Node3D
             LastChunkReleaseMs = _lastReleaseMs,
             MeshBackendName = "lod_blocks_v1",
             SearchThrottleState = "lod_blocks",
+            LastStartupChunkLoadCount = _lastStartupChunkLoadCount,
+            LastPersistedChunkLoadCount = _lastPersistedChunkLoadCount,
+            LastGeneratedChunkLoadCount = _lastGeneratedChunkLoadCount,
+            LastStartupChunkLoadMs = _lastStartupChunkLoadMs,
+            LastPersistedChunkLoadMs = _lastPersistedChunkLoadMs,
+            LastGeneratedChunkLoadMs = _lastGeneratedChunkLoadMs,
             DeformOperationCount = _deformOperationCount,
             TotalEditedChunkCount = _totalEditedChunkCount,
             TotalEditedSampleCount = _totalEditedSampleCount,
@@ -3675,6 +4274,21 @@ public partial class TerrainLodManager : Node3D
             LastAverageReleaseDeferredAgeMs = ComputeAverageDeferredReleaseAgeMs(
                 _lastReleaseDeferredAgeSampleCount,
                 _lastReleaseDeferredAgeMsTotal),
+            PersistedChunkRecordCount = _persistedLodBlocks.Count,
+            StartupSnapshotChunkCount = _startupSnapshotBlocks.Count,
+            StartupDesiredCoverageCount = _startupSatisfiedBlocks.Count,
+            StartupCriticalChunkCount = _startupBlocks.Count,
+            StartupCriticalSatisfiedCount = _startupSatisfiedBlocks.Count,
+            StartupFullDesiredChunkCount = _lastDesiredBlockCount,
+            StartupBoostActive = IsStartupBoostActive(),
+            TimeToFirstVisibleTerrainMs = _startupFirstVisibleTerrainMs,
+            TimeToStartupCompleteMs = _startupCompleteMs,
+            RestoredFromStartupSnapshotCount = _startupRestoredBlockCount,
+            RestoredFromPersistedBlockCount = _persistedRestoredBlockCount,
+            ProcedurallyGeneratedBlockCount = _procedurallyGeneratedBlockCount,
+            StartupSnapshotHits = _startupRestoredBlockCount,
+            DatabaseHits = _persistedRestoredBlockCount,
+            GenerationFallbacks = _procedurallyGeneratedBlockCount,
             ActiveSupersededBlockTransitionCount = supersededSummary.ActiveCount,
             WaitingForMarkReleasableSupersededBlockCount = supersededSummary.WaitingForMarkReleasableCount,
             WaitingForVisualCoverageSupersededBlockCount = supersededSummary.WaitingForVisualCoverageCount,
@@ -3733,6 +4347,7 @@ public partial class TerrainLodManager : Node3D
 
         return
             $"requested {requested}  field {fieldReady}  mesh {meshReady}  visible {visible}  releasable {releasable}  " +
+            $"startup {_startupSatisfiedBlocks.Count}/{_startupBlocks.Count} boost {(IsStartupBoostActive() ? "on" : "off")}  " +
             $"hold {_hysteresisRetainedBlockCount}  blocks {BuildTierCountSummary(_currentLodBlockCounts, 'l', FinestTerrainLod)}  " +
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
             $"seam {MixedLodSeamMode.GetDisplayName()} t/s/k/sup {seamSummary.TransitionFaceCount}/{seamSummary.SkirtFaceCount}/{seamSummary.ExplicitSkipFaceCount}/{seamSummary.SuppressedFaceCount}  " +
@@ -3741,6 +4356,20 @@ public partial class TerrainLodManager : Node3D
             $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{_completedMeshBuildResults.Count}  " +
             $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  " +
             $"set/s {_blockSetChangeRatePerSecond:0.0}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
+    }
+
+    private string BuildStartupSummary()
+    {
+        string firstVisible = _startupFirstVisibleTerrainMs < 0.0
+            ? "pending"
+            : $"{_startupFirstVisibleTerrainMs:0.0}ms";
+        string startupComplete = _startupCompleteMs < 0.0
+            ? "pending"
+            : $"{_startupCompleteMs:0.0}ms";
+        return
+            $"critical {_startupSatisfiedBlocks.Count}/{_startupBlocks.Count}  desired {_lastDesiredBlockCount}  " +
+            $"boost {(IsStartupBoostActive() ? "on" : "off")}  first_visible {firstVisible}  complete {startupComplete}  " +
+            $"restore snapshot/persisted/generated {_startupRestoredBlockCount}/{_persistedRestoredBlockCount}/{_procedurallyGeneratedBlockCount}";
     }
 
     private MixedLodSeamProfileSummary BuildMixedLodSeamProfileSummary()
@@ -3890,7 +4519,7 @@ public partial class TerrainLodManager : Node3D
             ? centerParent.ToString()
             : $"{centerParent}->{targetCenterParent}";
         return
-            $"raw {viewerParent}  center {centerSummary}  desired {desiredCount}  " +
+            $"raw {viewerParent}  center {centerSummary}  desired {desiredCount}  startup {_startupSatisfiedBlocks.Count}/{_startupBlocks.Count}  " +
             $"split_r {BuildSplitRadiusSummary()}  " +
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
             $"blocks {BuildTierCountSummary(_currentLodBlockCounts, 'l', FinestTerrainLod)}  " +
@@ -4216,10 +4845,7 @@ public partial class TerrainLodManager : Node3D
         }
 
         _lastCommitSummary = $"{block.Id} tri {block.TriangleCount} {(includeCollision ? "collision_queued" : "visual_only")}";
-        if (_startupBlocks.Contains(block.Id))
-        {
-            _startupSatisfiedBlocks.Add(block.Id);
-        }
+        UpdateStartupSatisfiedState(block.Id);
     }
 
     private void WritePromotionBatchDiagnosticsLog(
@@ -4297,12 +4923,29 @@ public partial class TerrainLodManager : Node3D
         return a.Index.Z.CompareTo(b.Index.Z);
     }
 
+    private readonly record struct TerrainBlockFieldLoadResult(
+        VoxelChunkData Field,
+        TerrainChunkLoadSource Source);
+
+    private readonly record struct ShutdownSaveCandidate(
+        TerrainBlockId BlockId,
+        bool Visible,
+        bool CollisionCritical,
+        float DistanceSquared);
+
+    private readonly record struct ShutdownStartupSaveSummary(
+        List<TerrainLodStartupBlockSnapshot> Blocks,
+        int ConsideredCount,
+        int SkippedCount,
+        bool HitCap);
+
     private readonly record struct CompletedFieldBuildResult(
         TerrainBlockId BlockId,
         long InstanceVersion,
         int Revision,
         VoxelChunkData Field,
         double WorkerBuildMs,
+        TerrainChunkLoadSource Source,
         TerrainBlockBuildPurpose BuildPurpose,
         int DisplayedRefreshRevision,
         long DisplayedRefreshOperationSequence,

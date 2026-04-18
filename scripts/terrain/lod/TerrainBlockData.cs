@@ -27,6 +27,7 @@ public sealed class TerrainBlockData
     public bool Desired { get; set; } = true;
     public int TriangleCount { get; private set; }
     public VoxelChunkData Field { get; private set; }
+    public VoxelChunkData PersistableField { get; private set; }
     public VoxelMeshBuildResult Mesh { get; private set; } = VoxelMeshBuildResult.Empty;
     public TerrainSeamBuildResult SeamBuild { get; private set; } = TerrainSeamBuildResult.None;
     public double ReleaseEligibleAtSeconds { get; private set; }
@@ -57,6 +58,7 @@ public sealed class TerrainBlockData
     {
         FieldBuildRunning = false;
         Field = field;
+        PersistableField = field;
         HasDisplayedRefreshMeshReady = false;
         State = TerrainBlockState.FieldReady;
     }
@@ -115,6 +117,7 @@ public sealed class TerrainBlockData
     {
         FieldBuildRunning = false;
         Field = field;
+        PersistableField = field;
         Mesh = VoxelMeshBuildResult.Empty;
         HasDisplayedRefreshMeshReady = false;
         SeamBuild = TerrainSeamBuildResult.None;
@@ -223,6 +226,12 @@ public sealed class TerrainBlockData
         DisplayedRefreshDirty = false;
         DisplayedRefreshOperationSequence = 0;
         PendingCollisionRefreshOperationSequence = 0;
+    }
+
+    public bool TryGetPersistableField(out VoxelChunkData field)
+    {
+        field = PersistableField;
+        return field != null;
     }
 
     private void ClearTransientBuildArtifacts()

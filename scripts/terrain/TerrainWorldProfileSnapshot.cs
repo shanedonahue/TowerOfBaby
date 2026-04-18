@@ -155,6 +155,15 @@ public sealed class TerrainWorldProfileSnapshot
     public int PersistedChunkRecordCount { get; init; }
     public int StartupSnapshotChunkCount { get; init; }
     public int StartupDesiredCoverageCount { get; init; }
+    public int StartupCriticalChunkCount { get; init; }
+    public int StartupCriticalSatisfiedCount { get; init; }
+    public int StartupFullDesiredChunkCount { get; init; }
+    public bool StartupBoostActive { get; init; }
+    public double TimeToFirstVisibleTerrainMs { get; init; } = -1.0;
+    public double TimeToStartupCompleteMs { get; init; } = -1.0;
+    public long RestoredFromStartupSnapshotCount { get; init; }
+    public long RestoredFromPersistedBlockCount { get; init; }
+    public long ProcedurallyGeneratedBlockCount { get; init; }
     public long SearchInvalidationCount { get; init; }
     public long StalePriorityRefreshCount { get; init; }
     public long FrontierCompactionCount { get; init; }
