@@ -55,6 +55,7 @@ public partial class TerrainRenderer : Node3D
         float clampedRoughness = Mathf.Clamp(roughness, 0.0f, 1.0f);
         _sharedSurfaceRoughness = clampedRoughness;
         SharedLitVertexColorMaterial.Roughness = clampedRoughness;
+        TerrainSurfaceMaterialLibrary.ConfigureSharedSurfaceRoughness(clampedRoughness);
         foreach (StandardMaterial3D wireframeMaterial in WireframeMaterialsByLod.Values)
         {
             wireframeMaterial.Roughness = clampedRoughness;
@@ -341,8 +342,8 @@ public partial class TerrainRenderer : Node3D
         }
 
         return _debugView.UsesDiagnosticVertexColors()
-            ? SharedUnshadedVertexColorMaterial
-            : SharedLitVertexColorMaterial;
+            ? TerrainSurfaceMaterialLibrary.UnshadedVertexColorMaterial
+            : TerrainSurfaceMaterialLibrary.TintedLitSurfaceMaterial;
     }
 
     private static StandardMaterial3D CreateLitVertexColorMaterial()

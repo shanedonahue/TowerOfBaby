@@ -82,7 +82,7 @@ public sealed class TerrainSurfaceColorizer
         {
             Vector3 worldPosition = origin + mesh.Vertices[i];
             TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldPosition.X, worldPosition.Z);
-            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i]);
+            litColors[i] = ResolveLitColor(worldPosition, mesh.Normals[i], materialColors[i]);
             WriteBiomeWeights(biomeWeights, i * 4, biome);
         }
 
@@ -123,7 +123,8 @@ public sealed class TerrainSurfaceColorizer
 
     private Color ResolveLitColor(
         Vector3 worldPosition,
-        Vector3 normal)
+        Vector3 normal,
+        Color materialColor)
     {
         Vector3 safeNormal = normal.LengthSquared() > 0.000001f
             ? normal.Normalized()
@@ -144,11 +145,32 @@ public sealed class TerrainSurfaceColorizer
             return SlopeColor;
         }
 
-        return ClampColor(new Color(
+        Color terrainPaletteColor = new Color(
             ((LowlandColor.R * lowlandWeight) + (SlopeColor.R * slopeWeight) + (PeakColor.R * peakWeight)) / weightSum,
             ((LowlandColor.G * lowlandWeight) + (SlopeColor.G * slopeWeight) + (PeakColor.G * peakWeight)) / weightSum,
             ((LowlandColor.B * lowlandWeight) + (SlopeColor.B * slopeWeight) + (PeakColor.B * peakWeight)) / weightSum,
-            1.0f));
+            1.0f);
+        return ApplyMaterialReadability(terrainPaletteColor, materialColor, slope, flatness);
+    }
+
+    private static Color ApplyMaterialReadability(
+        Color terrainPaletteColor,
+        Color materialColor,
+        float slope,
+        float flatness)
+    {
+        VoxelMaterialId materialId = VoxelMaterialPalette.ResolveNearestTintMaterial(materialColor);
+        Color softenedMaterialColor = materialColor.Lerp(VoxelMaterialPalette.GetNeutralColor(materialId), 0.45f);
+        float materialBlend = materialId switch
+        {
+            VoxelMaterialId.Grass => 0.24f + (flatness * 0.10f),
+            VoxelMaterialId.Rock => 0.30f + (slope * 0.10f),
+            VoxelMaterialId.Cliff => 0.36f + (slope * 0.12f),
+            VoxelMaterialId.Snow => 0.42f,
+            VoxelMaterialId.Scorched => 0.72f,
+            _ => 0.18f + (flatness * 0.06f)
+        };
+        return ClampColor(terrainPaletteColor.Lerp(softenedMaterialColor, Mathf.Clamp(materialBlend, 0.0f, 0.82f)));
     }
 
     private static void WriteBiomeWeights(float[] destination, int offset, TerrainBiomeSample biome)

@@ -17,7 +17,7 @@ internal static class TerrainSurfaceMaterialLibrary
     private const float DefaultBlendSharpness = 3.0f;
     private const float DefaultGrassSlopeMax = 0.28f;
     private const float DefaultRockSlopeStart = 0.42f;
-    private const float DefaultVertexTintStrength = 0.06f;
+    private const float DefaultVertexTintStrength = 0.18f;
     private const float DefaultNormalStrength = 0.75f;
     private const float DefaultNormalDetailMaxDistance = 72.0f;
     private const float DefaultFlatNormalSkipSlope = 0.12f;
@@ -31,7 +31,7 @@ internal static class TerrainSurfaceMaterialLibrary
     private static bool _surfaceMaterialsInitialized;
     private static bool _warnedMissingTerrainMaterialResources;
     private static float _sharedRoughness = 1.0f;
-    private static float _sharedWaterLevel = -2.6f;
+    private static float _sharedWaterLevel = -3.4f;
     private static float _sharedTextureTilingScale = DefaultTextureTilingScale;
     private static float _sharedBlendSharpness = DefaultBlendSharpness;
     private static float _sharedGrassSlopeMax = DefaultGrassSlopeMax;

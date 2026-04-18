@@ -38,9 +38,9 @@ public readonly record struct TerrainEditStampData(
     public string Summary => Kind switch
     {
         TerrainEditStampKind.Sphere =>
-            $"sphere r {Radius:0.00} dirty {BoundsRadius:0.00} dd {DensityDelta:0.00}",
+            $"sphere r {Radius:0.00} dirty {BoundsRadius:0.00} dd {DensityDelta:0.00} paint {PaintStrength:0.00}",
         TerrainEditStampKind.Slash =>
-            $"slash l/w/d {Length:0.00}/{Width:0.00}/{Depth:0.00} dirty {BoundsRadius:0.00} dd {DensityDelta:0.00}",
+            $"slash l/w/d {Length:0.00}/{Width:0.00}/{Depth:0.00} dirty {BoundsRadius:0.00} dd {DensityDelta:0.00} paint {PaintStrength:0.00}",
         _ => Kind.ToString()
     };
 
@@ -58,7 +58,7 @@ public readonly record struct TerrainEditStampData(
             0.0f,
             0.0f,
             edit.DeltaDensity,
-            0.0f,
+            edit.PaintStrength,
             edit.RetextureMargin);
     }
 
@@ -93,7 +93,7 @@ public readonly record struct TerrainEditStampData(
         {
             TerrainEditStampKind.Sphere => VoxelTerrainEditing.ApplySphere(
                 data,
-                new VoxelSphereEdit(Center, Radius, DensityDelta, RetextureMargin),
+                new VoxelSphereEdit(Center, Radius, DensityDelta, PaintStrength, RetextureMargin),
                 materialResolver),
             TerrainEditStampKind.Slash => VoxelTerrainEditing.ApplySlash(
                 data,

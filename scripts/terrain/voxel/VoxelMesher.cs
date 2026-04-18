@@ -484,29 +484,12 @@ public static class VoxelMesher
 
     private static Color MaterialTintColor(VoxelMaterialId materialId)
     {
-        return materialId switch
-        {
-            VoxelMaterialId.Grass => new Color(0.39f, 0.55f, 0.28f),
-            VoxelMaterialId.Rock => new Color(0.44f, 0.48f, 0.52f),
-            VoxelMaterialId.Cliff => new Color(0.47f, 0.43f, 0.40f),
-            VoxelMaterialId.Snow => new Color(0.90f, 0.93f, 0.97f),
-            VoxelMaterialId.Scorched => new Color(0.18f, 0.16f, 0.15f),
-            _ => new Color(0.58f, 0.39f, 0.22f)
-        };
+        return VoxelMaterialPalette.GetTintColor(materialId);
     }
 
     private static Color NeutralColor(VoxelMaterialId materialId)
     {
-        return materialId switch
-        {
-            // Keep the default lit path closer to the simpler gameplay palette from 7ba9579.
-            VoxelMaterialId.Grass => new Color(0.47f, 0.56f, 0.33f),
-            VoxelMaterialId.Rock => new Color(0.53f, 0.51f, 0.49f),
-            VoxelMaterialId.Cliff => new Color(0.61f, 0.55f, 0.41f),
-            VoxelMaterialId.Snow => new Color(0.86f, 0.87f, 0.89f),
-            VoxelMaterialId.Scorched => new Color(0.21f, 0.19f, 0.18f),
-            _ => new Color(0.50f, 0.40f, 0.27f)
-        };
+        return VoxelMaterialPalette.GetNeutralColor(materialId);
     }
 
     private static MeshBuildScratch GetScratch()

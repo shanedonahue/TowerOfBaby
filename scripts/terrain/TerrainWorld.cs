@@ -20,7 +20,7 @@ public partial class TerrainWorld : Node3D
     [Export] public float DetailHeight = 2.8f;
     [Export] public float CaveScale = 9.0f;
     [Export] public float CaveThreshold = 0.63f;
-    [Export] public float WaterLevel = -2.6f;
+    [Export] public float WaterLevel = -3.4f;
     [Export] public float ShorelineFalloff = 3.4f;
     [Export] public float WaterBasinInfluence = 0.48f;
     [ExportGroup("Debug")]
@@ -66,6 +66,11 @@ public partial class TerrainWorld : Node3D
     public void ApplyBrush(Vector3 worldCenter, bool additive)
     {
         _lodManager?.ApplyBrush(worldCenter, additive);
+    }
+
+    public void ApplyImpact(TerrainImpactRequest impact)
+    {
+        _lodManager?.ApplyImpact(impact);
     }
 
     public void ApplySlash(VoxelSlashEdit edit)

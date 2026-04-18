@@ -87,6 +87,12 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastDeformEditDetailPromotionCount { get; init; }
     public double LastDeformMs { get; init; }
     public string LastDeformKind { get; init; } = string.Empty;
+    public string LastEditOperationSummary { get; init; } = string.Empty;
+    public int LastDeformVisibleBlockCount { get; init; }
+    public int LastDeformVisibleFinestBlockCount { get; init; }
+    public int LastDeformRequeuedBlockCount { get; init; }
+    public int LastDeformRefreshedTriangleCount { get; init; }
+    public double LastDeformSyncRefreshMs { get; init; }
     public long MeshBuildWorkerCount { get; init; }
     public double MeshBuildWorkerMs { get; init; }
     public double LastMeshBuildWorkerMs { get; init; }

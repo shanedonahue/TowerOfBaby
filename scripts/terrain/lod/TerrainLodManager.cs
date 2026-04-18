@@ -14,6 +14,21 @@ namespace TowerOfBaby.Terrain;
 
 public partial class TerrainLodManager : Node3D
 {
+    private readonly record struct TerrainEditInvalidationStats(
+        int IntersectedBlockCount,
+        int VisibleBlockCount,
+        int VisibleFinestBlockCount,
+        int RequeuedBlockCount,
+        int RefreshedTriangleCount,
+        double SyncRefreshMs)
+    {
+        public string Summary =>
+            $"blocks {IntersectedBlockCount} visible {VisibleBlockCount} finest {VisibleFinestBlockCount} requeued {RequeuedBlockCount} " +
+            $"sync_tri {RefreshedTriangleCount} sync_ms {SyncRefreshMs:0.00}";
+    }
+
+    private readonly record struct TerrainDisplayedBlockRefreshStats(int TriangleCount, double RefreshMs);
+
     private const int FinestTerrainLod = 0;
     private const string TransitionLogPrefix = "[TerrainLodTransition]";
     private const string TransitionLogRelativePath = "user://profiling/terrain_lod_transition_latest.log";
@@ -142,6 +157,23 @@ public partial class TerrainLodManager : Node3D
     private double _blockCreateRatePerSecond;
     private double _blockReleaseRatePerSecond;
     private double _blockSetChangeRatePerSecond;
+    private long _deformOperationCount;
+    private long _totalEditedChunkCount;
+    private long _totalEditedSampleCount;
+    private double _totalEditedDirtyBoundsVolume;
+    private long _editDetailPromotionCount;
+    private int _lastDeformEditedChunkCount;
+    private int _lastDeformEditedSampleCount;
+    private double _lastDeformDirtyBoundsVolume;
+    private int _lastDeformEditDetailPromotionCount;
+    private double _lastDeformMs;
+    private string _lastDeformKind = "n/a";
+    private string _lastEditOperationSummary = "none";
+    private int _lastDeformVisibleBlockCount;
+    private int _lastDeformVisibleFinestBlockCount;
+    private int _lastDeformRequeuedBlockCount;
+    private int _lastDeformRefreshedTriangleCount;
+    private double _lastDeformSyncRefreshMs;
     private long _refinementHandoffCount;
     private long _releaseHysteresisDeferralCount;
     private long _releaseCoverageDeferralCount;
@@ -162,6 +194,7 @@ public partial class TerrainLodManager : Node3D
     private string _lastSupersededTransitionSummary = "none";
     private string _lastMixedLodSeamSummary = "none";
     private bool _allVisibleMixedLodSeamsDirty;
+    private float _lastConfiguredSurfaceWaterLevel = float.NaN;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -178,6 +211,7 @@ public partial class TerrainLodManager : Node3D
         _lastEditRegionSummary = _editRegionManager.BuildDebugSummary();
         _appliedMixedLodSeamMode = MixedLodSeamMode;
         _activeTerrainDebugView = ResolveTerrainDebugView(_terrainWorld?.TerrainDebugView ?? TerrainVisualDebugMode.Lit);
+        ConfigureSharedSurfaceWaterLevel();
         _trackedCharacter = ResolveTrackedCharacter();
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
@@ -190,6 +224,7 @@ public partial class TerrainLodManager : Node3D
     public override void _Process(double delta)
     {
         _currentTimeSeconds = Time.GetTicksUsec() / 1_000_000.0;
+        ConfigureSharedSurfaceWaterLevel();
         _trackedCharacter ??= ResolveTrackedCharacter();
         if (_trackedCharacter == null)
         {
@@ -281,36 +316,55 @@ public partial class TerrainLodManager : Node3D
             : (_terrainWorld?.CarveStrength ?? -3.4f);
         float radius = _terrainWorld?.BrushRadius ?? 2.4f;
         float retextureMargin = _terrainWorld?.BrushRetextureMargin ?? 1.6f;
-        VoxelSphereEdit edit = new(worldCenter, radius, strength, retextureMargin);
-        TerrainEditStampData stamp = TerrainEditStampData.FromSphere(edit, _config.BaseVoxelSize);
-        ApplyEditMutation(
-            additive ? "build_brush" : "carve_brush",
-            _editRegionManager.RegisterStamp(
-                stamp,
-                2,
-                TerrainDetailRegionSource.Edit,
-                TerrainChunk.EditedDetailRegionReason,
-                100.0f,
-                true));
+        ApplyImpact(TerrainImpactProfiles.CreateBrush(
+            worldCenter,
+            additive,
+            radius,
+            strength,
+            retextureMargin));
     }
 
     public void ApplySlash(VoxelSlashEdit edit)
     {
-        TerrainEditStampData stamp = TerrainEditStampData.FromSlash(edit, _config.BaseVoxelSize);
+        ApplyImpact(TerrainImpactRequest.CreateSlash(
+            TerrainImpactKind.Custom,
+            edit.Center,
+            edit.Direction,
+            edit.SurfaceNormal,
+            edit.Length,
+            edit.Width,
+            edit.Depth,
+            edit.DensityDelta,
+            edit.PaintStrength,
+            edit.RetextureMargin,
+            2,
+            TerrainDetailRegionSource.Edit,
+            TerrainChunk.EditedDetailRegionReason,
+            100.0f,
+            true));
+    }
+
+    public void ApplyImpact(TerrainImpactRequest impact)
+    {
+        ulong operationStartUsec = Time.GetTicksUsec();
+        TerrainEditStampData stamp = impact.ToStamp(_config.BaseVoxelSize);
         ApplyEditMutation(
-            "slash",
+            impact.OperationName,
             _editRegionManager.RegisterStamp(
                 stamp,
-                2,
-                TerrainDetailRegionSource.Edit,
-                TerrainChunk.EditedDetailRegionReason,
-                100.0f,
-                true));
+                Mathf.Max(1, impact.RequestedDetailLevel),
+                impact.Source,
+                impact.RegionReason,
+                impact.Priority,
+                impact.Sticky),
+            stamp,
+            operationStartUsec);
     }
 
     public void ClearPersistedEditRegions()
     {
-        ApplyEditMutation("clear_edits", _editRegionManager.ClearAll());
+        ulong operationStartUsec = Time.GetTicksUsec();
+        ApplyEditMutation("clear_edits", _editRegionManager.ClearAll(), null, operationStartUsec);
     }
 
     public bool SetTerrainDebugView(TerrainVisualDebugMode debugView)
@@ -352,7 +406,7 @@ public partial class TerrainLodManager : Node3D
                 DetailHeight = 2.8f,
                 CaveScale = 9.0f,
                 CaveThreshold = 0.63f,
-                WaterLevel = -2.6f,
+                WaterLevel = -3.4f,
                 ShorelineFalloff = 3.4f,
                 WaterBasinInfluence = 0.48f,
                 CoarseRadiusXZ = Mathf.Max(1, CoarsestRadiusXZ),
@@ -397,25 +451,56 @@ public partial class TerrainLodManager : Node3D
             : TerrainVisualDebugMode.Lit;
     }
 
-    private void ApplyEditMutation(string operation, TerrainEditRegionMutationResult mutation)
+    private void ApplyEditMutation(
+        string operation,
+        TerrainEditRegionMutationResult mutation,
+        TerrainEditStampData? stamp = null,
+        ulong operationStartUsec = 0)
     {
-        _lastEditRegionSummary = mutation.Changed
-            ? $"{operation} {mutation.Summary}"
-            : $"{operation} none";
         if (!mutation.Changed)
         {
+            _lastEditOperationSummary = $"{operation} none";
+            _lastEditRegionSummary = _lastEditOperationSummary;
             _latestProfileSnapshot = BuildProfileSnapshot();
             return;
         }
 
-        InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, operation);
+        TerrainEditInvalidationStats invalidation = InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, operation);
+        double dirtyBoundsVolume = ComputeBoundsVolume(mutation.DirtyWorldBounds);
+        int estimatedEditedSamples = EstimateEditedSampleCount(stamp, mutation.DirtyWorldBounds);
+        int detailPromotions = invalidation.VisibleFinestBlockCount;
+        double deformMs = operationStartUsec == 0
+            ? invalidation.SyncRefreshMs
+            : (Time.GetTicksUsec() - operationStartUsec) / 1000.0;
+
+        _deformOperationCount++;
+        _totalEditedChunkCount += invalidation.IntersectedBlockCount;
+        _totalEditedSampleCount += estimatedEditedSamples;
+        _totalEditedDirtyBoundsVolume += dirtyBoundsVolume;
+        _editDetailPromotionCount += detailPromotions;
+        _lastDeformEditedChunkCount = invalidation.IntersectedBlockCount;
+        _lastDeformEditedSampleCount = estimatedEditedSamples;
+        _lastDeformDirtyBoundsVolume = dirtyBoundsVolume;
+        _lastDeformEditDetailPromotionCount = detailPromotions;
+        _lastDeformMs = deformMs;
+        _lastDeformKind = operation;
+        _lastDeformVisibleBlockCount = invalidation.VisibleBlockCount;
+        _lastDeformVisibleFinestBlockCount = invalidation.VisibleFinestBlockCount;
+        _lastDeformRequeuedBlockCount = invalidation.RequeuedBlockCount;
+        _lastDeformRefreshedTriangleCount = invalidation.RefreshedTriangleCount;
+        _lastDeformSyncRefreshMs = invalidation.SyncRefreshMs;
+        _lastEditOperationSummary =
+            $"{operation} {mutation.Summary} {invalidation.Summary} est_samples {estimatedEditedSamples} total_ms {deformMs:0.00}";
+        _lastEditRegionSummary = _lastEditOperationSummary;
         _latestProfileSnapshot = BuildProfileSnapshot();
     }
 
-    private void InvalidateBlocksForEditMutation(Aabb dirtyWorldBounds, string operation)
+    private TerrainEditInvalidationStats InvalidateBlocksForEditMutation(Aabb dirtyWorldBounds, string operation)
     {
         List<TerrainBlockData> displayedBlocks = new();
         List<TerrainBlockId> requeuedBlocks = new();
+        int intersectedBlockCount = 0;
+        int visibleFinestBlockCount = 0;
 
         foreach (TerrainBlockData block in _blocks.Values)
         {
@@ -424,9 +509,15 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
+            intersectedBlockCount++;
             if (IsBlockDisplayingVisuals(block))
             {
                 displayedBlocks.Add(block);
+                if (block.Id.Lod == FinestTerrainLod)
+                {
+                    visibleFinestBlockCount++;
+                }
+
                 continue;
             }
 
@@ -446,17 +537,30 @@ public partial class TerrainLodManager : Node3D
             EnqueueFieldBuildDispatch(blockId);
         }
 
+        int refreshedTriangleCount = 0;
+        double syncRefreshMs = 0.0;
         foreach (TerrainBlockData displayedBlock in displayedBlocks)
         {
-            RebuildDisplayedBlock(displayedBlock, operation);
+            TerrainDisplayedBlockRefreshStats refresh = RebuildDisplayedBlock(displayedBlock, operation);
+            refreshedTriangleCount += refresh.TriangleCount;
+            syncRefreshMs += refresh.RefreshMs;
         }
+
+        return new TerrainEditInvalidationStats(
+            intersectedBlockCount,
+            displayedBlocks.Count,
+            visibleFinestBlockCount,
+            requeuedBlocks.Count,
+            refreshedTriangleCount,
+            syncRefreshMs);
     }
 
-    private void RebuildDisplayedBlock(TerrainBlockData block, string operation)
+    private TerrainDisplayedBlockRefreshStats RebuildDisplayedBlock(TerrainBlockData block, string operation)
     {
+        ulong refreshStartUsec = Time.GetTicksUsec();
         if (block.Renderer == null || !IsInstanceValid(block.Renderer))
         {
-            return;
+            return new TerrainDisplayedBlockRefreshStats(0, 0.0);
         }
 
         VoxelChunkData field = _mesher.BuildField(block.Id, GetEditRegionsForBlock(block.Id));
@@ -473,12 +577,56 @@ public partial class TerrainLodManager : Node3D
         block.RefreshDisplayedContent(mesh, collisionPending: false);
         MarkVisibleMixedLodSeamsDirtyAround(block.Id);
         _lastCommitSummary = $"{block.Id} edit_refresh {operation} tri {mesh.TotalTriangleCount}";
+        return new TerrainDisplayedBlockRefreshStats(
+            mesh.TotalTriangleCount,
+            (Time.GetTicksUsec() - refreshStartUsec) / 1000.0);
     }
 
     private TerrainEditRegion[] GetEditRegionsForBlock(TerrainBlockId blockId)
     {
         return _editRegionManager?.QueryOverlapping(TerrainMetrics.GetBlockBounds(_config, blockId))
             ?? Array.Empty<TerrainEditRegion>();
+    }
+
+    private void ConfigureSharedSurfaceWaterLevel()
+    {
+        float waterLevel = _terrainWorld?.WaterLevel ?? _config.WaterLevel;
+        if (Mathf.IsEqualApprox(_lastConfiguredSurfaceWaterLevel, waterLevel))
+        {
+            return;
+        }
+
+        TerrainSurfaceMaterialLibrary.ConfigureSharedWaterLevel(waterLevel);
+        _lastConfiguredSurfaceWaterLevel = waterLevel;
+    }
+
+    private int EstimateEditedSampleCount(TerrainEditStampData? stamp, Aabb dirtyWorldBounds)
+    {
+        if (!stamp.HasValue)
+        {
+            return 0;
+        }
+
+        double voxelVolume = Math.Max(0.0001, Math.Pow(Math.Max(0.01f, _config.BaseVoxelSize), 3.0));
+        TerrainEditStampData editStamp = stamp.Value;
+        double shapeVolume = editStamp.Kind switch
+        {
+            TerrainEditStampKind.Sphere => (4.0 / 3.0) * Math.PI * Math.Pow(Math.Max(0.05f, editStamp.Radius), 3.0),
+            TerrainEditStampKind.Slash => Math.PI * 0.25 *
+                                         Math.Max(0.05f, editStamp.Length) *
+                                         Math.Max(0.05f, editStamp.Width) *
+                                         Math.Max(0.05f, editStamp.Depth),
+            _ => ComputeBoundsVolume(dirtyWorldBounds)
+        };
+        double dirtyVolume = ComputeBoundsVolume(dirtyWorldBounds);
+        double effectiveVolume = Math.Max(shapeVolume, Math.Min(dirtyVolume, shapeVolume * 1.35));
+        return Math.Max(1, (int)Math.Round(effectiveVolume / voxelVolume));
+    }
+
+    private static double ComputeBoundsVolume(Aabb bounds)
+    {
+        Vector3 size = bounds.Size;
+        return Math.Max(0.0, size.X) * Math.Max(0.0, size.Y) * Math.Max(0.0, size.Z);
     }
 
     private Node3D ResolveTrackedCharacter()
@@ -2988,6 +3136,23 @@ public partial class TerrainLodManager : Node3D
             LastChunkReleaseMs = _lastReleaseMs,
             MeshBackendName = "lod_blocks_v1",
             SearchThrottleState = "lod_blocks",
+            DeformOperationCount = _deformOperationCount,
+            TotalEditedChunkCount = _totalEditedChunkCount,
+            TotalEditedSampleCount = _totalEditedSampleCount,
+            TotalEditedDirtyBoundsVolume = _totalEditedDirtyBoundsVolume,
+            EditDetailPromotionCount = _editDetailPromotionCount,
+            LastDeformEditedChunkCount = _lastDeformEditedChunkCount,
+            LastDeformEditedSampleCount = _lastDeformEditedSampleCount,
+            LastDeformDirtyBoundsVolume = _lastDeformDirtyBoundsVolume,
+            LastDeformEditDetailPromotionCount = _lastDeformEditDetailPromotionCount,
+            LastDeformMs = _lastDeformMs,
+            LastDeformKind = _lastDeformKind,
+            LastEditOperationSummary = _lastEditOperationSummary,
+            LastDeformVisibleBlockCount = _lastDeformVisibleBlockCount,
+            LastDeformVisibleFinestBlockCount = _lastDeformVisibleFinestBlockCount,
+            LastDeformRequeuedBlockCount = _lastDeformRequeuedBlockCount,
+            LastDeformRefreshedTriangleCount = _lastDeformRefreshedTriangleCount,
+            LastDeformSyncRefreshMs = _lastDeformSyncRefreshMs,
             TrackedBiomeSummary = viewerSummary,
             TrackedDetailSummary = BuildLifecycleSummary(),
             TrackedCoverageStateSummary = lodSummary,

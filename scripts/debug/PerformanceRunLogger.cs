@@ -584,6 +584,14 @@ public partial class PerformanceRunLogger : Node
                     builder.AppendLine($"LodAverageDeferredReleaseAgeMs: {latestSnapshot.AverageReleaseDeferredAgeMs:0.00}");
                     builder.AppendLine($"LodLastRefinementHandoff: {latestSnapshot.LastRefinementHandoffSummary}");
                     builder.AppendLine($"LodDesiredSetSummary: {latestSnapshot.LastSelectedChunkSummary}");
+                    builder.AppendLine($"LodEditSummary: {latestSnapshot.LastEditOperationSummary}");
+                    builder.AppendLine($"LodDeformOperations: {latestSnapshot.DeformOperationCount}");
+                    builder.AppendLine(
+                        $"LodLastDeform: {latestSnapshot.LastDeformKind} {latestSnapshot.LastDeformMs:0.00} ms | " +
+                        $"blocks {latestSnapshot.LastDeformEditedChunkCount} vis/requeue {latestSnapshot.LastDeformVisibleBlockCount}/{latestSnapshot.LastDeformRequeuedBlockCount} " +
+                        $"finest {latestSnapshot.LastDeformVisibleFinestBlockCount} sync {latestSnapshot.LastDeformSyncRefreshMs:0.00} ms " +
+                        $"tri {latestSnapshot.LastDeformRefreshedTriangleCount} samples {latestSnapshot.LastDeformEditedSampleCount} " +
+                        $"dirty {latestSnapshot.LastDeformDirtyBoundsVolume:0.00} detail {latestSnapshot.LastDeformEditDetailPromotionCount}");
                 }
             }
             builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");

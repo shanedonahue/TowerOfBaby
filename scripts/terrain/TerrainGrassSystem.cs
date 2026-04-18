@@ -17,7 +17,6 @@ public partial class TerrainGrassSystem : Node3D
     private const string GrassTexturePath = "res://assets/terrain/textures/grass/grass_clump_atlas.png";
     private const float Tau = Mathf.Pi * 2.0f;
     private const float SelectiveGrassSlopeMax = 0.18f;
-    private const float SelectiveGrassMinHeightAboveWater = 1.5f;
     private const float SelectiveGrassDensityScale = 0.65f;
     private const float GrassMaterialSampleInset = 0.18f;
     private const float TerrainSurfaceQueryCellSizeMin = 0.5f;
@@ -344,8 +343,8 @@ public partial class TerrainGrassSystem : Node3D
         float maxPlacementSlope = Mathf.Min(SelectiveGrassSlopeMax, 1.0f - slopeLimitDot);
         float highlandStart = Mathf.Max(0.0f, HighlandFadeStart);
         float highlandEnd = Mathf.Max(highlandStart + 0.01f, HighlandFadeEnd);
-        float waterLevel = _terrainWorld?.WaterLevel ?? -2.6f;
-        float minHeightAboveWater = Mathf.Max(MinHeightAboveWater, SelectiveGrassMinHeightAboveWater);
+        float waterLevel = _terrainWorld?.WaterLevel ?? -3.4f;
+        float minHeightAboveWater = Mathf.Max(0.05f, MinHeightAboveWater);
         VoxelFieldGenerator placementSampler = _terrainPlacementSampler;
         float terrainQueryCellSize = ResolveTerrainSurfaceQueryCellSize(renderer.BlockId.Lod);
 
@@ -410,6 +409,7 @@ public partial class TerrainGrassSystem : Node3D
             if (!DebugBypassPlacementFilters)
             {
                 bool hasTriangleBiome = TryResolveTriangleBiomeSample(biomeWeights, triangle, out TerrainBiomeSample triangleBiome);
+                bool hasTriangleMaterial = TryResolveTriangleMaterial(terrainColors, triangle, out VoxelMaterialId triangleMaterial);
                 if (hasTriangleBiome && !IsGrassPlacementBiomeAllowed(triangleBiome.DominantBiome))
                 {
                     rejectedBiomeCount++;
@@ -428,19 +428,28 @@ public partial class TerrainGrassSystem : Node3D
                     continue;
                 }
 
-                Vector3 materialSamplePosition = centroidWorld - (surfaceNormal * GrassMaterialSampleInset);
-                float surfaceDensity = placementSampler != null
-                    ? placementSampler.SampleDensity(materialSamplePosition, terrainColumn.TerrainHeight)
-                    : terrainColumn.TerrainHeight - materialSamplePosition.Y;
-                VoxelMaterialId surfaceMaterial = placementSampler != null
-                    ? placementSampler.SampleMaterial(
-                        materialSamplePosition,
-                        surfaceDensity,
-                        terrainColumn.TerrainHeight,
-                        sampledSlope,
-                        surfaceBiome)
-                    : VoxelMaterialId.Grass;
-                if (surfaceMaterial != VoxelMaterialId.Grass)
+                VoxelMaterialId surfaceMaterial;
+                if (hasTriangleMaterial)
+                {
+                    surfaceMaterial = triangleMaterial;
+                }
+                else
+                {
+                    Vector3 materialSamplePosition = centroidWorld - (surfaceNormal * GrassMaterialSampleInset);
+                    float surfaceDensity = placementSampler != null
+                        ? placementSampler.SampleDensity(materialSamplePosition, terrainColumn.TerrainHeight)
+                        : terrainColumn.TerrainHeight - materialSamplePosition.Y;
+                    surfaceMaterial = placementSampler != null
+                        ? placementSampler.SampleMaterial(
+                            materialSamplePosition,
+                            surfaceDensity,
+                            terrainColumn.TerrainHeight,
+                            sampledSlope,
+                            surfaceBiome)
+                        : VoxelMaterialId.Grass;
+                }
+
+                if (!IsGrassPlacementMaterialAllowed(surfaceMaterial))
                 {
                     rejectedMaterialCount++;
                     continue;
@@ -1197,6 +1206,11 @@ public partial class TerrainGrassSystem : Node3D
             dominantBiome != BiomeId.Volcanic;
     }
 
+    private static bool IsGrassPlacementMaterialAllowed(VoxelMaterialId materialId)
+    {
+        return materialId == VoxelMaterialId.Grass || materialId == VoxelMaterialId.Soil;
+    }
+
     private static bool TryResolveTriangleBiomeSample(
         float[] biomeWeights,
         int triangleVertexStart,
@@ -1240,6 +1254,22 @@ public partial class TerrainGrassSystem : Node3D
             0.5f,
             Mathf.Clamp(rockyWeight + canyonWeight + volcanicWeight, 0.0f, 1.0f),
             volcanicWeight);
+        return true;
+    }
+
+    private static bool TryResolveTriangleMaterial(
+        Color[] materialColors,
+        int triangleVertexStart,
+        out VoxelMaterialId materialId)
+    {
+        materialId = VoxelMaterialId.Soil;
+        if (materialColors == null || materialColors.Length < triangleVertexStart + 3)
+        {
+            return false;
+        }
+
+        Color averageMaterialColor = ResolveTriangleTerrainColor(materialColors, triangleVertexStart);
+        materialId = VoxelMaterialPalette.ResolveNearestTintMaterial(averageMaterialColor);
         return true;
     }
 
@@ -1318,12 +1348,15 @@ public partial class TerrainGrassSystem : Node3D
         ulong hash = ComputeRendererSeed(renderer.BlockId);
         Vector3[] vertices = renderer.Vertices;
         Vector3[] normals = renderer.Normals;
+        Color[] materialColors = renderer.MaterialColors;
         float[] biomeWeights = renderer.BiomeWeights;
         HashCombine(ref hash, vertices?.Length ?? 0);
         HashCombine(ref hash, normals?.Length ?? 0);
+        HashCombine(ref hash, materialColors?.Length ?? 0);
         HashCombine(ref hash, biomeWeights?.Length ?? 0);
         HashCombine(ref hash, vertices == null ? 0 : RuntimeHelpers.GetHashCode(vertices));
         HashCombine(ref hash, normals == null ? 0 : RuntimeHelpers.GetHashCode(normals));
+        HashCombine(ref hash, materialColors == null ? 0 : RuntimeHelpers.GetHashCode(materialColors));
         HashCombine(ref hash, biomeWeights == null ? 0 : RuntimeHelpers.GetHashCode(biomeWeights));
         return hash;
     }

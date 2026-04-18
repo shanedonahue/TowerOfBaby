@@ -15,6 +15,7 @@ TerrainHeight = 10.0
 DetailHeight = 2.8
 CaveScale = 9.0
 CaveThreshold = 0.63
+WaterLevel = -3.4
 
 [node name="TerrainLodManager" type="Node3D" parent="."]
 script = ExtResource("2_lod")
@@ -28,3 +29,8 @@ script = ExtResource("3_water")
 
 [node name="TerrainGrassSystem" type="Node3D" parent="."]
 script = ExtResource("4_grass")
+DensityPerSquareMeter = 3.25
+MinHeightAboveWater = 0.15
+MaxGrassLod = 2
+EnableDebugLogging = true
+DebugLogIntervalSeconds = 1.0

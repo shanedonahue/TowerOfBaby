@@ -424,7 +424,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
 
         if (terrainHit && _terrainWorld != null)
         {
-            VoxelSlashEdit slashEdit = new(
+            TerrainImpactRequest slashImpact = TerrainImpactProfiles.CreateMeleeSlash(
                 _terrainWorld.ResolveSlashCenter(hitPoint, hitNormal, _attackDefinition.SlashDepth),
                 slashDirection,
                 hitNormal,
@@ -434,7 +434,7 @@ public partial class PlayerLocomotionAdapter : CharacterBody3D, ILocomotionTelem
                 BuildSlashDensityDelta(_attackDefinition),
                 Mathf.Clamp(_attackDefinition.ScorchStrength * _attackDefinition.AttackPower, 0.0f, 1.5f),
                 Mathf.Max(_attackDefinition.SlashWidth * 0.35f, _terrainWorld.VoxelSize));
-            _terrainWorld.ApplySlash(slashEdit);
+            _terrainWorld.ApplyImpact(slashImpact);
         }
 
         _attackDebug?.ShowSlashQuery(queryOrigin, queryEnd, terrainHit, hitPoint, hitNormal, slashDirection);

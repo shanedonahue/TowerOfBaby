@@ -7,6 +7,7 @@ public readonly record struct VoxelSphereEdit(
     Vector3 Center,
     float Radius,
     float DeltaDensity,
+    float PaintStrength,
     float RetextureMargin);
 
 public readonly record struct VoxelSlashEdit(
@@ -59,7 +60,12 @@ public static class VoxelTerrainEditing
             throw new ArgumentNullException(nameof(materialResolver));
         }
 
-        if (edit.Radius <= 0.0f || Mathf.IsZeroApprox(edit.DeltaDensity))
+        if (edit.Radius <= 0.0f)
+        {
+            return VoxelEditStats.None;
+        }
+
+        if (Mathf.IsZeroApprox(edit.DeltaDensity) && edit.PaintStrength <= 0.0f)
         {
             return VoxelEditStats.None;
         }
@@ -73,32 +79,30 @@ public static class VoxelTerrainEditing
 
         bool modified = false;
         int densitySamplesEdited = 0;
-        float radiusSquared = edit.Radius * edit.Radius;
-        for (int z = densityBounds.Min.Z; z <= densityBounds.Max.Z; z++)
+        if (!Mathf.IsZeroApprox(edit.DeltaDensity))
         {
-            for (int y = densityBounds.Min.Y; y <= densityBounds.Max.Y; y++)
+            float radiusSquared = edit.Radius * edit.Radius;
+            for (int z = densityBounds.Min.Z; z <= densityBounds.Max.Z; z++)
             {
-                for (int x = densityBounds.Min.X; x <= densityBounds.Max.X; x++)
+                for (int y = densityBounds.Min.Y; y <= densityBounds.Max.Y; y++)
                 {
-                    Vector3 position = data.GetPointPosition(x, y, z);
-                    float distanceSquared = position.DistanceSquaredTo(edit.Center);
-                    if (distanceSquared > radiusSquared)
+                    for (int x = densityBounds.Min.X; x <= densityBounds.Max.X; x++)
                     {
-                        continue;
-                    }
+                        Vector3 position = data.GetPointPosition(x, y, z);
+                        float distanceSquared = position.DistanceSquaredTo(edit.Center);
+                        if (distanceSquared > radiusSquared)
+                        {
+                            continue;
+                        }
 
-                    float distance = Mathf.Sqrt(distanceSquared);
-                    float falloff = 1.0f - Mathf.Clamp(distance / edit.Radius, 0.0f, 1.0f);
-                    data.SetDensity(x, y, z, data.GetDensity(x, y, z) + (edit.DeltaDensity * falloff));
-                    modified = true;
-                    densitySamplesEdited++;
+                        float distance = Mathf.Sqrt(distanceSquared);
+                        float falloff = 1.0f - Mathf.Clamp(distance / edit.Radius, 0.0f, 1.0f);
+                        data.SetDensity(x, y, z, data.GetDensity(x, y, z) + (edit.DeltaDensity * falloff));
+                        modified = true;
+                        densitySamplesEdited++;
+                    }
                 }
             }
-        }
-
-        if (!modified)
-        {
-            return VoxelEditStats.None;
         }
 
         float retextureRadius = edit.Radius + Mathf.Max(edit.RetextureMargin, data.VoxelSize);
@@ -112,13 +116,27 @@ public static class VoxelTerrainEditing
                 {
                     Vector3 position = data.GetPointPosition(x, y, z);
                     float density = data.GetDensity(x, y, z);
-                    data.SetMaterial(x, y, z, materialResolver(position, density));
+                    float distance = position.DistanceTo(edit.Center);
+                    float paintInfluence = 1.0f - Mathf.Clamp(distance / retextureRadius, 0.0f, 1.0f);
+                    VoxelMaterialId nextMaterial = materialResolver(position, density);
+                    if ((paintInfluence * edit.PaintStrength) >= 0.18f &&
+                        density >= data.IsoLevel - (data.VoxelSize * 0.55f))
+                    {
+                        nextMaterial = VoxelMaterialId.Scorched;
+                    }
+
+                    if (data.GetMaterial(x, y, z) != nextMaterial)
+                    {
+                        data.SetMaterial(x, y, z, nextMaterial);
+                        modified = true;
+                    }
+
                     materialSamplesTouched++;
                 }
             }
         }
 
-        return new VoxelEditStats(true, densitySamplesEdited, materialSamplesTouched);
+        return new VoxelEditStats(modified, densitySamplesEdited, materialSamplesTouched);
     }
 
     public static VoxelEditStats ApplySlash(
