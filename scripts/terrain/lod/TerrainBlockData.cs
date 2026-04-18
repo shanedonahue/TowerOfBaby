@@ -35,6 +35,12 @@ public sealed class TerrainBlockData
     public int MeshBuildRevision { get; private set; }
     public bool MeshBuildRunning { get; private set; }
     public bool CollisionPending { get; private set; }
+    public bool DisplayedRefreshDirty { get; private set; }
+    public int DisplayedRefreshRevision { get; private set; }
+    public long DisplayedRefreshOperationSequence { get; private set; }
+    public long PendingCollisionRefreshOperationSequence { get; private set; }
+    public bool HasDisplayedRefreshFieldReady => DisplayedRefreshDirty && Field != null && !HasDisplayedRefreshMeshReady;
+    public bool HasDisplayedRefreshMeshReady { get; private set; }
 
     public int BeginFieldBuild()
     {
@@ -51,6 +57,7 @@ public sealed class TerrainBlockData
     {
         FieldBuildRunning = false;
         Field = field;
+        HasDisplayedRefreshMeshReady = false;
         State = TerrainBlockState.FieldReady;
     }
 
@@ -78,18 +85,60 @@ public sealed class TerrainBlockData
         MeshBuildRunning = false;
         Mesh = mesh;
         TriangleCount = mesh.TotalTriangleCount;
+        HasDisplayedRefreshMeshReady = false;
         State = TerrainBlockState.MeshReady;
     }
 
     public void RefreshDisplayedContent(VoxelMeshBuildResult mesh, bool collisionPending)
     {
-        Field = null;
-        Mesh = VoxelMeshBuildResult.Empty;
-        SeamBuild = TerrainSeamBuildResult.None;
+        ClearTransientBuildArtifacts();
         FieldBuildRunning = false;
         MeshBuildRunning = false;
         TriangleCount = mesh.TotalTriangleCount;
         CollisionPending = collisionPending;
+        DisplayedRefreshDirty = false;
+        DisplayedRefreshOperationSequence = 0;
+        PendingCollisionRefreshOperationSequence = 0;
+    }
+
+    public void MarkDisplayedRefreshDirty(long operationSequence)
+    {
+        DisplayedRefreshDirty = true;
+        DisplayedRefreshRevision++;
+        DisplayedRefreshOperationSequence = operationSequence;
+        PendingCollisionRefreshOperationSequence = 0;
+        CollisionPending = false;
+        ClearTransientBuildArtifacts();
+    }
+
+    public void SetDisplayedRefreshField(VoxelChunkData field)
+    {
+        FieldBuildRunning = false;
+        Field = field;
+        Mesh = VoxelMeshBuildResult.Empty;
+        HasDisplayedRefreshMeshReady = false;
+        SeamBuild = TerrainSeamBuildResult.None;
+    }
+
+    public void SetDisplayedRefreshMesh(VoxelMeshBuildResult mesh)
+    {
+        MeshBuildRunning = false;
+        Field = null;
+        Mesh = mesh;
+        HasDisplayedRefreshMeshReady = true;
+        SeamBuild = TerrainSeamBuildResult.None;
+    }
+
+    public void SetPendingCollisionRefreshOperation(long operationSequence)
+    {
+        PendingCollisionRefreshOperationSequence = operationSequence;
+    }
+
+    public long ConsumePendingCollisionRefreshOperation()
+    {
+        long operationSequence = PendingCollisionRefreshOperationSequence;
+        PendingCollisionRefreshOperationSequence = 0;
+        return operationSequence;
     }
 
     public void SetSeamBuild(TerrainSeamBuildResult seamBuild)
@@ -107,11 +156,13 @@ public sealed class TerrainBlockData
 
     public void MarkVisible(bool collisionPending = false)
     {
-        Field = null;
-        Mesh = VoxelMeshBuildResult.Empty;
+        ClearTransientBuildArtifacts();
         Desired = true;
         ReleaseEligibleAtSeconds = 0.0;
         CollisionPending = collisionPending;
+        DisplayedRefreshDirty = false;
+        DisplayedRefreshOperationSequence = 0;
+        PendingCollisionRefreshOperationSequence = 0;
         State = TerrainBlockState.Visible;
     }
 
@@ -120,6 +171,7 @@ public sealed class TerrainBlockData
         Desired = true;
         ReleaseEligibleAtSeconds = 0.0;
         CollisionPending = false;
+        PendingCollisionRefreshOperationSequence = 0;
         State = TerrainBlockState.Visible;
     }
 
@@ -128,6 +180,7 @@ public sealed class TerrainBlockData
         Desired = false;
         ReleaseEligibleAtSeconds = releaseEligibleAtSeconds;
         CollisionPending = false;
+        PendingCollisionRefreshOperationSequence = 0;
         State = TerrainBlockState.Releasable;
     }
 
@@ -148,13 +201,14 @@ public sealed class TerrainBlockData
 
     public void InvalidatePendingBuildData()
     {
-        Field = null;
-        Mesh = VoxelMeshBuildResult.Empty;
-        SeamBuild = TerrainSeamBuildResult.None;
+        ClearTransientBuildArtifacts();
         FieldBuildRunning = false;
         MeshBuildRunning = false;
         CollisionPending = false;
         TriangleCount = 0;
+        DisplayedRefreshDirty = false;
+        DisplayedRefreshOperationSequence = 0;
+        PendingCollisionRefreshOperationSequence = 0;
         FieldBuildRevision++;
         MeshBuildRevision++;
         State = TerrainBlockState.Requested;
@@ -162,11 +216,20 @@ public sealed class TerrainBlockData
 
     public void CancelPendingData()
     {
-        Field = null;
-        Mesh = VoxelMeshBuildResult.Empty;
-        SeamBuild = TerrainSeamBuildResult.None;
+        ClearTransientBuildArtifacts();
         FieldBuildRunning = false;
         MeshBuildRunning = false;
         CollisionPending = false;
+        DisplayedRefreshDirty = false;
+        DisplayedRefreshOperationSequence = 0;
+        PendingCollisionRefreshOperationSequence = 0;
+    }
+
+    private void ClearTransientBuildArtifacts()
+    {
+        Field = null;
+        Mesh = VoxelMeshBuildResult.Empty;
+        SeamBuild = TerrainSeamBuildResult.None;
+        HasDisplayedRefreshMeshReady = false;
     }
 }

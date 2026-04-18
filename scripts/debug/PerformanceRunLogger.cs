@@ -588,8 +588,10 @@ public partial class PerformanceRunLogger : Node
                     builder.AppendLine($"LodDeformOperations: {latestSnapshot.DeformOperationCount}");
                     builder.AppendLine(
                         $"LodLastDeform: {latestSnapshot.LastDeformKind} {latestSnapshot.LastDeformMs:0.00} ms | " +
-                        $"blocks {latestSnapshot.LastDeformEditedChunkCount} vis/requeue {latestSnapshot.LastDeformVisibleBlockCount}/{latestSnapshot.LastDeformRequeuedBlockCount} " +
-                        $"finest {latestSnapshot.LastDeformVisibleFinestBlockCount} sync {latestSnapshot.LastDeformSyncRefreshMs:0.00} ms " +
+                        $"blocks {latestSnapshot.LastDeformEditedChunkCount} vis/finest {latestSnapshot.LastDeformVisibleBlockCount}/{latestSnapshot.LastDeformVisibleFinestBlockCount} " +
+                        $"hidden_requeue {latestSnapshot.LastDeformRequeuedBlockCount} visible_queue {latestSnapshot.LastDeformQueuedVisibleBlockCount} " +
+                        $"reg/enqueue/sync {latestSnapshot.LastDeformRegistrationMs:0.00}/{latestSnapshot.LastDeformEnqueueMs:0.00}/{latestSnapshot.LastDeformSyncWorkMs:0.00} ms " +
+                        $"async/apply/collision {latestSnapshot.LastDeformAsyncRebuildMs:0.00}/{latestSnapshot.LastDeformVisualApplyMs:0.00}/{latestSnapshot.LastDeformCollisionRebuildMs:0.00} ms " +
                         $"tri {latestSnapshot.LastDeformRefreshedTriangleCount} samples {latestSnapshot.LastDeformEditedSampleCount} " +
                         $"dirty {latestSnapshot.LastDeformDirtyBoundsVolume:0.00} detail {latestSnapshot.LastDeformEditDetailPromotionCount}");
                 }

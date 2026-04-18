@@ -91,8 +91,15 @@ public sealed class TerrainWorldProfileSnapshot
     public int LastDeformVisibleBlockCount { get; init; }
     public int LastDeformVisibleFinestBlockCount { get; init; }
     public int LastDeformRequeuedBlockCount { get; init; }
+    public int LastDeformQueuedVisibleBlockCount { get; init; }
     public int LastDeformRefreshedTriangleCount { get; init; }
     public double LastDeformSyncRefreshMs { get; init; }
+    public double LastDeformRegistrationMs { get; init; }
+    public double LastDeformEnqueueMs { get; init; }
+    public double LastDeformSyncWorkMs { get; init; }
+    public double LastDeformAsyncRebuildMs { get; init; }
+    public double LastDeformVisualApplyMs { get; init; }
+    public double LastDeformCollisionRebuildMs { get; init; }
     public long MeshBuildWorkerCount { get; init; }
     public double MeshBuildWorkerMs { get; init; }
     public double LastMeshBuildWorkerMs { get; init; }
