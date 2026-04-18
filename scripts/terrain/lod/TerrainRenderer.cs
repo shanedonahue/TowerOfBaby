@@ -35,6 +35,7 @@ public partial class TerrainRenderer : Node3D
     private Vector2[] _uvs = System.Array.Empty<Vector2>();
     private Color[] _baseColors = System.Array.Empty<Color>();
     private Color[] _materialColors = System.Array.Empty<Color>();
+    private VoxelMaterialId[] _surfaceMaterials = System.Array.Empty<VoxelMaterialId>();
     private float[] _biomeWeights = System.Array.Empty<float>();
     private float[] _tangents = System.Array.Empty<float>();
     private Vector3[] _seamVertices = System.Array.Empty<Vector3>();
@@ -106,6 +107,7 @@ public partial class TerrainRenderer : Node3D
         _uvs = meshBuild.Uvs;
         _baseColors = meshBuild.Colors;
         _materialColors = meshBuild.MaterialColors;
+        _surfaceMaterials = meshBuild.SurfaceMaterials;
         _biomeWeights = meshBuild.BiomeWeights;
         _tangents = meshBuild.Tangents;
         ApplyCachedVisuals(surfaceColorizer, resetCollision: true);
@@ -148,6 +150,7 @@ public partial class TerrainRenderer : Node3D
             _uvs,
             colors,
             materialColors,
+            _surfaceMaterials,
             System.Array.Empty<float>(),
             System.Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
@@ -189,6 +192,7 @@ public partial class TerrainRenderer : Node3D
         _uvs = System.Array.Empty<Vector2>();
         _baseColors = System.Array.Empty<Color>();
         _materialColors = System.Array.Empty<Color>();
+        _surfaceMaterials = System.Array.Empty<VoxelMaterialId>();
         _biomeWeights = System.Array.Empty<float>();
         _tangents = System.Array.Empty<float>();
         _seamVertices = System.Array.Empty<Vector3>();

@@ -19,6 +19,7 @@ public readonly record struct VoxelMeshBuildResult(
     Vector2[] Uvs,
     Color[] Colors,
     Color[] MaterialColors,
+    VoxelMaterialId[] SurfaceMaterials,
     float[] BiomeWeights,
     float[] Tangents,
     int NormalDebugMismatchCount,
@@ -36,6 +37,7 @@ public readonly record struct VoxelMeshBuildResult(
             Array.Empty<Vector2>(),
             Array.Empty<Color>(),
             Array.Empty<Color>(),
+            Array.Empty<VoxelMaterialId>(),
             Array.Empty<float>(),
             Array.Empty<float>(),
             NormalDebugMismatchCount: 0,
@@ -48,6 +50,7 @@ public readonly record struct VoxelMeshBuildResult(
 
     public bool HasGeometry => Vertices.Length > 0;
     public bool HasMaterialColors => MaterialColors.Length > 0;
+    public bool HasSurfaceMaterials => SurfaceMaterials.Length > 0;
     public bool HasBiomeWeights => BiomeWeights.Length > 0;
     public bool HasTangents => Tangents.Length > 0;
 }
@@ -105,7 +108,6 @@ public static class VoxelMesher
                     normalDebugMismatchCount += PolygonizeCube(
                         scratch,
                         data,
-                        data,
                         data.Origin,
                         x,
                         y,
@@ -129,7 +131,6 @@ public static class VoxelMesher
                         normalDebugMismatchCount += PolygonizeCube(
                             scratch,
                             detailBrick.Data,
-                            data,
                             data.Origin,
                             x,
                             y,
@@ -151,6 +152,7 @@ public static class VoxelMesher
                 Array.Empty<Vector2>(),
                 Array.Empty<Color>(),
                 Array.Empty<Color>(),
+                Array.Empty<VoxelMaterialId>(),
                 Array.Empty<float>(),
                 Array.Empty<float>(),
                 NormalDebugMismatchCount: 0,
@@ -168,6 +170,7 @@ public static class VoxelMesher
             scratch.Uvs.ToArray(),
             scratch.Colors.ToArray(),
             scratch.MaterialColors.ToArray(),
+            scratch.SurfaceMaterials.ToArray(),
             Array.Empty<float>(),
             options.GenerateTangents
                 ? scratch.Tangents.ToArray()
@@ -184,7 +187,6 @@ public static class VoxelMesher
     private static int PolygonizeCube(
         MeshBuildScratch scratch,
         VoxelChunkData sourceData,
-        VoxelChunkData normalSampleData,
         Vector3 meshOrigin,
         int x,
         int y,
@@ -219,6 +221,7 @@ public static class VoxelMesher
         Span<Vector3> edgeNormals = stackalloc Vector3[12];
         Span<Color> edgeMaterialColors = stackalloc Color[12];
         Span<Color> edgeNeutralColors = stackalloc Color[12];
+        Span<VoxelMaterialId> edgeSurfaceMaterials = stackalloc VoxelMaterialId[12];
         for (int edge = 0; edge < 12; edge++)
         {
             if ((edgeMask & (1 << edge)) == 0)
@@ -230,10 +233,17 @@ public static class VoxelMesher
             int b = MarchingCubesTables.EdgeVertexIndices[edge, 1];
             float t;
             edgeVertices[edge] = Interpolate(positions[a], positions[b], densities[a], densities[b], sourceData.IsoLevel, out t);
-            edgeMaterialColors[edge] = MaterialTintColor(materials[a]).Lerp(MaterialTintColor(materials[b]), t);
-            edgeNeutralColors[edge] = NeutralColor(materials[a]).Lerp(NeutralColor(materials[b]), t);
-            Vector3 worldPosition = edgeVertices[edge] + meshOrigin;
-            edgeNormals[edge] = normalSampleData.SampleSurfaceNormal(worldPosition);
+            VoxelMaterialId surfaceMaterial = ResolveSurfaceMaterial(
+                densities[a],
+                densities[b],
+                materials[a],
+                materials[b],
+                sourceData.IsoLevel,
+                t);
+            edgeSurfaceMaterials[edge] = surfaceMaterial;
+            edgeMaterialColors[edge] = MaterialTintColor(surfaceMaterial);
+            edgeNeutralColors[edge] = NeutralColor(surfaceMaterial);
+            edgeNormals[edge] = ComputeDensityGradientNormal(edgeVertices[edge], positions[0], sourceData.VoxelSize, densities);
         }
 
         int normalDebugMismatchCount = 0;
@@ -268,6 +278,9 @@ public static class VoxelMesher
             Vector3 normalA = AlignSmoothNormal(edgeNormals[edgeA], referenceNormal);
             Vector3 normalB = AlignSmoothNormal(edgeNormals[edgeB], referenceNormal);
             Vector3 normalC = AlignSmoothNormal(edgeNormals[edgeC], referenceNormal);
+            VoxelMaterialId materialIdA = edgeSurfaceMaterials[edgeA];
+            VoxelMaterialId materialIdB = edgeSurfaceMaterials[edgeB];
+            VoxelMaterialId materialIdC = edgeSurfaceMaterials[edgeC];
             Color materialColorA = edgeMaterialColors[edgeA];
             Color materialColorB = edgeMaterialColors[edgeB];
             Color materialColorC = edgeMaterialColors[edgeC];
@@ -287,15 +300,15 @@ public static class VoxelMesher
                 }
 
                 ComputeTriangleTangent(vertexA, vertexB, vertexC, uvA, uvB, uvC, tangentNormal, out float tx, out float ty, out float tz, out float tw);
-                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA, tx, ty, tz, tw);
-                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB, tx, ty, tz, tw);
-                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC, tx, ty, tz, tw);
+                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA, materialIdA, tx, ty, tz, tw);
+                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB, materialIdB, tx, ty, tz, tw);
+                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC, materialIdC, tx, ty, tz, tw);
             }
             else
             {
-                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA);
-                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB);
-                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC);
+                AddVertex(scratch, vertexA, normalA, uvA, colorA, materialColorA, materialIdA);
+                AddVertex(scratch, vertexB, normalB, uvB, colorB, materialColorB, materialIdB);
+                AddVertex(scratch, vertexC, normalC, uvC, colorC, materialColorC, materialIdC);
             }
         }
 
@@ -350,6 +363,49 @@ public static class VoxelMesher
     private static Vector2 ComputeUv(Vector3 position)
     {
         return new Vector2(position.X, position.Z) * 0.09f;
+    }
+
+    private static Vector3 ComputeDensityGradientNormal(
+        Vector3 position,
+        Vector3 cubeOrigin,
+        float voxelSize,
+        Span<float> densities)
+    {
+        if (voxelSize <= 0.000001f)
+        {
+            return Vector3.Up;
+        }
+
+        float inverseVoxelSize = 1.0f / voxelSize;
+        float u = Mathf.Clamp((position.X - cubeOrigin.X) * inverseVoxelSize, 0.0f, 1.0f);
+        float v = Mathf.Clamp((position.Y - cubeOrigin.Y) * inverseVoxelSize, 0.0f, 1.0f);
+        float w = Mathf.Clamp((position.Z - cubeOrigin.Z) * inverseVoxelSize, 0.0f, 1.0f);
+
+        float c000 = densities[0];
+        float c100 = densities[1];
+        float c110 = densities[2];
+        float c010 = densities[3];
+        float c001 = densities[4];
+        float c101 = densities[5];
+        float c111 = densities[6];
+        float c011 = densities[7];
+
+        float gradientX =
+            (((c100 - c000) * (1.0f - v)) + ((c110 - c010) * v)) * (1.0f - w) +
+            (((c101 - c001) * (1.0f - v)) + ((c111 - c011) * v)) * w;
+        float gradientY =
+            (((c010 - c000) * (1.0f - u)) + ((c110 - c100) * u)) * (1.0f - w) +
+            (((c011 - c001) * (1.0f - u)) + ((c111 - c101) * u)) * w;
+        float gradientZ =
+            (((c001 - c000) * (1.0f - u)) + ((c101 - c100) * u)) * (1.0f - v) +
+            (((c011 - c010) * (1.0f - u)) + ((c111 - c110) * u)) * v;
+        Vector3 gradient = new(gradientX, gradientY, gradientZ);
+        if (gradient.LengthSquared() <= 0.000001f)
+        {
+            return Vector3.Up;
+        }
+
+        return (-gradient).Normalized();
     }
 
     private static Vector3 AlignSmoothNormal(Vector3 smoothNormal, Vector3 faceNormal)
@@ -460,6 +516,7 @@ public static class VoxelMesher
         Vector2 uv,
         Color color,
         Color materialColor,
+        VoxelMaterialId materialId,
         float tangentX = 0.0f,
         float tangentY = 0.0f,
         float tangentZ = 0.0f,
@@ -470,6 +527,7 @@ public static class VoxelMesher
         scratch.Uvs.Add(uv);
         scratch.Colors.Add(color);
         scratch.MaterialColors.Add(materialColor);
+        scratch.SurfaceMaterials.Add(materialId);
 
         if (!scratch.IncludeTangents)
         {
@@ -484,12 +542,42 @@ public static class VoxelMesher
 
     private static Color MaterialTintColor(VoxelMaterialId materialId)
     {
-        return VoxelMaterialPalette.GetTintColor(materialId);
+        return VoxelMaterialPalette.EncodeMaterialColor(VoxelMaterialPalette.GetTintColor(materialId), materialId);
     }
 
     private static Color NeutralColor(VoxelMaterialId materialId)
     {
-        return VoxelMaterialPalette.GetNeutralColor(materialId);
+        return VoxelMaterialPalette.EncodeMaterialColor(VoxelMaterialPalette.GetNeutralColor(materialId), materialId);
+    }
+
+    private static VoxelMaterialId ResolveSurfaceMaterial(
+        float densityA,
+        float densityB,
+        VoxelMaterialId materialA,
+        VoxelMaterialId materialB,
+        float isoLevel,
+        float interpolationT)
+    {
+        bool isSolidA = densityA >= isoLevel;
+        bool isSolidB = densityB >= isoLevel;
+        if (isSolidA != isSolidB)
+        {
+            return isSolidA ? materialA : materialB;
+        }
+
+        if (materialA == materialB)
+        {
+            return materialA;
+        }
+
+        float distanceA = Mathf.Abs(densityA - isoLevel);
+        float distanceB = Mathf.Abs(densityB - isoLevel);
+        if (Mathf.Abs(distanceA - distanceB) <= 0.00001f)
+        {
+            return interpolationT <= 0.5f ? materialA : materialB;
+        }
+
+        return distanceA < distanceB ? materialA : materialB;
     }
 
     private static MeshBuildScratch GetScratch()
@@ -504,6 +592,7 @@ public static class VoxelMesher
         public readonly PooledBuffer<Vector2> Uvs = new();
         public readonly PooledBuffer<Color> Colors = new();
         public readonly PooledBuffer<Color> MaterialColors = new();
+        public readonly PooledBuffer<VoxelMaterialId> SurfaceMaterials = new();
         public readonly PooledBuffer<float> Tangents = new();
 
         public bool IncludeTangents { get; private set; }
@@ -516,6 +605,7 @@ public static class VoxelMesher
             Uvs.Reset();
             Colors.Reset();
             MaterialColors.Reset();
+            SurfaceMaterials.Reset();
             Tangents.Reset();
             IncludeTangents = false;
         }

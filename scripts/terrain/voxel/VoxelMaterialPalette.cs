@@ -4,6 +4,10 @@ namespace TowerOfBaby.Terrain.Voxel;
 
 public static class VoxelMaterialPalette
 {
+    private const float MaterialEncodingSlotCount = 8.0f;
+    private const float EncodedMaterialMaxAlpha = 0.90f;
+    private static readonly int MaxEncodedMaterialIndex = System.Enum.GetValues<VoxelMaterialId>().Length - 1;
+
     public static Color GetTintColor(VoxelMaterialId materialId)
     {
         return materialId switch
@@ -30,6 +34,18 @@ public static class VoxelMaterialPalette
         };
     }
 
+    public static Color EncodeMaterialColor(Color color, VoxelMaterialId materialId)
+    {
+        return new Color(color.R, color.G, color.B, EncodeMaterialAlpha(materialId));
+    }
+
+    public static VoxelMaterialId ResolveMaterial(Color color)
+    {
+        return TryDecodeEncodedMaterial(color, out VoxelMaterialId materialId)
+            ? materialId
+            : ResolveNearestTintMaterial(color);
+    }
+
     public static VoxelMaterialId ResolveNearestTintMaterial(Color tint)
     {
         VoxelMaterialId nearest = VoxelMaterialId.Soil;
@@ -51,5 +67,27 @@ public static class VoxelMaterialPalette
         }
 
         return nearest;
+    }
+
+    private static bool TryDecodeEncodedMaterial(Color color, out VoxelMaterialId materialId)
+    {
+        if (color.A <= 0.0f || color.A >= EncodedMaterialMaxAlpha)
+        {
+            materialId = default;
+            return false;
+        }
+
+        int encodedIndex = Mathf.Clamp(
+            Mathf.FloorToInt(color.A * MaterialEncodingSlotCount),
+            0,
+            MaxEncodedMaterialIndex);
+        materialId = (VoxelMaterialId)encodedIndex;
+        return true;
+    }
+
+    private static float EncodeMaterialAlpha(VoxelMaterialId materialId)
+    {
+        int clampedMaterialIndex = Mathf.Clamp((int)materialId, 0, MaxEncodedMaterialIndex);
+        return (clampedMaterialIndex + 0.5f) / MaterialEncodingSlotCount;
     }
 }

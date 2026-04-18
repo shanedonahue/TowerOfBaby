@@ -19,6 +19,10 @@ uniform float normal_strength = 0.75;
 uniform float normal_detail_max_distance = 72.0;
 uniform float flat_normal_skip_slope = 0.12;
 uniform float distant_mode_start = 140.0;
+uniform float ambient_fill = 0.07;
+uniform float ambient_steep_boost = 0.05;
+uniform float diffuse_wrap = 0.30;
+uniform float diffuse_floor = 0.28;
 uniform vec4 material_tint : source_color = vec4(1.0);
 
 varying vec3 world_position;
@@ -27,6 +31,13 @@ varying vec3 world_normal;
 const int SURFACE_GRASS = 0;
 const int SURFACE_DIRT = 1;
 const int SURFACE_ROCK = 2;
+const int MATERIAL_SOIL = 0;
+const int MATERIAL_GRASS = 1;
+const int MATERIAL_ROCK = 2;
+const int MATERIAL_CLIFF = 3;
+const int MATERIAL_SNOW = 4;
+const int MATERIAL_SCORCHED = 5;
+const float MATERIAL_DECODE_SCALE = 8.0;
 
 float saturate(float value) {
     return clamp(value, 0.0, 1.0);
@@ -170,47 +181,50 @@ vec3 sample_surface_normal(
     return sample_reduced_triplanar_normal(rock_normal, position, normal);
 }
 
+int decode_material_id(float encoded_alpha) {
+    if (encoded_alpha >= 0.90) {
+        return MATERIAL_SOIL;
+    }
+
+    return int(clamp(floor(encoded_alpha * MATERIAL_DECODE_SCALE), 0.0, 5.0));
+}
+
 void sample_surface_color(
     vec3 position,
     vec3 normal,
+    int material_id,
     float slope,
     bool distant_mode,
     out vec3 terrain_color,
     out int dominant_normal_layer)
 {
-    float transition = get_transition_width();
-    float grass_weight = 1.0 - smoothstep(
-        max(grass_slope_max - transition, 0.0),
-        min(grass_slope_max + transition, 1.0),
-        slope);
-    float rock_weight = smoothstep(
-        max(rock_slope_start - transition, 0.0),
-        min(rock_slope_start + transition, 1.0),
-        slope);
-
-    float above_water = smoothstep(water_level - 0.4, water_level + 1.5, position.y);
-    float lowland_blend = 1.0 - smoothstep(water_level + 1.2, water_level + 7.0, position.y);
-    float gentle_slope_blend = smoothstep(
-        max((grass_slope_max * 0.28), 0.05),
-        grass_slope_max + transition,
-        slope);
-    gentle_slope_blend *= 1.0 - smoothstep(
-        rock_slope_start + (transition * 0.25),
-        rock_slope_start + (transition * 1.85),
-        slope);
-    grass_weight *= mix(0.5, 1.0, above_water);
-    grass_weight *= 1.0 - (lowland_blend * 0.12);
-
-    float dirt_weight = max(0.0, 1.0 - max(grass_weight, rock_weight));
-    dirt_weight += (1.0 - above_water) * (1.0 - rock_weight) * 0.40;
-    dirt_weight += lowland_blend * (1.0 - rock_weight) * 0.18;
-    dirt_weight += gentle_slope_blend * (1.0 - rock_weight) * 0.14;
+    float grass_weight = 0.0;
+    float dirt_weight = 0.0;
+    float rock_weight = 0.0;
+    if (material_id == MATERIAL_GRASS) {
+        float dirt_hint = smoothstep(max(grass_slope_max * 0.70, 0.08), max(grass_slope_max + 0.04, 0.18), slope) * 0.10;
+        grass_weight = 1.0 - dirt_hint;
+        dirt_weight = dirt_hint;
+    } else if (material_id == MATERIAL_SOIL) {
+        float rock_hint = smoothstep(max(rock_slope_start - 0.18, 0.14), rock_slope_start + 0.06, slope) * 0.16;
+        dirt_weight = 1.0 - rock_hint;
+        rock_weight = rock_hint;
+    } else if (material_id == MATERIAL_ROCK) {
+        float dirt_hint = (1.0 - smoothstep(0.20, 0.44, slope)) * 0.08;
+        dirt_weight = dirt_hint;
+        rock_weight = 1.0 - dirt_hint;
+    } else if (material_id == MATERIAL_CLIFF || material_id == MATERIAL_SNOW) {
+        rock_weight = 1.0;
+    } else if (material_id == MATERIAL_SCORCHED) {
+        dirt_weight = 0.24;
+        rock_weight = 0.76;
+    } else {
+        dirt_weight = 1.0;
+    }
 
     float weight_sum = grass_weight + dirt_weight + rock_weight;
     if (weight_sum <= 0.0001) {
-        grass_weight = 1.0;
-        dirt_weight = 0.0;
-        rock_weight = 0.0;
+        dirt_weight = 1.0;
         weight_sum = 1.0;
     }
 
@@ -225,32 +239,6 @@ void sample_surface_color(
     terrain_color = (grass_color * grass_weight) +
         (dirt_color * dirt_weight) +
         (rock_color * rock_weight);
-
-    // A broad secondary dirt pass breaks large grassy areas without replacing the main blend.
-    float shoreline_breakup = (1.0 - above_water) * (1.0 - rock_weight);
-    float basin_breakup = lowland_blend * grass_weight;
-    float erosion_flat_breakup =
-        (1.0 - smoothstep(0.04, 0.18, slope)) *
-        smoothstep(water_level + 0.8, water_level + 4.8, position.y) *
-        grass_weight;
-    float grassy_cover = smoothstep(0.22, 0.78, grass_weight + (dirt_weight * 0.25));
-    float dirt_breakup_zone = saturate(
-        (shoreline_breakup * 0.70) +
-        (basin_breakup * 0.38) +
-        (erosion_flat_breakup * 0.32)) * grassy_cover;
-    vec3 secondary_dirt_position = vec3(position.x * 0.42, position.y * 0.24, position.z * 0.42);
-    vec3 secondary_dirt_color = sample_surface_albedo(
-        SURFACE_DIRT,
-        secondary_dirt_position,
-        normal,
-        distant_mode);
-    float secondary_dirt_mask = smoothstep(
-        0.40,
-        0.62,
-        dot(secondary_dirt_color, vec3(0.299, 0.587, 0.114)));
-    float secondary_dirt_blend = dirt_breakup_zone * secondary_dirt_mask * 0.12;
-    vec3 softened_dirt_breakup = mix(terrain_color, secondary_dirt_color, 0.45);
-    terrain_color = mix(terrain_color, softened_dirt_breakup, secondary_dirt_blend);
 
     dominant_normal_layer = SURFACE_GRASS;
     if (dirt_weight > grass_weight && dirt_weight >= rock_weight) {
@@ -270,11 +258,13 @@ void fragment() {
     float slope = 1.0 - saturate(base_world_normal.y);
     float camera_distance = distance(CAMERA_POSITION_WORLD, world_position);
     bool distant_mode = camera_distance >= distant_mode_start;
+    int material_id = decode_material_id(COLOR.a);
     vec3 terrain_color;
     int dominant_normal_layer;
     sample_surface_color(
         world_position,
         base_world_normal,
+        material_id,
         slope,
         distant_mode,
         terrain_color,
@@ -297,8 +287,18 @@ void fragment() {
     vec3 vertex_tint = mix(vec3(1.0), COLOR.rgb, saturate(vertex_tint_strength));
 
     ALBEDO = terrain_color * vertex_tint * material_tint.rgb;
+    float steep_fill = 1.0 - abs(base_world_normal.y);
+    EMISSION = ALBEDO * (ambient_fill + (steep_fill * ambient_steep_boost));
     NORMAL = normalize((VIEW_MATRIX * vec4(final_world_normal, 0.0)).xyz);
     ROUGHNESS = terrain_roughness;
-    SPECULAR = 0.22;
+    SPECULAR = 0.14;
     METALLIC = 0.0;
+}
+
+void light() {
+    float ndotl = saturate(dot(NORMAL, LIGHT));
+    float wrapped_diffuse = saturate((ndotl + diffuse_wrap) / (1.0 + diffuse_wrap));
+    float softened = mix(ndotl, wrapped_diffuse, 0.70);
+    float remapped = mix(diffuse_floor, 1.0, softened);
+    DIFFUSE_LIGHT += ATTENUATION * LIGHT_COLOR * ALBEDO * remapped;
 }

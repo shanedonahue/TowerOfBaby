@@ -266,6 +266,7 @@ public static class TerrainSeamMesher
             uvs.ToArray(),
             seamColors,
             seamColors,
+            Array.Empty<VoxelMaterialId>(),
             Array.Empty<float>(),
             Array.Empty<float>(),
             NormalDebugMismatchCount: 0,

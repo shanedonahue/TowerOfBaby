@@ -59,10 +59,7 @@ public sealed class TerrainMesher
             return mesh;
         }
 
-        // Mesh builds run on worker threads, so keep world-space sampling thread-local.
-        VoxelFieldGenerator normalSampler = CreateFieldGenerator();
         TerrainSurfaceColorizer surfaceColorizer = CreateSurfaceColorizer();
-        mesh = RebuildChunkBoundaryNormals(mesh, data, normalSampler);
         return surfaceColorizer.BuildLitMesh(mesh, data);
     }
 
@@ -153,85 +150,6 @@ public sealed class TerrainMesher
                 }
             }
         }
-    }
-
-    private static VoxelMeshBuildResult RebuildChunkBoundaryNormals(
-        VoxelMeshBuildResult mesh,
-        VoxelChunkData data,
-        VoxelFieldGenerator normalSampler)
-    {
-        float boundaryBlendDistance = Mathf.Max(data.VoxelSize * 1.5f, 0.0005f);
-        float sampleStep = Mathf.Max(data.VoxelSize * 1.5f, 1.75f);
-        Vector3[] normals = new Vector3[mesh.Normals.Length];
-        bool changed = false;
-
-        for (int i = 0; i < mesh.Vertices.Length; i++)
-        {
-            Vector3 originalNormal = mesh.Normals[i].LengthSquared() > 0.000001f
-                ? mesh.Normals[i].Normalized()
-                : Vector3.Up;
-            float boundaryBlend = ComputeBoundaryBlend(mesh.Vertices[i], data.ChunkSize, boundaryBlendDistance);
-            if (boundaryBlend <= 0.0f)
-            {
-                normals[i] = originalNormal;
-                continue;
-            }
-
-            Vector3 worldPosition = data.Origin + mesh.Vertices[i];
-            Vector3 sampledNormal = normalSampler.SampleSurfaceNormal(worldPosition, sampleStep);
-            if (sampledNormal.LengthSquared() <= 0.000001f)
-            {
-                normals[i] = originalNormal;
-                continue;
-            }
-
-            if (sampledNormal.Dot(originalNormal) < 0.0f)
-            {
-                sampledNormal = -sampledNormal;
-            }
-
-            Vector3 blendedNormal = originalNormal.Lerp(sampledNormal, boundaryBlend);
-            normals[i] = blendedNormal.LengthSquared() > 0.000001f
-                ? blendedNormal.Normalized()
-                : sampledNormal;
-            changed = true;
-        }
-
-        if (!changed)
-        {
-            return mesh;
-        }
-
-        return new VoxelMeshBuildResult(
-            mesh.Vertices,
-            normals,
-            mesh.Uvs,
-            mesh.Colors,
-            mesh.MaterialColors,
-            mesh.BiomeWeights,
-            mesh.Tangents,
-            mesh.NormalDebugMismatchCount,
-            mesh.TotalTriangleCount,
-            mesh.UsedDetailBrick,
-            mesh.UsedPersistentDetailEdits,
-            mesh.DetailTriangleCount,
-            mesh.ReplacedCoarseCellCount,
-            mesh.DetailCellCount);
-    }
-
-    private static float ComputeBoundaryBlend(Vector3 localPosition, float chunkSize, float boundaryBlendDistance)
-    {
-        float distanceToBoundary = Mathf.Min(
-            Mathf.Min(localPosition.X, chunkSize - localPosition.X),
-            Mathf.Min(
-                Mathf.Min(localPosition.Y, chunkSize - localPosition.Y),
-                Mathf.Min(localPosition.Z, chunkSize - localPosition.Z)));
-        if (distanceToBoundary >= boundaryBlendDistance)
-        {
-            return 0.0f;
-        }
-
-        return 1.0f - Mathf.SmoothStep(0.0f, boundaryBlendDistance, Mathf.Max(distanceToBoundary, 0.0f));
     }
 
     private static Aabb Union(Aabb a, Aabb b)

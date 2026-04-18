@@ -17,11 +17,15 @@ internal static class TerrainSurfaceMaterialLibrary
     private const float DefaultBlendSharpness = 3.0f;
     private const float DefaultGrassSlopeMax = 0.28f;
     private const float DefaultRockSlopeStart = 0.42f;
-    private const float DefaultVertexTintStrength = 0.18f;
+    private const float DefaultVertexTintStrength = 0.22f;
     private const float DefaultNormalStrength = 0.75f;
     private const float DefaultNormalDetailMaxDistance = 72.0f;
     private const float DefaultFlatNormalSkipSlope = 0.12f;
     private const float DefaultDistantModeStart = 140.0f;
+    private const float DefaultAmbientFill = 0.07f;
+    private const float DefaultAmbientSteepBoost = 0.05f;
+    private const float DefaultDiffuseWrap = 0.30f;
+    private const float DefaultDiffuseFloor = 0.28f;
 
     private static readonly StandardMaterial3D SharedLitVertexColorFallbackMaterial = CreateLitVertexColorMaterial();
     private static readonly StandardMaterial3D SharedTintedLitVertexColorFallbackMaterial = CreateLitVertexColorMaterial();
@@ -179,6 +183,10 @@ internal static class TerrainSurfaceMaterialLibrary
         material.SetShaderParameter("rock_normal", textures.RockNormal);
         material.SetShaderParameter("normal_strength", DefaultNormalStrength);
         material.SetShaderParameter("vertex_tint_strength", vertexTintStrength);
+        material.SetShaderParameter("ambient_fill", DefaultAmbientFill);
+        material.SetShaderParameter("ambient_steep_boost", DefaultAmbientSteepBoost);
+        material.SetShaderParameter("diffuse_wrap", DefaultDiffuseWrap);
+        material.SetShaderParameter("diffuse_floor", DefaultDiffuseFloor);
         material.SetShaderParameter("material_tint", Colors.White);
         return material;
     }
