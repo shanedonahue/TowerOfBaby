@@ -1650,10 +1650,10 @@ public partial class TerrainLodManager : Node3D
         if (displayedRefreshSeamRoots.Count > 0)
         {
             HashSet<TerrainBlockId> refreshedSeamBlocks = RefreshVisibleMixedLodSeamsImmediately(
-                CollectImmediateSeamCandidates(displayedRefreshSeamRoots));
+                CollectDisplayedRefreshSeamCandidates(displayedRefreshSeamRoots));
             if (currentDeformSeamRoots.Count > 0)
             {
-                HashSet<TerrainBlockId> currentDeformCandidates = CollectImmediateSeamCandidates(currentDeformSeamRoots);
+                HashSet<TerrainBlockId> currentDeformCandidates = CollectDisplayedRefreshSeamCandidates(currentDeformSeamRoots);
                 int currentDeformRefreshCount = 0;
                 foreach (TerrainBlockId refreshedBlockId in refreshedSeamBlocks)
                 {
@@ -1903,18 +1903,61 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
-    private HashSet<TerrainBlockId> CollectImmediateSeamCandidates(IEnumerable<TerrainBlockId> rootBlockIds)
+    private HashSet<TerrainBlockId> CollectDisplayedRefreshSeamCandidates(IEnumerable<TerrainBlockId> rootBlockIds)
     {
         HashSet<TerrainBlockId> candidates = new();
         foreach (TerrainBlockId rootBlockId in rootBlockIds)
         {
-            foreach (TerrainBlockId candidate in EnumeratePotentialSeamBlocks(rootBlockId))
-            {
-                candidates.Add(candidate);
-            }
+            AddDisplayedRefreshSeamCandidates(candidates, rootBlockId);
         }
 
         return candidates;
+    }
+
+    private void AddDisplayedRefreshSeamCandidates(HashSet<TerrainBlockId> candidates, TerrainBlockId blockId)
+    {
+        candidates.Add(blockId);
+
+        foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
+        {
+            if (TryGetVisibleDisplayedRefreshCoarseNeighbor(blockId, face, out TerrainBlockId coarseNeighbor))
+            {
+                candidates.Add(coarseNeighbor);
+            }
+        }
+
+        if (blockId.Lod <= FinestTerrainLod)
+        {
+            return;
+        }
+
+        foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
+        {
+            TerrainBlockId neighborParent = new(blockId.Lod, blockId.Index - offset);
+            foreach (TerrainBlockId child in TerrainMetrics.GetChildren(neighborParent))
+            {
+                if (IsChildOnParentOuterFace(child, face) && HasVisibleSameLodCoverage(child))
+                {
+                    candidates.Add(child);
+                }
+            }
+        }
+    }
+
+    private bool TryGetVisibleDisplayedRefreshCoarseNeighbor(
+        TerrainBlockId blockId,
+        TerrainSeamFace face,
+        out TerrainBlockId coarseNeighbor)
+    {
+        coarseNeighbor = default;
+        if (blockId.Lod >= GetCoarsestLod() || !IsChildOnParentOuterFace(blockId, face))
+        {
+            return false;
+        }
+
+        TerrainBlockId parent = GetParentBlock(blockId);
+        coarseNeighbor = new TerrainBlockId(parent.Lod, parent.Index + GetSeamFaceOffset(face));
+        return HasVisibleSameLodCoverage(coarseNeighbor);
     }
 
     private HashSet<TerrainBlockId> RefreshVisibleMixedLodSeamsImmediately(IReadOnlyCollection<TerrainBlockId> candidateBlockIds)

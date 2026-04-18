@@ -40,6 +40,7 @@ public sealed class TerrainSurfaceColorizer
     private static readonly Color ExposedSoilColor = new(0.50f, 0.37f, 0.24f, 1.0f);
     private static readonly Color ExposedRockColor = new(0.54f, 0.53f, 0.50f, 1.0f);
     private static readonly Color ExposedCliffColor = new(0.60f, 0.52f, 0.39f, 1.0f);
+    private static readonly Color ScorchedTerrainColor = new(0.29f, 0.23f, 0.19f, 1.0f);
 
     private readonly int _seed;
     private readonly float _terrainHeight;
@@ -177,18 +178,28 @@ public sealed class TerrainSurfaceColorizer
             VoxelMaterialId.Cliff => baseMaterialColor.Lerp(ExposedCliffColor, 0.24f + (slope * 0.05f)),
             _ => baseMaterialColor
         };
+        Color terrainInfluenceColor = materialId switch
+        {
+            VoxelMaterialId.Grass => terrainPaletteColor,
+            VoxelMaterialId.Soil => terrainPaletteColor.Lerp(ExposedSoilColor, 0.38f),
+            VoxelMaterialId.Rock => terrainPaletteColor.Lerp(ExposedRockColor, 0.74f + (slope * 0.08f)),
+            VoxelMaterialId.Cliff => terrainPaletteColor.Lerp(ExposedCliffColor, 0.82f + (slope * 0.06f)),
+            VoxelMaterialId.Snow => terrainPaletteColor.Lerp(PeakColor, 0.62f),
+            VoxelMaterialId.Scorched => terrainPaletteColor.Lerp(ScorchedTerrainColor, 0.84f),
+            _ => terrainPaletteColor
+        };
         float paletteBlend = materialId switch
         {
-            VoxelMaterialId.Grass => 0.18f + (flatness * 0.08f),
-            VoxelMaterialId.Soil => 0.10f + (flatness * 0.04f) + (slope * 0.02f),
-            VoxelMaterialId.Rock => 0.06f + (slope * 0.05f),
-            VoxelMaterialId.Cliff => 0.04f + (slope * 0.04f),
-            VoxelMaterialId.Snow => 0.06f,
+            VoxelMaterialId.Grass => 0.10f + (flatness * 0.05f),
+            VoxelMaterialId.Soil => 0.07f + (flatness * 0.03f) + (slope * 0.01f),
+            VoxelMaterialId.Rock => 0.03f + (slope * 0.02f),
+            VoxelMaterialId.Cliff => 0.02f + (slope * 0.02f),
+            VoxelMaterialId.Snow => 0.03f,
             VoxelMaterialId.Scorched => 0.02f,
-            _ => 0.06f
+            _ => 0.04f
         };
         return EncodeSurfaceColor(
-            baseMaterialColor.Lerp(terrainPaletteColor, Mathf.Clamp(paletteBlend, 0.0f, 0.26f)),
+            baseMaterialColor.Lerp(terrainInfluenceColor, Mathf.Clamp(paletteBlend, 0.0f, 0.16f)),
             materialId);
     }
 
