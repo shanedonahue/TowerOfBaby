@@ -65,7 +65,7 @@ public partial class TerrainLodManager : Node3D
     [ExportGroup("LOD Policy")]
     [Export(PropertyHint.Range, "3,6,1")] public int TierCount = 4;
     [Export(PropertyHint.Range, "-1,8,1")] public int Lod0NearFieldRadiusXZ = -1;
-    [Export] public int[] TierSplitRadiiXZ = { 0, 4, 5 };
+    [Export] public int[] TierSplitRadiiXZ = { 0, 3, 4 };
     [Export(PropertyHint.Range, "1,12,1")] public int CoarsestRadiusXZ = 3;
     [Export(PropertyHint.Range, "0,2,1")] public int VerticalRadius;
 
@@ -1295,20 +1295,10 @@ public partial class TerrainLodManager : Node3D
             return true;
         }
 
-        float referenceSpan = TerrainMetrics.GetBlockSpan(_config, GetSelectionCenterLod());
+        float referenceSpan = GetLocalCoverageReferenceSpan();
         float horizontalRadius = Mathf.Max(1, GetStartupCriticalRadius()) * referenceSpan;
         float verticalRadius = Mathf.Max(referenceSpan, (Mathf.Max(0, VerticalRadius) + 1) * referenceSpan);
-        Aabb bounds = TerrainMetrics.GetBlockBounds(_config, blockId);
-        Vector3 min = bounds.Position;
-        Vector3 max = bounds.End;
-        Vector3 clamped = new(
-            Mathf.Clamp(viewerPosition.X, min.X, max.X),
-            Mathf.Clamp(viewerPosition.Y, min.Y, max.Y),
-            Mathf.Clamp(viewerPosition.Z, min.Z, max.Z));
-        Vector3 delta = viewerPosition - clamped;
-        Vector2 horizontalDelta = new(delta.X, delta.Z);
-        return horizontalDelta.Length() <= horizontalRadius &&
-               Mathf.Abs(delta.Y) <= verticalRadius;
+        return IsBlockWithinCoverageRadius(blockId, viewerPosition, horizontalRadius, verticalRadius);
     }
 
     private int GetStartupCriticalRadius()
@@ -1318,7 +1308,7 @@ public partial class TerrainLodManager : Node3D
             return Mathf.Max(0, StartupCriticalRadiusXZ);
         }
 
-        return Mathf.Max(GetSelectionCenterRadius() + 1, CollisionSafetyRadiusXZ + 1);
+        return GetCollisionCoverageRadiusInReferenceBlocks();
     }
 
     private void RefreshStartupSatisfiedBlocks()
@@ -1519,7 +1509,7 @@ public partial class TerrainLodManager : Node3D
         {
             for (int x = -bubbleRadius; x <= bubbleRadius; x++)
             {
-                if (!ShouldRefineParentOffset(x, z, bubbleRadius))
+                if (!ShouldRefineParentOffset(centerParent.Lod, x, z, bubbleRadius))
                 {
                     continue;
                 }
@@ -1531,16 +1521,30 @@ public partial class TerrainLodManager : Node3D
         return refinedParents;
     }
 
-    private static bool ShouldRefineParentOffset(int xOffset, int zOffset, int bubbleRadius)
+    private static bool ShouldRefineParentOffset(int parentLod, int xOffset, int zOffset, int bubbleRadius)
     {
         if (bubbleRadius <= 0)
         {
             return xOffset == 0 && zOffset == 0;
         }
 
-        // With the current stylized terrain, keeping the close bubble square makes the mixed-LOD boundary
-        // less noticeable and keeps seams farther away from the player.
-        return true;
+        // Keep the near-player refinement bubble square so close seams remain stable, but trim far-tier corners
+        // where they mostly add residency cost rather than noticeable quality.
+        if (parentLod <= FinestTerrainLod + 1 || bubbleRadius <= 2)
+        {
+            return true;
+        }
+
+        int absX = Mathf.Abs(xOffset);
+        int absZ = Mathf.Abs(zOffset);
+        int innerSquareRadius = Mathf.Max(1, bubbleRadius - 1);
+        if (Mathf.Max(absX, absZ) <= innerSquareRadius)
+        {
+            return true;
+        }
+
+        int cornerAllowance = Mathf.Max(1, bubbleRadius / 2);
+        return (absX + absZ) <= bubbleRadius + cornerAllowance;
     }
 
     private static void AddRefinedParent(HashSet<TerrainBlockId> refinedParents, TerrainBlockId centerParent, int xOffset, int zOffset)
@@ -3350,6 +3354,11 @@ public partial class TerrainLodManager : Node3D
             return 0.0f;
         }
 
+        if (!ShouldApplyReleaseHysteresis(blockId))
+        {
+            return 0.0f;
+        }
+
         double holdSeconds = Mathf.Max(0.0f, BlockReleaseHysteresisSeconds);
         if (blockId.Lod <= FinestTerrainLod)
         {
@@ -3849,20 +3858,10 @@ public partial class TerrainLodManager : Node3D
             return false;
         }
 
-        float referenceSpan = TerrainMetrics.GetBlockSpan(_config, GetSelectionCenterLod());
-        float horizontalSafetyRadius = Mathf.Max(GetSelectionCenterRadius() + 1, CollisionSafetyRadiusXZ) * referenceSpan;
+        float referenceSpan = GetLocalCoverageReferenceSpan();
+        float horizontalSafetyRadius = GetCollisionCoverageRadiusInReferenceBlocks() * referenceSpan;
         float verticalSafetyRadius = Mathf.Max(referenceSpan, Mathf.Max(0, VerticalRadius) * referenceSpan);
-        Aabb bounds = TerrainMetrics.GetBlockBounds(_config, blockId);
-        Vector3 min = bounds.Position;
-        Vector3 max = bounds.End;
-        Vector3 clamped = new(
-            Mathf.Clamp(viewerPosition.X, min.X, max.X),
-            Mathf.Clamp(viewerPosition.Y, min.Y, max.Y),
-            Mathf.Clamp(viewerPosition.Z, min.Z, max.Z));
-        Vector3 delta = viewerPosition - clamped;
-        Vector2 horizontalDelta = new(delta.X, delta.Z);
-        return horizontalDelta.Length() <= horizontalSafetyRadius &&
-               Mathf.Abs(delta.Y) <= verticalSafetyRadius;
+        return IsBlockWithinCoverageRadius(blockId, viewerPosition, horizontalSafetyRadius, verticalSafetyRadius);
     }
 
     private bool ShouldMaintainCollisionCoverage(
@@ -3888,6 +3887,48 @@ public partial class TerrainLodManager : Node3D
             TerrainBlockState.Releasable => !HasReadyPhysicsSuccessorCoverage(block.Id, coverageOverride),
             _ => false
         };
+    }
+
+    private float GetLocalCoverageReferenceSpan()
+    {
+        return TerrainMetrics.GetBlockSpan(_config, GetLocalCoverageReferenceLod());
+    }
+
+    private int GetLocalCoverageReferenceLod()
+    {
+        return Mathf.Min(GetSelectionCenterLod(), FinestTerrainLod + 1);
+    }
+
+    private int GetCollisionCoverageRadiusInReferenceBlocks()
+    {
+        return Mathf.Max(GetEffectiveLod0NearFieldRadius() + 1, CollisionSafetyRadiusXZ);
+    }
+
+    private bool ShouldApplyReleaseHysteresis(TerrainBlockId blockId)
+    {
+        float referenceSpan = GetLocalCoverageReferenceSpan();
+        float horizontalRadius = Mathf.Max(1, GetEffectiveLod0NearFieldRadius() + 1) * referenceSpan;
+        float verticalRadius = Mathf.Max(referenceSpan, (Mathf.Max(0, VerticalRadius) + 1) * referenceSpan);
+        return IsBlockWithinCoverageRadius(blockId, _lastViewerPosition, horizontalRadius, verticalRadius);
+    }
+
+    private bool IsBlockWithinCoverageRadius(
+        TerrainBlockId blockId,
+        Vector3 viewerPosition,
+        float horizontalRadius,
+        float verticalRadius)
+    {
+        Aabb bounds = TerrainMetrics.GetBlockBounds(_config, blockId);
+        Vector3 min = bounds.Position;
+        Vector3 max = bounds.End;
+        Vector3 clamped = new(
+            Mathf.Clamp(viewerPosition.X, min.X, max.X),
+            Mathf.Clamp(viewerPosition.Y, min.Y, max.Y),
+            Mathf.Clamp(viewerPosition.Z, min.Z, max.Z));
+        Vector3 delta = viewerPosition - clamped;
+        Vector2 horizontalDelta = new(delta.X, delta.Z);
+        return horizontalDelta.Length() <= horizontalRadius &&
+               Mathf.Abs(delta.Y) <= verticalRadius;
     }
 
     private void RemoveBlockFromDispatcherQueues(TerrainBlockId blockId)
