@@ -189,62 +189,39 @@ int decode_material_id(float encoded_alpha) {
     return int(clamp(floor(encoded_alpha * MATERIAL_DECODE_SCALE), 0.0, 5.0));
 }
 
-void resolve_surface_layers(
-    int material_id,
-    float slope,
-    out int primary_surface,
-    out int secondary_surface,
-    out float secondary_weight,
-    out int dominant_normal_layer)
-{
-    primary_surface = SURFACE_DIRT;
-    secondary_surface = SURFACE_DIRT;
-    secondary_weight = 0.0;
-    dominant_normal_layer = SURFACE_DIRT;
-
+int resolve_primary_surface(int material_id) {
     if (material_id == MATERIAL_GRASS) {
-        primary_surface = SURFACE_GRASS;
-        secondary_surface = SURFACE_DIRT;
-        secondary_weight = smoothstep(
-            max(grass_slope_max * 0.82, 0.12),
-            max(grass_slope_max + 0.02, 0.18),
-            slope) * 0.08;
-        dominant_normal_layer = SURFACE_GRASS;
-        return;
+        return SURFACE_GRASS;
     }
 
     if (material_id == MATERIAL_SOIL) {
-        primary_surface = SURFACE_DIRT;
-        secondary_surface = SURFACE_ROCK;
-        secondary_weight = smoothstep(
-            max(rock_slope_start - 0.14, 0.18),
-            rock_slope_start + 0.04,
-            slope) * 0.10;
-        dominant_normal_layer = SURFACE_DIRT;
-        return;
+        return SURFACE_DIRT;
     }
 
-    if (material_id == MATERIAL_ROCK) {
-        dominant_normal_layer = SURFACE_ROCK;
-        primary_surface = SURFACE_ROCK;
-        secondary_surface = SURFACE_DIRT;
-        secondary_weight = (1.0 - smoothstep(0.18, 0.34, slope)) * 0.04;
-        return;
+    return SURFACE_ROCK;
+}
+
+int resolve_dominant_normal_layer(int material_id) {
+    if (material_id == MATERIAL_GRASS) {
+        return SURFACE_GRASS;
     }
 
-    if (material_id == MATERIAL_CLIFF || material_id == MATERIAL_SNOW) {
-        primary_surface = SURFACE_ROCK;
-        secondary_surface = SURFACE_ROCK;
-        dominant_normal_layer = SURFACE_ROCK;
-        return;
+    if (material_id == MATERIAL_SOIL) {
+        return SURFACE_DIRT;
     }
 
-    if (material_id == MATERIAL_SCORCHED) {
-        primary_surface = SURFACE_ROCK;
-        secondary_surface = SURFACE_DIRT;
-        secondary_weight = 0.18;
-        dominant_normal_layer = SURFACE_ROCK;
+    return SURFACE_ROCK;
+}
+
+float resolve_secondary_surface_weight(int material_id, float slope) {
+    if (material_id != MATERIAL_GRASS) {
+        return 0.0;
     }
+
+    return smoothstep(
+        max(grass_slope_max * 0.90, 0.18),
+        max(grass_slope_max + 0.26, 0.48),
+        slope) * 0.20;
 }
 
 void sample_surface_color(
@@ -256,24 +233,17 @@ void sample_surface_color(
     out vec3 terrain_color,
     out int dominant_normal_layer)
 {
-    int primary_surface;
-    int secondary_surface;
-    float secondary_weight;
-    resolve_surface_layers(
-        material_id,
-        slope,
-        primary_surface,
-        secondary_surface,
-        secondary_weight,
-        dominant_normal_layer);
-
+    int primary_surface = resolve_primary_surface(material_id);
+    dominant_normal_layer = resolve_dominant_normal_layer(material_id);
     vec3 primary_color = sample_surface_albedo(primary_surface, position, normal, distant_mode);
-    if (secondary_weight <= 0.001 || secondary_surface == primary_surface) {
+
+    float secondary_weight = resolve_secondary_surface_weight(material_id, slope);
+    if (secondary_weight <= 0.001) {
         terrain_color = primary_color;
         return;
     }
 
-    vec3 secondary_color = sample_surface_albedo(secondary_surface, position, normal, distant_mode);
+    vec3 secondary_color = sample_surface_albedo(SURFACE_DIRT, position, normal, distant_mode);
     terrain_color = mix(primary_color, secondary_color, saturate(secondary_weight));
 }
 

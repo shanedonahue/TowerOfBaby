@@ -46,8 +46,10 @@ public readonly record struct VoxelEditStats(
 public static class VoxelTerrainEditing
 {
     private const float NearSurfaceMaterialBias = 0.55f;
-    private const float FlatExposedUpDot = 0.74f;
-    private const float SlopedExposedUpDot = 0.42f;
+    private const float FlatExposedUpDot = 0.78f;
+    private const float SlopedExposedUpDot = 0.46f;
+    private const float AutoAdditiveRetextureStrength = 0.52f;
+    private const float AutoSubtractiveRetextureStrength = 0.34f;
 
     public static VoxelEditStats ApplySphere(
         VoxelChunkData data,
@@ -112,6 +114,7 @@ public static class VoxelTerrainEditing
         float retextureRadius = edit.Radius + Mathf.Max(edit.RetextureMargin, data.VoxelSize);
         IndexBounds materialBounds = ComputeBounds(data, localCenter, retextureRadius);
         int materialSamplesTouched = 0;
+        float effectivePaintStrength = ResolveRetextureStrength(edit.PaintStrength, edit.DeltaDensity);
         for (int z = materialBounds.Min.Z; z <= materialBounds.Max.Z; z++)
         {
             for (int y = materialBounds.Min.Y; y <= materialBounds.Max.Y; y++)
@@ -124,11 +127,13 @@ public static class VoxelTerrainEditing
                     float paintInfluence = 1.0f - Mathf.Clamp(distance / retextureRadius, 0.0f, 1.0f);
                     VoxelMaterialId currentMaterial = data.GetMaterial(x, y, z);
                     VoxelMaterialId nextMaterial = currentMaterial;
-                    if ((paintInfluence * edit.PaintStrength) >= 0.18f &&
+                    if ((paintInfluence * effectivePaintStrength) >= 0.18f &&
                         density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
+                        VoxelMaterialId terrainMaterial = materialResolver(position, density);
                         nextMaterial = ResolveEditedSurfaceMaterial(
                             currentMaterial,
+                            terrainMaterial,
                             position - edit.Center,
                             edit.DeltaDensity);
                     }
@@ -221,6 +226,7 @@ public static class VoxelTerrainEditing
         float paintHalfDepth = halfDepth + (retexturePadding * 0.75f);
         IndexBounds materialBounds = ComputeBounds(data, localCenter, edit.BoundingRadius + retexturePadding);
         int materialSamplesTouched = 0;
+        float effectivePaintStrength = ResolveRetextureStrength(edit.PaintStrength, edit.DensityDelta);
         for (int z = materialBounds.Min.Z; z <= materialBounds.Max.Z; z++)
         {
             for (int y = materialBounds.Min.Y; y <= materialBounds.Max.Y; y++)
@@ -238,7 +244,7 @@ public static class VoxelTerrainEditing
                     float density = data.GetDensity(x, y, z);
                     VoxelMaterialId currentMaterial = data.GetMaterial(x, y, z);
                     VoxelMaterialId nextMaterial = currentMaterial;
-                    if ((paintInfluence * edit.PaintStrength) >= 0.16f &&
+                    if ((paintInfluence * effectivePaintStrength) >= 0.16f &&
                         density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
                         Vector3 exposureNormal = normal;
@@ -247,8 +253,10 @@ public static class VoxelTerrainEditing
                             exposureNormal = -normal;
                         }
 
+                        VoxelMaterialId terrainMaterial = materialResolver(position, density);
                         nextMaterial = ResolveEditedSurfaceMaterial(
                             currentMaterial,
+                            terrainMaterial,
                             exposureNormal,
                             edit.DensityDelta);
                     }
@@ -323,46 +331,148 @@ public static class VoxelTerrainEditing
     }
 
     private static VoxelMaterialId ResolveEditedSurfaceMaterial(
-        VoxelMaterialId terrainMaterial,
+        VoxelMaterialId currentMaterial,
+        VoxelMaterialId terrainTruthMaterial,
         Vector3 exposureNormal,
         float densityDelta)
     {
         float upness = Mathf.Abs(SafeNormalized(exposureNormal, Vector3.Up).Dot(Vector3.Up));
+        VoxelMaterialId dominantMaterial = ResolveDominantContextMaterial(currentMaterial, terrainTruthMaterial);
 
         if (densityDelta > 0.0f)
         {
             if (upness >= FlatExposedUpDot)
             {
-                return terrainMaterial is VoxelMaterialId.Grass or VoxelMaterialId.Soil
-                    ? VoxelMaterialId.Grass
-                    : terrainMaterial;
+                return ResolveAddedFlatMaterial(terrainTruthMaterial, currentMaterial);
             }
 
             return upness >= SlopedExposedUpDot
-                ? VoxelMaterialId.Soil
-                : VoxelMaterialId.Rock;
-        }
-
-        if (terrainMaterial == VoxelMaterialId.Snow && upness < 0.86f)
-        {
-            terrainMaterial = VoxelMaterialId.Rock;
+                ? ResolveAddedSlopedMaterial(dominantMaterial)
+                : ResolveAddedSteepMaterial(dominantMaterial);
         }
 
         if (upness >= FlatExposedUpDot)
         {
-            return terrainMaterial is VoxelMaterialId.Rock or VoxelMaterialId.Cliff or VoxelMaterialId.Snow
-                ? VoxelMaterialId.Rock
-                : VoxelMaterialId.Soil;
+            return ResolveCutFlatMaterial(dominantMaterial);
         }
 
         if (upness >= SlopedExposedUpDot)
         {
-            return terrainMaterial is VoxelMaterialId.Grass or VoxelMaterialId.Soil
-                ? VoxelMaterialId.Soil
-                : VoxelMaterialId.Rock;
+            return ResolveCutSlopedMaterial(dominantMaterial);
         }
 
         return VoxelMaterialId.Cliff;
+    }
+
+    private static float ResolveRetextureStrength(float requestedPaintStrength, float densityDelta)
+    {
+        float automaticStrength = Mathf.IsZeroApprox(densityDelta)
+            ? 0.0f
+            : densityDelta > 0.0f
+                ? AutoAdditiveRetextureStrength
+                : AutoSubtractiveRetextureStrength;
+        return Mathf.Max(requestedPaintStrength, automaticStrength);
+    }
+
+    private static VoxelMaterialId ResolveDominantContextMaterial(
+        VoxelMaterialId currentMaterial,
+        VoxelMaterialId terrainTruthMaterial)
+    {
+        if (currentMaterial == terrainTruthMaterial)
+        {
+            return currentMaterial;
+        }
+
+        if (currentMaterial == VoxelMaterialId.Scorched || terrainTruthMaterial == VoxelMaterialId.Scorched)
+        {
+            return VoxelMaterialId.Scorched;
+        }
+
+        if (currentMaterial == VoxelMaterialId.Cliff || terrainTruthMaterial == VoxelMaterialId.Cliff)
+        {
+            return VoxelMaterialId.Cliff;
+        }
+
+        if (currentMaterial == VoxelMaterialId.Snow || terrainTruthMaterial == VoxelMaterialId.Snow)
+        {
+            return VoxelMaterialId.Snow;
+        }
+
+        if (currentMaterial == VoxelMaterialId.Rock || terrainTruthMaterial == VoxelMaterialId.Rock)
+        {
+            return VoxelMaterialId.Rock;
+        }
+
+        if (currentMaterial == VoxelMaterialId.Grass || terrainTruthMaterial == VoxelMaterialId.Grass)
+        {
+            return VoxelMaterialId.Grass;
+        }
+
+        return terrainTruthMaterial;
+    }
+
+    private static VoxelMaterialId ResolveAddedFlatMaterial(
+        VoxelMaterialId terrainTruthMaterial,
+        VoxelMaterialId currentMaterial)
+    {
+        return terrainTruthMaterial switch
+        {
+            VoxelMaterialId.Grass => VoxelMaterialId.Grass,
+            VoxelMaterialId.Soil when currentMaterial == VoxelMaterialId.Grass => VoxelMaterialId.Grass,
+            VoxelMaterialId.Snow => VoxelMaterialId.Snow,
+            VoxelMaterialId.Rock => VoxelMaterialId.Rock,
+            VoxelMaterialId.Cliff => VoxelMaterialId.Rock,
+            VoxelMaterialId.Scorched => VoxelMaterialId.Scorched,
+            _ => VoxelMaterialId.Soil
+        };
+    }
+
+    private static VoxelMaterialId ResolveAddedSlopedMaterial(VoxelMaterialId dominantMaterial)
+    {
+        return dominantMaterial switch
+        {
+            VoxelMaterialId.Grass => VoxelMaterialId.Soil,
+            VoxelMaterialId.Snow => VoxelMaterialId.Rock,
+            VoxelMaterialId.Cliff => VoxelMaterialId.Cliff,
+            VoxelMaterialId.Rock => VoxelMaterialId.Rock,
+            VoxelMaterialId.Scorched => VoxelMaterialId.Rock,
+            _ => VoxelMaterialId.Soil
+        };
+    }
+
+    private static VoxelMaterialId ResolveAddedSteepMaterial(VoxelMaterialId dominantMaterial)
+    {
+        return dominantMaterial == VoxelMaterialId.Cliff
+            ? VoxelMaterialId.Cliff
+            : IsRockFamily(dominantMaterial)
+                ? VoxelMaterialId.Rock
+                : VoxelMaterialId.Cliff;
+    }
+
+    private static VoxelMaterialId ResolveCutFlatMaterial(VoxelMaterialId dominantMaterial)
+    {
+        return dominantMaterial switch
+        {
+            VoxelMaterialId.Snow => VoxelMaterialId.Snow,
+            _ when IsRockFamily(dominantMaterial) => VoxelMaterialId.Rock,
+            _ => VoxelMaterialId.Soil
+        };
+    }
+
+    private static VoxelMaterialId ResolveCutSlopedMaterial(VoxelMaterialId dominantMaterial)
+    {
+        return dominantMaterial switch
+        {
+            VoxelMaterialId.Snow => VoxelMaterialId.Rock,
+            VoxelMaterialId.Cliff => VoxelMaterialId.Cliff,
+            _ when IsRockFamily(dominantMaterial) => VoxelMaterialId.Rock,
+            _ => VoxelMaterialId.Soil
+        };
+    }
+
+    private static bool IsRockFamily(VoxelMaterialId material)
+    {
+        return material is VoxelMaterialId.Rock or VoxelMaterialId.Cliff or VoxelMaterialId.Snow or VoxelMaterialId.Scorched;
     }
 
     private static Vector3 SafeNormalized(Vector3 value, Vector3 fallback)

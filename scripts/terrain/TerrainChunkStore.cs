@@ -956,8 +956,8 @@ public sealed class TerrainChunkStore
             return;
         }
 
-        GD.Print(
-            $"Terrain adaptive detail load | scope {scope} | chunk {keySummary} | detail_bricks {metrics.DetailBrickCount} | detail_regions {metrics.DetailRegionCount} | bytes {metrics.SerializedByteCount} | schema {FormatSchema(metrics.SchemaVersion)}");
+        // GD.Print(
+        //     $"Terrain adaptive detail load | scope {scope} | chunk {keySummary} | detail_bricks {metrics.DetailBrickCount} | detail_regions {metrics.DetailRegionCount} | bytes {metrics.SerializedByteCount} | schema {FormatSchema(metrics.SchemaVersion)}");
     }
 
     private static void LogAdaptiveDetailBatchSave(string scope, int chunkCount, VoxelAdaptiveDetailPersistenceMetrics metrics)

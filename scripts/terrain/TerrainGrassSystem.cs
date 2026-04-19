@@ -1454,6 +1454,8 @@ public partial class TerrainGrassSystem : Node3D
 
     private void WriteDebugLogLine(string line)
     {
+        return;
+        
         if (!EnsureDebugLogWriter())
         {
             return;
