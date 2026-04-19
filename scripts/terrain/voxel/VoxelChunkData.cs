@@ -209,6 +209,20 @@ public sealed class VoxelChunkData : IDisposable
         return copy;
     }
 
+    public byte[] CopyDensityBytes()
+    {
+        byte[] bytes = new byte[_pointCount * sizeof(float)];
+        Buffer.BlockCopy(_densities, 0, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    // Published terrain fields are treated as immutable snapshots by persistence and worker code.
+    // Callers may read this buffer directly, but they must never mutate it.
+    internal byte[] GetMaterialBufferUnsafe()
+    {
+        return _materials;
+    }
+
     public VoxelChunkData CreateMeshSnapshot(bool includeTransientDetailBrick)
     {
         VoxelChunkData snapshot = new(

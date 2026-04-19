@@ -142,7 +142,10 @@ public sealed class TerrainWorldProfileSnapshot
     public string LastPersistenceLoadScope { get; init; } = string.Empty;
     public long PersistenceSaveCount { get; init; }
     public double PersistenceSaveMs { get; init; }
+    public double PersistenceSerializationMs { get; init; }
+    public int LastPersistenceSaveCount { get; init; }
     public double LastPersistenceSaveMs { get; init; }
+    public double LastPersistenceSerializationMs { get; init; }
     public string LastPersistenceSaveScope { get; init; } = string.Empty;
     public long ResidentReuseHits { get; init; }
     public long CacheHits { get; init; }
@@ -171,6 +174,7 @@ public sealed class TerrainWorldProfileSnapshot
     public long StartupPromotionWrites { get; init; }
     public int RetainedFieldChunkCount { get; init; }
     public int PendingPersistenceSaveCount { get; init; }
+    public int PersistenceQueueDepth { get; init; }
     public int PooledRendererCount { get; init; }
     public long CacheHitsDelta { get; init; }
     public long CacheMissesDelta { get; init; }
@@ -246,6 +250,8 @@ public sealed class TerrainWorldProfileSnapshot
     public string LastRefinementHandoffSummary { get; init; } = string.Empty;
     public string LastReleasedChunkSummary { get; init; } = string.Empty;
     public string LastChunkSourceSummary { get; init; } = string.Empty;
+    public string StartupPendingSummary { get; init; } = string.Empty;
+    public string PendingMeshCommitSummary { get; init; } = string.Empty;
     public float InitialLoadProgress { get; init; }
     public bool InitialLoadComplete { get; init; }
 }

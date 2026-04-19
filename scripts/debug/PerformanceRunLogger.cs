@@ -62,6 +62,10 @@ public partial class PerformanceRunLogger : Node
     private double _sampleSearchMs;
     private double _samplePriorityEvalMs;
     private double _sampleVisibilityMs;
+    private int _samplePersistenceSaveCount;
+    private double _samplePersistenceSaveMs;
+    private double _samplePersistenceSerializeMs;
+    private int _samplePeakPersistenceQueueDepth;
     private int _minFps = int.MaxValue;
     private int _maxFps;
     private long _previousCacheHits;
@@ -137,6 +141,10 @@ public partial class PerformanceRunLogger : Node
             _sampleSearchMs += snapshot.LastDesiredSearchMs;
             _samplePriorityEvalMs += snapshot.LastPriorityEvaluationMs;
             _sampleVisibilityMs += snapshot.LastVisibilityHeuristicMs;
+            _samplePersistenceSaveCount += snapshot.LastPersistenceSaveCount;
+            _samplePersistenceSaveMs += snapshot.LastPersistenceSaveMs;
+            _samplePersistenceSerializeMs += snapshot.LastPersistenceSerializationMs;
+            _samplePeakPersistenceQueueDepth = Mathf.Max(_samplePeakPersistenceQueueDepth, snapshot.PersistenceQueueDepth);
         }
 
         if (_sampleAccumulator < SampleIntervalSeconds)
@@ -226,6 +234,10 @@ public partial class PerformanceRunLogger : Node
             _sampleSearchMs,
             _samplePriorityEvalMs,
             _sampleVisibilityMs,
+            _samplePersistenceSaveCount,
+            _samplePersistenceSaveMs,
+            _samplePersistenceSerializeMs,
+            _samplePeakPersistenceQueueDepth,
             lowPriorityDeferredMeshBuildsDelta,
             snapshot == null ? 0 : snapshot.CacheHits - _previousCacheHits,
             snapshot == null ? 0 : snapshot.CacheMisses - _previousCacheMisses,
@@ -275,6 +287,10 @@ public partial class PerformanceRunLogger : Node
         _sampleSearchMs = 0.0;
         _samplePriorityEvalMs = 0.0;
         _sampleVisibilityMs = 0.0;
+        _samplePersistenceSaveCount = 0;
+        _samplePersistenceSaveMs = 0.0;
+        _samplePersistenceSerializeMs = 0.0;
+        _samplePeakPersistenceQueueDepth = 0;
 
         if (snapshot != null)
         {
@@ -387,12 +403,16 @@ public partial class PerformanceRunLogger : Node
             long peakStartupPromotionWrites = 0;
             int peakRetainedFieldChunks = 0;
             int peakPendingPersistenceSaves = 0;
+            int peakPersistenceQueueDepth = 0;
             int peakPooledRenderers = 0;
             int totalGen0Collections = 0;
             int totalGen1Collections = 0;
             int totalGen2Collections = 0;
             long peakPressureModeActiveFrames = 0;
             int peakPressureModeActivationCount = 0;
+            int totalPersistenceSaveCount = 0;
+            double totalPersistenceSaveMs = 0.0;
+            double totalPersistenceSerializeMs = 0.0;
             float averageFrameMs = ComputeAverageFrameMs();
             float averageFps = FrameMsToFps(averageFrameMs);
             float p95FrameMs = ComputePercentileFrameMs(0.95f);
@@ -443,6 +463,7 @@ public partial class PerformanceRunLogger : Node
                 peakStartupPromotionWrites = Math.Max(peakStartupPromotionWrites, sample.Snapshot.StartupPromotionWrites);
                 peakRetainedFieldChunks = Mathf.Max(peakRetainedFieldChunks, sample.Snapshot.RetainedFieldChunkCount);
                 peakPendingPersistenceSaves = Mathf.Max(peakPendingPersistenceSaves, sample.Snapshot.PendingPersistenceSaveCount);
+                peakPersistenceQueueDepth = Mathf.Max(peakPersistenceQueueDepth, sample.PeakPersistenceQueueDepth);
                 peakPooledRenderers = Mathf.Max(peakPooledRenderers, sample.Snapshot.PooledRendererCount);
                 peakMeshWorkerQueueWaitMs = Math.Max(peakMeshWorkerQueueWaitMs, sample.Snapshot.PeakMeshWorkerQueueWaitMs);
                 peakWorkingSetMiB = Mathf.Max(peakWorkingSetMiB, sample.WorkingSetMiB);
@@ -490,6 +511,9 @@ public partial class PerformanceRunLogger : Node
                 totalSearchMs += sample.SearchMs;
                 totalPriorityEvalMs += sample.PriorityEvalMs;
                 totalVisibilityMs += sample.VisibilityMs;
+                totalPersistenceSaveCount += sample.PersistenceSaveCount;
+                totalPersistenceSaveMs += sample.PersistenceSaveMs;
+                totalPersistenceSerializeMs += sample.PersistenceSerializeMs;
                 totalGen0Collections += sample.Gen0CollectionsDelta;
                 totalGen1Collections += sample.Gen1CollectionsDelta;
                 totalGen2Collections += sample.Gen2CollectionsDelta;
@@ -524,6 +548,7 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"FrontierCompactions: {peakFrontierCompactions}");
             builder.AppendLine($"PeakRetainedFieldChunks: {peakRetainedFieldChunks}");
             builder.AppendLine($"PeakPendingPersistenceSaves: {peakPendingPersistenceSaves}");
+            builder.AppendLine($"PeakPersistenceQueueDepth: {peakPersistenceQueueDepth}");
             builder.AppendLine($"PeakPooledRenderers: {peakPooledRenderers}");
             builder.AppendLine($"RamChunkLoads: {totalRamLoads}");
             builder.AppendLine($"StartupChunkLoads: {totalStartupLoads}");
@@ -554,6 +579,9 @@ public partial class PerformanceRunLogger : Node
             builder.AppendLine($"PressureModeActiveFrames: {peakPressureModeActiveFrames}");
             builder.AppendLine($"PressureModeActivations: {peakPressureModeActivationCount}");
             builder.AppendLine($"StartupPromotionWrites: {peakStartupPromotionWrites}");
+            builder.AppendLine($"PersistenceSaveCount: {totalPersistenceSaveCount}");
+            builder.AppendLine($"AccumulatedPersistenceSaveMs: {totalPersistenceSaveMs:0.00}");
+            builder.AppendLine($"AccumulatedPersistenceSerializeMs: {totalPersistenceSerializeMs:0.00}");
             builder.AppendLine($"AccumulatedRamChunkLoadMs: {totalRamLoadMs:0.00}");
             builder.AppendLine($"AccumulatedStartupChunkLoadMs: {totalStartupLoadMs:0.00}");
             builder.AppendLine($"AccumulatedPersistedChunkLoadMs: {totalPersistedLoadMs:0.00}");
@@ -602,6 +630,8 @@ public partial class PerformanceRunLogger : Node
                     builder.AppendLine($"LodAverageDeferredReleaseAgeMs: {latestSnapshot.AverageReleaseDeferredAgeMs:0.00}");
                     builder.AppendLine($"LodLastRefinementHandoff: {latestSnapshot.LastRefinementHandoffSummary}");
                     builder.AppendLine($"LodDesiredSetSummary: {latestSnapshot.LastSelectedChunkSummary}");
+                    builder.AppendLine($"LodStartupPendingSummary: {latestSnapshot.StartupPendingSummary}");
+                    builder.AppendLine($"LodPendingMeshCommitSummary: {latestSnapshot.PendingMeshCommitSummary}");
                     builder.AppendLine($"LodEditSummary: {latestSnapshot.LastEditOperationSummary}");
                     builder.AppendLine($"LodDeformOperations: {latestSnapshot.DeformOperationCount}");
                     builder.AppendLine(
@@ -613,6 +643,8 @@ public partial class PerformanceRunLogger : Node
                         $"commit/seam/converge {latestSnapshot.LastDeformVisibleCommitCount}/{latestSnapshot.LastDeformSeamRefreshCount}/{latestSnapshot.LastDeformVisibleConvergenceMs:0.00} ms " +
                         $"tri {latestSnapshot.LastDeformRefreshedTriangleCount} samples {latestSnapshot.LastDeformEditedSampleCount} " +
                         $"dirty {latestSnapshot.LastDeformDirtyBoundsVolume:0.00} detail {latestSnapshot.LastDeformEditDetailPromotionCount}");
+                    builder.AppendLine(
+                        $"LodLastPersistence: saves {latestSnapshot.LastPersistenceSaveCount} save_ms {latestSnapshot.LastPersistenceSaveMs:0.00} serialize_ms {latestSnapshot.LastPersistenceSerializationMs:0.00} q {latestSnapshot.PersistenceQueueDepth}");
                 }
             }
             builder.AppendLine($"LocomotionLeftStepCount: {leftStepCount}");
@@ -624,7 +656,7 @@ public partial class PerformanceRunLogger : Node
 
         builder.AppendLine();
         builder.AppendLine("Samples");
-        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,high_priority_enqueue_budget_hits,deferred_high_priority_enqueues,smoothed_high_priority_enqueues,prevented_coverage_gap_releases,replacement_coverage_waits,chunks_held_for_coverage_safety,normal_debug_mismatches,tangent_generation_count,vertex_tint_enabled_frames,release_requeues,release_head_of_line_avoided,avg_release_deferred_age_ms,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,startup_critical_chunks,startup_critical_satisfied,full_desired_chunks,startup_boost_active,time_to_first_visible_ms,time_to_startup_complete_ms,restored_from_startup_snapshot,restored_from_persisted,procedurally_generated,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,retained_field_chunks,pending_persistence_saves,pooled_renderers,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
+        builder.AppendLine("time_s,fps,avg_frame_ms,max_frame_ms,working_set_mib,private_memory_mib,managed_heap_mib,managed_heap_delta_mib,gen0_collections,gen1_collections,gen2_collections,active_chunks,resident_chunks,loaded_chunks,ram_cache_chunks,desired_columns,desired_chunks,to_add,to_release,frontier,visited_candidates,pending_loads,running_loads,pending_activation,prepared_chunks,in_flight_chunks,dirty_render,dirty_collision,load_count,load_ms,ram_load_count,ram_load_ms,startup_load_count,startup_load_ms,persisted_load_count,persisted_load_ms,generated_load_count,generated_load_ms,attach_count,attach_ms,release_count,release_ms,render_count,render_ms,mesh_worker_count,mesh_worker_ms,mesh_worker_queue_wait_ms,collision_count,collision_ms,pending_mesh_builds,deferred_mesh_builds,running_mesh_builds,pending_mesh_commits,last_mesh_worker_queue_wait_ms,peak_mesh_worker_queue_wait_ms,low_priority_deferred_mesh_builds,deferred_detail_promotions,deferred_promotion_reevaluations,avoided_deferred_reevaluations,suppressed_deferred_log_repeats,requests_reactivated_by_mesh_completion,requests_reactivated_by_cooldown_expiry,requests_reactivated_by_pressure_exit,coalesced_rebuild_requests,high_priority_enqueue_budget_hits,deferred_high_priority_enqueues,smoothed_high_priority_enqueues,prevented_coverage_gap_releases,replacement_coverage_waits,chunks_held_for_coverage_safety,normal_debug_mismatches,tangent_generation_count,vertex_tint_enabled_frames,release_requeues,release_head_of_line_avoided,avg_release_deferred_age_ms,mesh_backend,search_ms,priority_eval_ms,visibility_ms,resident_reuse_hits,ram_cache_hits,startup_hits,db_hits,generation_fallbacks,persisted_chunk_records,startup_snapshot_chunks,startup_desired_coverage,startup_critical_chunks,startup_critical_satisfied,full_desired_chunks,startup_boost_active,time_to_first_visible_ms,time_to_startup_complete_ms,restored_from_startup_snapshot,restored_from_persisted,procedurally_generated,search_invalidations,stale_priority_refreshes,frontier_compactions,dirty_persist_writes,startup_promotion_writes,retained_field_chunks,pending_persistence_saves,persistence_save_count,persistence_save_ms,persistence_serialize_ms,persistence_queue_depth,pooled_renderers,cache_hits,cache_misses,evicted_chunks,cache_hits_delta,cache_misses_delta,evicted_chunks_delta,search_state,initial_load_progress,initial_load_complete," + LocomotionMetrics.BuildCsvHeader());
 
         foreach (SamplePoint sample in _samples)
         {
@@ -632,7 +664,7 @@ public partial class PerformanceRunLogger : Node
             if (snapshot == null)
             {
                 builder.AppendLine(
-                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
+                    $"{sample.TimeSeconds:0.00},{sample.Fps},{sample.AverageFrameMs:0.00},{sample.MaxFrameMs:0.00},{sample.WorkingSetMiB:0.00},{sample.PrivateMemoryMiB:0.00},{sample.ManagedHeapMiB:0.00},{sample.ManagedHeapDeltaMiB:0.00},{sample.Gen0CollectionsDelta},{sample.Gen1CollectionsDelta},{sample.Gen2CollectionsDelta},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,," +
                     $",{LocomotionMetrics.BuildCsvValues(sample.LocomotionSnapshot)}");
                 continue;
             }
@@ -742,6 +774,10 @@ public partial class PerformanceRunLogger : Node
                 snapshot.StartupPromotionWrites.ToString(CultureInfo.InvariantCulture),
                 snapshot.RetainedFieldChunkCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.PendingPersistenceSaveCount.ToString(CultureInfo.InvariantCulture),
+                sample.PersistenceSaveCount.ToString(CultureInfo.InvariantCulture),
+                sample.PersistenceSaveMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.PersistenceSerializeMs.ToString("0.00", CultureInfo.InvariantCulture),
+                sample.PeakPersistenceQueueDepth.ToString(CultureInfo.InvariantCulture),
                 snapshot.PooledRendererCount.ToString(CultureInfo.InvariantCulture),
                 snapshot.CacheHits.ToString(CultureInfo.InvariantCulture),
                 snapshot.CacheMisses.ToString(CultureInfo.InvariantCulture),
@@ -869,6 +905,10 @@ public partial class PerformanceRunLogger : Node
         double SearchMs,
         double PriorityEvalMs,
         double VisibilityMs,
+        int PersistenceSaveCount,
+        double PersistenceSaveMs,
+        double PersistenceSerializeMs,
+        int PeakPersistenceQueueDepth,
         long LowPriorityDeferredMeshBuildsDelta,
         long CacheHitsDelta,
         long CacheMissesDelta,

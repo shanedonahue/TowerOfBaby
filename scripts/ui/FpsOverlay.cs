@@ -380,6 +380,8 @@ public partial class FpsOverlay : CanvasLayer
                 $"Timing search {snapshot.LastDesiredSearchMs:0.00} ms  priority {snapshot.LastPriorityEvaluationMs:0.00} ms  visibility {snapshot.LastVisibilityHeuristicMs:0.00} ms");
             _detailBuilder.AppendLine(
                 $"Ops load {snapshot.LastChunkLoadCount}/{snapshot.LastChunkLoadMs:0.00} ms  release {snapshot.LastChunkReleaseCount}/{snapshot.LastChunkReleaseMs:0.00} ms  worker {snapshot.LastMeshWorkerBuildCount}/{snapshot.LastMeshWorkerBuildMs:0.00} ms  commit {snapshot.LastVisualRebuildCount}/{snapshot.LastVisualRebuildMs:0.00} ms");
+            _detailBuilder.AppendLine(
+                $"Persist save {snapshot.LastPersistenceSaveCount}/{snapshot.LastPersistenceSaveMs:0.00} ms  serialize {snapshot.LastPersistenceSerializationMs:0.00} ms  q {snapshot.PersistenceQueueDepth}");
             if (snapshot.TerrainStatsEnabled)
             {
                 _detailBuilder.AppendLine(
@@ -406,7 +408,7 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine(
                 $"Writes dirty {snapshot.DirtyPersistWrites}  startup->db {snapshot.StartupPromotionWrites}  evicted {snapshot.EvictedChunks}");
             _detailBuilder.AppendLine(
-                $"Retention fields {snapshot.RetainedFieldChunkCount}  persist_q {snapshot.PendingPersistenceSaveCount}  renderer_pool {snapshot.PooledRendererCount}");
+                $"Retention fields {snapshot.RetainedFieldChunkCount}  persist_q {snapshot.PendingPersistenceSaveCount}  persist_depth {snapshot.PersistenceQueueDepth}  renderer_pool {snapshot.PooledRendererCount}");
             _detailBuilder.AppendLine($"Selected {TrimForOverlay(snapshot.LastSelectedChunkSummary)}");
             _detailBuilder.AppendLine($"Released {TrimForOverlay(snapshot.LastReleasedChunkSummary)}");
             _detailBuilder.AppendLine($"Source {TrimForOverlay(snapshot.LastChunkSourceSummary)}");

@@ -2,12 +2,24 @@ using Godot;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainChunkStore
 {
+    public readonly record struct SerializedLodBlockSaveData(
+        int PointsPerAxis,
+        float VoxelSize,
+        float IsoLevel,
+        Vector3 Origin,
+        byte[] DensityBytes,
+        byte[] MaterialBytes,
+        byte[] DetailBrickBlob,
+        VoxelAdaptiveDetailPersistenceMetrics AdaptiveDetailMetrics,
+        double SerializationMs);
+
     private readonly string _databasePath;
     private readonly string _connectionString;
     private readonly object _databaseLock = new();
@@ -313,12 +325,26 @@ public sealed class TerrainChunkStore
 
     public void SaveLodBlock(TerrainBlockId blockId, VoxelChunkData data)
     {
+        SerializedLodBlockSaveData serialized = SerializeLodBlock(data);
+        SaveSerializedLodBlock(blockId, serialized);
+    }
+
+    public SerializedLodBlockSaveData SerializeLodBlock(VoxelChunkData data)
+    {
+        return SerializeLodBlockData(data);
+    }
+
+    public double SaveSerializedLodBlock(TerrainBlockId blockId, SerializedLodBlockSaveData data)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
         lock (_databaseLock)
         {
             using SqliteConnection connection = new(_connectionString);
             connection.Open();
             SaveLodChunkToTable(connection, transaction: null, "lod_blocks", blockId, wasVisible: false, data);
         }
+
+        return stopwatch.Elapsed.TotalMilliseconds;
     }
 
     public void DeleteLodBlocks(IReadOnlyCollection<TerrainBlockId> blockIds)
@@ -581,15 +607,15 @@ public sealed class TerrainChunkStore
 
             foreach (TerrainLodStartupBlockSnapshot block in blocks)
             {
-                VoxelAdaptiveDetailPersistencePayload adaptiveDetail = block.Data.ExportPersistedAdaptiveDetailPayload();
-                totalAdaptiveDetailMetrics = totalAdaptiveDetailMetrics.Add(adaptiveDetail.Metrics);
+                SerializedLodBlockSaveData serializedBlock = SerializeLodBlockData(block.Data);
+                totalAdaptiveDetailMetrics = totalAdaptiveDetailMetrics.Add(serializedBlock.AdaptiveDetailMetrics);
                 SaveLodChunkToTable(
                     connection,
                     transaction,
                     "lod_startup_blocks",
                     block.BlockId,
                     block.WasVisible,
-                    block.Data);
+                    serializedBlock);
             }
 
             transaction.Commit();
@@ -881,9 +907,8 @@ public sealed class TerrainChunkStore
         string tableName,
         TerrainBlockId blockId,
         bool wasVisible,
-        VoxelChunkData data)
+        SerializedLodBlockSaveData data)
     {
-        VoxelAdaptiveDetailPersistencePayload adaptiveDetail = data.ExportPersistedAdaptiveDetailPayload();
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
@@ -931,15 +956,31 @@ public sealed class TerrainChunkStore
         command.Parameters.AddWithValue("$originX", data.Origin.X);
         command.Parameters.AddWithValue("$originY", data.Origin.Y);
         command.Parameters.AddWithValue("$originZ", data.Origin.Z);
-        command.Parameters.AddWithValue("$densities", FloatArrayToBytes(data.CopyDensities()));
-        command.Parameters.AddWithValue("$materials", data.CopyMaterials());
+        command.Parameters.AddWithValue("$densities", data.DensityBytes);
+        command.Parameters.AddWithValue("$materials", data.MaterialBytes);
         command.Parameters.AddWithValue(
             "$detailBrick",
-            adaptiveDetail.HasPayload ? adaptiveDetail.Blob : (object)DBNull.Value);
+            data.DetailBrickBlob ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("$updatedAtUnix", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         command.ExecuteNonQuery();
 
-        LogAdaptiveDetailSave(tableName, blockId.ToString(), adaptiveDetail.Metrics);
+        LogAdaptiveDetailSave(tableName, blockId.ToString(), data.AdaptiveDetailMetrics);
+    }
+
+    private static SerializedLodBlockSaveData SerializeLodBlockData(VoxelChunkData data)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        VoxelAdaptiveDetailPersistencePayload adaptiveDetail = data.ExportPersistedAdaptiveDetailPayload();
+        return new SerializedLodBlockSaveData(
+            data.PointsPerAxis,
+            data.VoxelSize,
+            data.IsoLevel,
+            data.Origin,
+            data.CopyDensityBytes(),
+            data.GetMaterialBufferUnsafe(),
+            adaptiveDetail.HasPayload ? adaptiveDetail.Blob : null,
+            adaptiveDetail.Metrics,
+            stopwatch.Elapsed.TotalMilliseconds);
     }
 
     private static void EnsureColumnExists(SqliteConnection connection, string tableName, string columnName, string columnDefinition)
