@@ -21,8 +21,8 @@ WaterLevel = -3.4
 script = ExtResource("2_lod")
 TierCount = 4
 Lod0NearFieldRadiusXZ = 2
-TierSplitRadiiXZ = PackedInt32Array(0, 3, 4)
-CoarsestRadiusXZ = 3
+TierSplitRadiiXZ = PackedInt32Array(0, 2, 2)
+CoarsestRadiusXZ = 2
 
 [node name="TerrainWaterSurface" type="Node3D" parent="."]
 script = ExtResource("3_water")

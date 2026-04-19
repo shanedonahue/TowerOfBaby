@@ -169,6 +169,9 @@ public sealed class TerrainWorldProfileSnapshot
     public long FrontierCompactionCount { get; init; }
     public long DirtyPersistWrites { get; init; }
     public long StartupPromotionWrites { get; init; }
+    public int RetainedFieldChunkCount { get; init; }
+    public int PendingPersistenceSaveCount { get; init; }
+    public int PooledRendererCount { get; init; }
     public long CacheHitsDelta { get; init; }
     public long CacheMissesDelta { get; init; }
     public long EvictedChunksDelta { get; init; }

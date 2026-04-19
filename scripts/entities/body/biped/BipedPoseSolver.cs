@@ -46,7 +46,7 @@ public sealed class BipedPoseSolver
         if (!_initialized)
         {
             _pelvisPosition = pelvisTarget;
-            _torsoForward = frame.Root.FacingDirection;
+            _torsoForward = LocomotionMath.SafeNormalized(frame.Root.FacingDirection, Vector3.Forward);
             _initialized = true;
         }
         else
@@ -55,7 +55,7 @@ public sealed class BipedPoseSolver
         }
 
         Vector3 planarVelocity = LocomotionMath.Flatten(frame.Root.ActualVelocity);
-        Vector3 torsoForward = frame.Root.FacingDirection;
+        Vector3 torsoForward = LocomotionMath.SafeNormalized(frame.Root.FacingDirection, _torsoForward);
         if (planarVelocity.LengthSquared() > 0.0001f)
         {
             torsoForward = LocomotionMath.SafeNormalized(
@@ -67,11 +67,13 @@ public sealed class BipedPoseSolver
         float attackTwist = EvaluateAttackTorsoTwist(attackState, _bodyDefinition);
         if (attackBlend > 0.0f && Mathf.Abs(attackTwist) > 0.0001f)
         {
-            Vector3 attackForward = new Basis(supportUp, attackTwist) * torsoForward;
-            torsoForward = LocomotionMath.SafeNormalized(torsoForward.Slerp(attackForward, attackBlend), torsoForward);
+            Vector3 attackForward = LocomotionMath.SafeNormalized(
+                new Basis(supportUp, attackTwist) * torsoForward,
+                torsoForward);
+            torsoForward = LocomotionMath.BlendDirections(torsoForward, attackForward, attackBlend, torsoForward);
         }
 
-        _torsoForward = LocomotionMath.SafeNormalized(_torsoForward.Slerp(torsoForward, torsoBlend), frame.Root.FacingDirection);
+        _torsoForward = LocomotionMath.BlendDirections(_torsoForward, torsoForward, torsoBlend, frame.Root.FacingDirection);
         Vector3 torsoPosition = _pelvisPosition + (supportUp * (_bodyDefinition.TorsoHeight * 0.5f));
 
         _rig.Pelvis.GlobalTransform = new Transform3D(

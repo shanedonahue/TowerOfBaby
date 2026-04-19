@@ -286,6 +286,11 @@ public sealed class TerrainBlockData
         return field != null;
     }
 
+    public void ReleasePersistableField()
+    {
+        PersistableField = null;
+    }
+
     private void ClearTransientBuildArtifacts()
     {
         Field = null;

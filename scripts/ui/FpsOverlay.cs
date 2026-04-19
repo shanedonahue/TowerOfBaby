@@ -405,6 +405,8 @@ public partial class FpsOverlay : CanvasLayer
                 $"Source resident {snapshot.ResidentReuseHits}  ram {snapshot.RamCacheHits}  startup {snapshot.StartupSnapshotHits}  db {snapshot.DatabaseHits}  gen {snapshot.GenerationFallbacks}");
             _detailBuilder.AppendLine(
                 $"Writes dirty {snapshot.DirtyPersistWrites}  startup->db {snapshot.StartupPromotionWrites}  evicted {snapshot.EvictedChunks}");
+            _detailBuilder.AppendLine(
+                $"Retention fields {snapshot.RetainedFieldChunkCount}  persist_q {snapshot.PendingPersistenceSaveCount}  renderer_pool {snapshot.PooledRendererCount}");
             _detailBuilder.AppendLine($"Selected {TrimForOverlay(snapshot.LastSelectedChunkSummary)}");
             _detailBuilder.AppendLine($"Released {TrimForOverlay(snapshot.LastReleasedChunkSummary)}");
             _detailBuilder.AppendLine($"Source {TrimForOverlay(snapshot.LastChunkSourceSummary)}");

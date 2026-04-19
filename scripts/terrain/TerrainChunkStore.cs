@@ -321,6 +321,43 @@ public sealed class TerrainChunkStore
         }
     }
 
+    public void DeleteLodBlocks(IReadOnlyCollection<TerrainBlockId> blockIds)
+    {
+        if (blockIds == null || blockIds.Count == 0)
+        {
+            return;
+        }
+
+        lock (_databaseLock)
+        {
+            using SqliteConnection connection = new(_connectionString);
+            connection.Open();
+            using SqliteTransaction transaction = connection.BeginTransaction();
+            using SqliteCommand command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                DELETE FROM lod_blocks
+                WHERE lod = $lod AND block_x = $x AND block_y = $y AND block_z = $z
+                """;
+            command.Parameters.Add("$lod", SqliteType.Integer);
+            command.Parameters.Add("$x", SqliteType.Integer);
+            command.Parameters.Add("$y", SqliteType.Integer);
+            command.Parameters.Add("$z", SqliteType.Integer);
+
+            foreach (TerrainBlockId blockId in blockIds)
+            {
+                command.Parameters["$lod"].Value = blockId.Lod;
+                command.Parameters["$x"].Value = blockId.Index.X;
+                command.Parameters["$y"].Value = blockId.Index.Y;
+                command.Parameters["$z"].Value = blockId.Index.Z;
+                command.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+    }
+
     public void SaveEditRegion(TerrainEditRegion region)
     {
         if (region == null)

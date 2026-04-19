@@ -35,6 +35,12 @@ public partial class TerrainLodManager : Node3D
         DisplayedRefresh = 1
     }
 
+    private enum TerrainPersistenceSaveKind
+    {
+        StartupPromotion = 0,
+        DirtyPersist = 1
+    }
+
     private const int FinestTerrainLod = 0;
     private const string TransitionLogPrefix = "[TerrainLodTransition]";
     private const string TransitionLogRelativePath = "user://profiling/terrain_lod_transition_latest.log";
@@ -65,8 +71,8 @@ public partial class TerrainLodManager : Node3D
     [ExportGroup("LOD Policy")]
     [Export(PropertyHint.Range, "3,6,1")] public int TierCount = 4;
     [Export(PropertyHint.Range, "-1,8,1")] public int Lod0NearFieldRadiusXZ = -1;
-    [Export] public int[] TierSplitRadiiXZ = { 0, 3, 4 };
-    [Export(PropertyHint.Range, "1,12,1")] public int CoarsestRadiusXZ = 3;
+    [Export] public int[] TierSplitRadiiXZ = { 0, 2, 2 };
+    [Export(PropertyHint.Range, "1,12,1")] public int CoarsestRadiusXZ = 2;
     [Export(PropertyHint.Range, "0,2,1")] public int VerticalRadius;
 
     [ExportGroup("Refinement Stability")]
@@ -91,6 +97,11 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "0,250,5")] public float DisplayedRefreshCollisionDelayMs = 90.0f;
     [Export(PropertyHint.Range, "0,512,8")] public int MaxPooledRenderers = 128;
 
+    [ExportGroup("Persistence")]
+    [Export(PropertyHint.Range, "0,8,1")] public int PersistSavesPerFrame = 1;
+    [Export(PropertyHint.Range, "0,8,1")] public int StartupPersistSavesPerFrame = 2;
+    [Export(PropertyHint.Range, "-1,16,1")] public int PersistableFieldRetentionRadiusXZ = -1;
+
     [ExportGroup("Startup")]
     [Export] public bool RestorePlayerPositionFromStartupState = true;
     [Export] public bool EnableStartupStatePersistence = true;
@@ -104,7 +115,7 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "1,16,1")] public int StartupCollisionBuildsPerFrame = 4;
 
     [ExportGroup("Shutdown")]
-    [Export(PropertyHint.Range, "0,64,1")] public int ShutdownStartupSnapshotBlockCap = 16;
+    [Export(PropertyHint.Range, "0,256,1")] public int ShutdownStartupSnapshotBlockCap = 96;
 
     [ExportGroup("Seams")]
     [Export] public TerrainMixedLodSeamMode MixedLodSeamMode = TerrainMixedLodSeamMode.SkirtsOnly;
@@ -126,6 +137,7 @@ public partial class TerrainLodManager : Node3D
     private readonly ConcurrentQueue<CompletedFieldBuildResult> _completedDisplayedRefreshFieldBuildResults = new();
     private readonly ConcurrentQueue<CompletedMeshBuildResult> _completedMeshBuildResults = new();
     private readonly ConcurrentQueue<CompletedMeshBuildResult> _completedDisplayedRefreshMeshBuildResults = new();
+    private readonly Queue<QueuedPersistenceSaveEntry> _persistenceSaveQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _createDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _fieldBuildDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _meshBuildDispatcherQueue = new();
@@ -140,6 +152,7 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<TerrainBlockId, int> _commitDispatchTokens = new();
     private readonly Dictionary<TerrainBlockId, int> _collisionDispatchTokens = new();
     private readonly Dictionary<TerrainBlockId, int> _releaseDispatchTokens = new();
+    private readonly Dictionary<TerrainBlockId, PendingPersistenceSaveState> _pendingPersistenceSaves = new();
     private readonly object _transitionLogLock = new();
     private readonly HashSet<TerrainBlockId> _dirtyVisibleMixedLodSeamBlocks = new();
 
@@ -185,6 +198,7 @@ public partial class TerrainLodManager : Node3D
     private int _lastReleaseRequeueCount;
     private int _lastReleaseHeadOfLineAvoidedCount;
     private int _lastReleaseDeferredAgeSampleCount;
+    private int _lastPersistenceSaveCount;
     private double _lastFieldBuildMs;
     private double _lastMeshBuildMs;
     private double _lastCommitMs;
@@ -194,6 +208,7 @@ public partial class TerrainLodManager : Node3D
     private double _lastPersistedChunkLoadMs;
     private double _lastGeneratedChunkLoadMs;
     private double _lastReleaseDeferredAgeMsTotal;
+    private double _lastPersistenceSaveMs;
     private double _blockCreateRatePerSecond;
     private double _blockReleaseRatePerSecond;
     private double _blockSetChangeRatePerSecond;
@@ -239,9 +254,14 @@ public partial class TerrainLodManager : Node3D
     private long _startupRestoredBlockCount;
     private long _persistedRestoredBlockCount;
     private long _procedurallyGeneratedBlockCount;
+    private long _persistenceSaveCount;
+    private double _persistenceSaveMsTotal;
+    private long _dirtyPersistWrites;
+    private long _startupPromotionWrites;
     private int _activeFieldWorkerJobs;
     private int _activeMeshWorkerJobs;
     private int _dispatchSequence;
+    private int _persistenceSaveSequence;
     private TerrainMixedLodSeamMode _appliedMixedLodSeamMode;
     private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
     private int[] _currentLodBlockCounts = System.Array.Empty<int>();
@@ -257,6 +277,8 @@ public partial class TerrainLodManager : Node3D
     private double _startupCompleteMs = -1.0;
     private int _shutdownState;
     private string _lastShutdownSaveSummary = "not_run";
+    private string _lastPersistenceSaveScope = "none";
+    private int _retainedPersistableFieldCount;
 
     public bool InitialLoadComplete => _initialLoadComplete;
     public float InitialLoadProgress { get; private set; }
@@ -324,6 +346,9 @@ public partial class TerrainLodManager : Node3D
         _lastStartupChunkLoadMs = 0.0;
         _lastPersistedChunkLoadMs = 0.0;
         _lastGeneratedChunkLoadMs = 0.0;
+        _lastPersistenceSaveCount = 0;
+        _lastPersistenceSaveMs = 0.0;
+        _lastPersistenceSaveScope = "none";
 
         _lastViewerPosition = _trackedCharacter.GlobalTransform.Origin;
         UpdateDesiredBlocks(_lastViewerPosition);
@@ -612,6 +637,7 @@ public partial class TerrainLodManager : Node3D
         }
 
         long operationSequence = ++_deformOperationSequence;
+        int invalidatedPersistedBlockCount = InvalidatePersistedLodCoverage(mutation.DirtyWorldBounds);
         TerrainEditInvalidationStats invalidation = InvalidateBlocksForEditMutation(mutation.DirtyWorldBounds, stamp, operationSequence);
         double dirtyBoundsVolume = ComputeBoundsVolume(mutation.DirtyWorldBounds);
         int estimatedEditedSamples = EstimateEditedSampleCount(stamp, mutation.DirtyWorldBounds);
@@ -648,7 +674,8 @@ public partial class TerrainLodManager : Node3D
         _lastDeformVisibleConvergenceMs = 0.0;
         _lastDeformRegistrationStartUsec = registrationStartUsec;
         _pendingDeformVisibleCommitCount = invalidation.VisibleBlockCount;
-        _lastEditOperationPrefix = $"{operation} {mutation.Summary} {invalidation.Summary} est_samples {estimatedEditedSamples}";
+        _lastEditOperationPrefix =
+            $"{operation} {mutation.Summary} {invalidation.Summary} persist_invalidate {invalidatedPersistedBlockCount} est_samples {estimatedEditedSamples}";
         RefreshLastEditOperationSummary();
         _lastEditRegionSummary = _lastEditOperationSummary;
         _latestProfileSnapshot = BuildProfileSnapshot();
@@ -926,6 +953,58 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
+    private void QueuePersistenceSaveForLoadedBlock(TerrainBlockData block, TerrainChunkLoadSource source)
+    {
+        if (block == null)
+        {
+            return;
+        }
+
+        switch (source)
+        {
+            case TerrainChunkLoadSource.StartupSnapshot:
+                if (!_persistedLodBlocks.Contains(block.Id))
+                {
+                    QueuePersistenceSave(block, TerrainPersistenceSaveKind.StartupPromotion);
+                }
+
+                break;
+            case TerrainChunkLoadSource.ProceduralGeneration:
+                QueuePersistenceSave(block, TerrainPersistenceSaveKind.DirtyPersist);
+                break;
+        }
+    }
+
+    private void QueuePersistenceSave(TerrainBlockData block, TerrainPersistenceSaveKind kind)
+    {
+        if (block == null || !block.TryGetPersistableField(out _))
+        {
+            return;
+        }
+
+        if (kind == TerrainPersistenceSaveKind.StartupPromotion &&
+            _persistedLodBlocks.Contains(block.Id))
+        {
+            return;
+        }
+
+        if (_pendingPersistenceSaves.TryGetValue(block.Id, out PendingPersistenceSaveState existing))
+        {
+            kind = MergePersistenceSaveKinds(existing.Kind, kind);
+        }
+
+        int token = ++_persistenceSaveSequence;
+        _pendingPersistenceSaves[block.Id] = new PendingPersistenceSaveState(token, kind);
+        _persistenceSaveQueue.Enqueue(new QueuedPersistenceSaveEntry(block.Id, token));
+    }
+
+    private static TerrainPersistenceSaveKind MergePersistenceSaveKinds(
+        TerrainPersistenceSaveKind existing,
+        TerrainPersistenceSaveKind incoming)
+    {
+        return existing >= incoming ? existing : incoming;
+    }
+
     private int CountShutdownSaveCandidates()
     {
         return _blocks.Count;
@@ -1095,6 +1174,41 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
+    private int InvalidatePersistedLodCoverage(Aabb dirtyWorldBounds)
+    {
+        if (_persistedLodBlocks.Count == 0)
+        {
+            return 0;
+        }
+
+        Aabb expandedBounds = ExpandBounds(dirtyWorldBounds, Mathf.Max(_config.BaseVoxelSize, TerrainMetrics.GetVoxelSize(_config, FinestTerrainLod)));
+        HashSet<TerrainBlockId> invalidatedBlocks = new();
+        for (int lod = FinestTerrainLod; lod <= GetCoarsestLod(); lod++)
+        {
+            foreach (TerrainBlockId blockId in EnumerateBlocksOverlappingBounds(expandedBounds, lod))
+            {
+                if (_persistedLodBlocks.Contains(blockId))
+                {
+                    invalidatedBlocks.Add(blockId);
+                }
+            }
+        }
+
+        if (invalidatedBlocks.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (TerrainBlockId blockId in invalidatedBlocks)
+        {
+            _persistedLodBlocks.Remove(blockId);
+            CancelPendingPersistenceSave(blockId);
+        }
+
+        _chunkStore.DeleteLodBlocks(invalidatedBlocks);
+        return invalidatedBlocks.Count;
+    }
+
     private void TryInitializeStartupRestoreState()
     {
         if (IsShuttingDown || _startupRestoreStateInitialized || _trackedCharacter == null)
@@ -1141,12 +1255,14 @@ public partial class TerrainLodManager : Node3D
         _commitDispatcherQueue.Clear();
         _collisionDispatcherQueue.Clear();
         _releaseDispatcherQueue.Clear();
+        _persistenceSaveQueue.Clear();
         _createDispatchTokens.Clear();
         _fieldBuildDispatchTokens.Clear();
         _meshBuildDispatchTokens.Clear();
         _commitDispatchTokens.Clear();
         _collisionDispatchTokens.Clear();
         _releaseDispatchTokens.Clear();
+        _pendingPersistenceSaves.Clear();
 
         while (_completedFieldBuildResults.TryDequeue(out _))
         {
@@ -1308,7 +1424,7 @@ public partial class TerrainLodManager : Node3D
             return Mathf.Max(0, StartupCriticalRadiusXZ);
         }
 
-        return GetCollisionCoverageRadiusInReferenceBlocks();
+        return Mathf.Max(1, GetCollisionCoverageRadiusInReferenceBlocks() - 1);
     }
 
     private void RefreshStartupSatisfiedBlocks()
@@ -1888,6 +2004,11 @@ public partial class TerrainLodManager : Node3D
             {
                 for (int x = -outerRadius; x <= outerRadius; x++)
                 {
+                    if (!ShouldIncludeCoarsestCoverageOffset(x, z, outerRadius))
+                    {
+                        continue;
+                    }
+
                     TerrainBlockId coarsestBlock = new(
                         GetCoarsestLod(),
                         coarsestCenter.Index + new Vector3I(x, y, z));
@@ -1898,6 +2019,24 @@ public partial class TerrainLodManager : Node3D
 
         _currentCoarsestRadius = outerRadius;
         return desired;
+    }
+
+    private static bool ShouldIncludeCoarsestCoverageOffset(int xOffset, int zOffset, int bubbleRadius)
+    {
+        if (bubbleRadius <= 1)
+        {
+            return true;
+        }
+
+        int absX = Mathf.Abs(xOffset);
+        int absZ = Mathf.Abs(zOffset);
+        int innerSquareRadius = Mathf.Max(0, bubbleRadius - 1);
+        if (Mathf.Max(absX, absZ) <= innerSquareRadius)
+        {
+            return true;
+        }
+
+        return (absX + absZ) <= bubbleRadius + Mathf.Max(1, bubbleRadius / 2);
     }
 
     private void AddDesiredLeaves(
@@ -2048,6 +2187,14 @@ public partial class TerrainLodManager : Node3D
         return Mathf.Clamp(configured, 1, MaxCollisionBuildsPerFrame);
     }
 
+    private int GetCurrentPersistenceSaveBudget()
+    {
+        int configured = IsStartupBoostActive()
+            ? Mathf.Max(PersistSavesPerFrame, StartupPersistSavesPerFrame)
+            : PersistSavesPerFrame;
+        return Mathf.Clamp(configured, 0, 8);
+    }
+
     private void DispatchRuntimeWork()
     {
         if (IsShuttingDown)
@@ -2071,7 +2218,107 @@ public partial class TerrainLodManager : Node3D
         RefreshCollisionCoverage();
         DispatchPendingCollisionRefreshes();
         ProcessCollisionDispatch();
+        ProcessPersistenceSaves();
+        TrimPersistableFields();
         ProcessReleaseDispatch();
+    }
+
+    private void ProcessPersistenceSaves()
+    {
+        int saveBudget = GetCurrentPersistenceSaveBudget();
+        while (_lastPersistenceSaveCount < saveBudget &&
+               TryDequeuePersistenceSave(out TerrainBlockId blockId, out TerrainPersistenceSaveKind saveKind))
+        {
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
+                !block.TryGetPersistableField(out VoxelChunkData field))
+            {
+                continue;
+            }
+
+            ulong saveStartUsec = Time.GetTicksUsec();
+            _chunkStore.SaveLodBlock(blockId, field);
+            double saveMs = (Time.GetTicksUsec() - saveStartUsec) / 1000.0;
+            _persistedLodBlocks.Add(blockId);
+            _lastPersistenceSaveCount++;
+            _lastPersistenceSaveMs += saveMs;
+            _persistenceSaveCount++;
+            _persistenceSaveMsTotal += saveMs;
+            if (saveKind == TerrainPersistenceSaveKind.DirtyPersist)
+            {
+                _dirtyPersistWrites++;
+                _lastPersistenceSaveScope = "lod_block_dirty";
+            }
+            else
+            {
+                _startupPromotionWrites++;
+                _lastPersistenceSaveScope = "lod_block_startup_promotion";
+            }
+        }
+    }
+
+    private void TrimPersistableFields()
+    {
+        int retainedFieldCount = 0;
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (!block.TryGetPersistableField(out _))
+            {
+                continue;
+            }
+
+            if (ShouldRetainPersistableField(block))
+            {
+                retainedFieldCount++;
+                continue;
+            }
+
+            block.ReleasePersistableField();
+        }
+
+        _retainedPersistableFieldCount = retainedFieldCount;
+    }
+
+    private bool ShouldRetainPersistableField(TerrainBlockData block)
+    {
+        if (block == null)
+        {
+            return false;
+        }
+
+        if (_pendingPersistenceSaves.ContainsKey(block.Id) ||
+            block.FieldBuildRunning ||
+            block.MeshBuildRunning ||
+            block.DisplayedRefreshDirty ||
+            block.State is TerrainBlockState.Requested or TerrainBlockState.FieldReady or TerrainBlockState.MeshReady)
+        {
+            return true;
+        }
+
+        if (_startupBlocks.Contains(block.Id) && IsStartupBoostActive())
+        {
+            return true;
+        }
+
+        int retentionRadius = GetPersistableFieldRetentionRadius();
+        if (retentionRadius <= 0)
+        {
+            return false;
+        }
+
+        float referenceSpan = GetLocalCoverageReferenceSpan();
+        float horizontalRadius = retentionRadius * referenceSpan;
+        float verticalRadius = Mathf.Max(referenceSpan, (Mathf.Max(0, VerticalRadius) + 1) * referenceSpan);
+        return IsBlockWithinCoverageRadius(block.Id, _lastViewerPosition, horizontalRadius, verticalRadius);
+    }
+
+    private int GetPersistableFieldRetentionRadius()
+    {
+        if (PersistableFieldRetentionRadiusXZ >= 0)
+        {
+            return Mathf.Max(0, PersistableFieldRetentionRadiusXZ);
+        }
+
+        return Mathf.Max(1, GetStartupCriticalRadius());
     }
 
     private void ProcessCreateDispatch()
@@ -2249,6 +2496,7 @@ public partial class TerrainLodManager : Node3D
             _lastFieldBuildCount++;
             _lastFieldBuildMs += result.WorkerBuildMs;
             RecordFieldLoad(result.Source, result.WorkerBuildMs);
+            QueuePersistenceSaveForLoadedBlock(block, result.Source);
             EnqueueMeshBuildDispatch(block.Id);
         }
     }
@@ -2284,11 +2532,13 @@ public partial class TerrainLodManager : Node3D
             if (!block.DisplayedRefreshRequiresVisualRefresh)
             {
                 block.CommitDisplayedRefreshFieldOnly(result.Field);
+                QueuePersistenceSave(block, TerrainPersistenceSaveKind.DirtyPersist);
                 AccumulateDisplayedRefreshAsyncRebuild(result.DisplayedRefreshOperationSequence, result.WorkerBuildMs);
                 continue;
             }
 
             block.SetDisplayedRefreshField(result.Field);
+            QueuePersistenceSave(block, TerrainPersistenceSaveKind.DirtyPersist);
             AccumulateDisplayedRefreshAsyncRebuild(result.DisplayedRefreshOperationSequence, result.WorkerBuildMs);
             EnqueueMeshBuildDispatch(block.Id, urgent: true);
         }
@@ -2501,7 +2751,11 @@ public partial class TerrainLodManager : Node3D
                         continue;
                     }
 
-                    int committedCount = CommitVisibleMeshBatch(promotionBatch, outgoingParent);
+                    int remainingCommitBudget = Mathf.Max(1, commitBudget - _lastCommitCount);
+                    int committedCount = CommitVisibleMeshBatch(
+                        promotionBatch,
+                        outgoingParent,
+                        IsStartupBoostActive() ? promotionBatch.Count : remainingCommitBudget);
                     if (committedCount > 0)
                     {
                         continue;
@@ -3514,6 +3768,15 @@ public partial class TerrainLodManager : Node3D
         return true;
     }
 
+    private static Aabb ExpandBounds(Aabb bounds, float margin)
+    {
+        float safeMargin = Mathf.Max(0.0f, margin);
+        Vector3 marginVector = Vector3.One * safeMargin;
+        return new Aabb(
+            bounds.Position - marginVector,
+            bounds.Size + (marginVector * 2.0f));
+    }
+
     private bool TryGetVisibleOutgoingDirectParent(TerrainBlockId childBlockId, out TerrainBlockId outgoingParent)
     {
         outgoingParent = default;
@@ -3836,6 +4099,30 @@ public partial class TerrainLodManager : Node3D
         return false;
     }
 
+    private bool TryDequeuePersistenceSave(
+        out TerrainBlockId blockId,
+        out TerrainPersistenceSaveKind saveKind)
+    {
+        while (_persistenceSaveQueue.Count > 0)
+        {
+            QueuedPersistenceSaveEntry entry = _persistenceSaveQueue.Dequeue();
+            if (!_pendingPersistenceSaves.TryGetValue(entry.BlockId, out PendingPersistenceSaveState state) ||
+                state.Token != entry.Token)
+            {
+                continue;
+            }
+
+            _pendingPersistenceSaves.Remove(entry.BlockId);
+            blockId = entry.BlockId;
+            saveKind = state.Kind;
+            return true;
+        }
+
+        blockId = default;
+        saveKind = TerrainPersistenceSaveKind.StartupPromotion;
+        return false;
+    }
+
     private BlockDispatchPriority BuildDispatchPriority(TerrainBlockId blockId, bool farthestFirst, bool urgent, int token)
     {
         float distance = TerrainMetrics.DistanceSquaredToBlock(_config, blockId, _lastViewerPosition);
@@ -3939,11 +4226,17 @@ public partial class TerrainLodManager : Node3D
         InvalidateBlockDispatch(_commitDispatchTokens, blockId);
         InvalidateBlockDispatch(_collisionDispatchTokens, blockId);
         InvalidateBlockDispatch(_releaseDispatchTokens, blockId);
+        CancelPendingPersistenceSave(blockId);
     }
 
     private static void InvalidateBlockDispatch(Dictionary<TerrainBlockId, int> tokens, TerrainBlockId blockId)
     {
         tokens.Remove(blockId);
+    }
+
+    private void CancelPendingPersistenceSave(TerrainBlockId blockId)
+    {
+        _pendingPersistenceSaves.Remove(blockId);
     }
 
     private void EnqueueCompletedFieldBuildResult(CompletedFieldBuildResult result)
@@ -4825,9 +5118,18 @@ public partial class TerrainLodManager : Node3D
             RestoredFromStartupSnapshotCount = _startupRestoredBlockCount,
             RestoredFromPersistedBlockCount = _persistedRestoredBlockCount,
             ProcedurallyGeneratedBlockCount = _procedurallyGeneratedBlockCount,
+            PersistenceSaveCount = _persistenceSaveCount,
+            PersistenceSaveMs = _persistenceSaveMsTotal,
+            LastPersistenceSaveMs = _lastPersistenceSaveMs,
+            LastPersistenceSaveScope = _lastPersistenceSaveScope,
             StartupSnapshotHits = _startupRestoredBlockCount,
             DatabaseHits = _persistedRestoredBlockCount,
             GenerationFallbacks = _procedurallyGeneratedBlockCount,
+            DirtyPersistWrites = _dirtyPersistWrites,
+            StartupPromotionWrites = _startupPromotionWrites,
+            RetainedFieldChunkCount = _retainedPersistableFieldCount,
+            PendingPersistenceSaveCount = _pendingPersistenceSaves.Count,
+            PooledRendererCount = _rendererPool.Count,
             ActiveSupersededBlockTransitionCount = supersededSummary.ActiveCount,
             WaitingForMarkReleasableSupersededBlockCount = supersededSummary.WaitingForMarkReleasableCount,
             WaitingForVisualCoverageSupersededBlockCount = supersededSummary.WaitingForVisualCoverageCount,
@@ -4893,7 +5195,7 @@ public partial class TerrainLodManager : Node3D
             $"sup a/r/v/h/p/f {supersededSummary.ActiveCount}/{supersededSummary.WaitingForMarkReleasableCount}/{supersededSummary.WaitingForVisualCoverageCount}/{supersededSummary.WaitingForHideCount}/{supersededSummary.WaitingForPhysicsCoverageCount}/{supersededSummary.WaitingForReleaseCount}  " +
             $"dispatch c{_createDispatchTokens.Count}  fq/r/d {_fieldBuildDispatchTokens.Count}/{Volatile.Read(ref _activeFieldWorkerJobs)}/{GetCompletedFieldBuildResultCount()}  " +
             $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{GetCompletedMeshBuildResultCount()}  " +
-            $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  " +
+            $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  persist {_pendingPersistenceSaves.Count}  retain {_retainedPersistableFieldCount}  pool {_rendererPool.Count}  " +
             $"set/s {_blockSetChangeRatePerSecond:0.0}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
     }
 
@@ -4908,7 +5210,8 @@ public partial class TerrainLodManager : Node3D
         return
             $"critical {_startupSatisfiedBlocks.Count}/{_startupBlocks.Count}  desired {_lastDesiredBlockCount}  " +
             $"boost {(IsStartupBoostActive() ? "on" : "off")}  first_visible {firstVisible}  complete {startupComplete}  " +
-            $"restore snapshot/persisted/generated {_startupRestoredBlockCount}/{_persistedRestoredBlockCount}/{_procedurallyGeneratedBlockCount}";
+            $"restore snapshot/persisted/generated {_startupRestoredBlockCount}/{_persistedRestoredBlockCount}/{_procedurallyGeneratedBlockCount}  " +
+            $"persist_q {_pendingPersistenceSaves.Count}  retain {_retainedPersistableFieldCount}";
     }
 
     private MixedLodSeamProfileSummary BuildMixedLodSeamProfileSummary()
@@ -5342,11 +5645,20 @@ public partial class TerrainLodManager : Node3D
             : coverage.VisualDeferralReason;
     }
 
-    private int CommitVisibleMeshBatch(IReadOnlyList<TerrainBlockId> batchBlockIds, TerrainBlockId outgoingParent)
+    private int CommitVisibleMeshBatch(
+        IReadOnlyList<TerrainBlockId> batchBlockIds,
+        TerrainBlockId outgoingParent,
+        int maxCommits)
     {
+        int allowedCommits = Mathf.Max(1, maxCommits);
         int committedCount = 0;
         foreach (TerrainBlockId batchBlockId in batchBlockIds)
         {
+            if (committedCount >= allowedCommits)
+            {
+                break;
+            }
+
             if (!_blocks.TryGetValue(batchBlockId, out TerrainBlockData batchBlock) ||
                 !batchBlock.Desired ||
                 batchBlock.State != TerrainBlockState.MeshReady)
@@ -5501,6 +5813,8 @@ public partial class TerrainLodManager : Node3D
         long DisplayedRefreshOperationSequence,
         bool Succeeded);
 
+    private readonly record struct PendingPersistenceSaveState(int Token, TerrainPersistenceSaveKind Kind);
+    private readonly record struct QueuedPersistenceSaveEntry(TerrainBlockId BlockId, int Token);
     private readonly record struct QueuedBlockDispatchEntry(TerrainBlockId BlockId, int Token);
 
     private readonly record struct BlockDispatchPriority(int PriorityClass, int Lod, float DistanceMetric, int Token) : System.IComparable<BlockDispatchPriority>

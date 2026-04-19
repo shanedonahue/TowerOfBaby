@@ -141,7 +141,40 @@ public static class LocomotionMath
     {
         return value.LengthSquared() > 0.0001f
             ? value.Normalized()
-            : fallback;
+            : (fallback.LengthSquared() > 0.0001f ? fallback.Normalized() : Vector3.Zero);
+    }
+
+    public static Vector3 BlendDirections(Vector3 current, Vector3 target, float weight, Vector3 fallback)
+    {
+        Vector3 from = SafeNormalized(current, fallback);
+        Vector3 to = SafeNormalized(target, from);
+        float clampedWeight = Mathf.Clamp(weight, 0.0f, 1.0f);
+        if (clampedWeight <= 0.0f)
+        {
+            return from;
+        }
+
+        if (clampedWeight >= 1.0f)
+        {
+            return to;
+        }
+
+        float dot = Mathf.Clamp(from.Dot(to), -1.0f, 1.0f);
+        if (dot > 0.9995f)
+        {
+            return SafeNormalized(from.Lerp(to, clampedWeight), to);
+        }
+
+        if (dot < -0.9995f)
+        {
+            Vector3 axisReference = Mathf.Abs(from.Dot(Vector3.Up)) > 0.95f
+                ? Vector3.Right
+                : Vector3.Up;
+            Vector3 axis = SafeNormalized(from.Cross(axisReference), Vector3.Right);
+            return SafeNormalized(from.Rotated(axis, Mathf.Pi * clampedWeight), to);
+        }
+
+        return SafeNormalized(from.Slerp(to, clampedWeight), to);
     }
 
     public static Vector3 ProjectOntoPlane(Vector3 value, Vector3 planeNormal)
@@ -166,7 +199,7 @@ public static class LocomotionMath
         }
 
         float weight = maxRadiansDelta / angle;
-        return current.Slerp(target, weight).Normalized();
+        return BlendDirections(current, target, weight, current);
     }
 
     public static Vector3 GetRight(Vector3 forward, Vector3 up)
