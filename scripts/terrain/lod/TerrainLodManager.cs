@@ -18,13 +18,14 @@ public partial class TerrainLodManager : Node3D
         int IntersectedBlockCount,
         int VisibleBlockCount,
         int VisibleFinestBlockCount,
+        int VisibleFieldOnlyBlockCount,
         int RequeuedBlockCount,
         int QueuedVisibleBlockCount,
         double EnqueueMs,
         double SyncWorkMs)
     {
         public string Summary =>
-            $"blocks {IntersectedBlockCount} vis_direct {VisibleBlockCount}/{VisibleFinestBlockCount} finest requeued {RequeuedBlockCount} " +
+            $"blocks {IntersectedBlockCount} vis_refresh {VisibleBlockCount}/{VisibleFinestBlockCount} finest field_only {VisibleFieldOnlyBlockCount} requeued {RequeuedBlockCount} " +
             $"visible_queued {QueuedVisibleBlockCount} enqueue_ms {EnqueueMs:0.00} sync_ms {SyncWorkMs:0.00}";
     }
 
@@ -654,10 +655,12 @@ public partial class TerrainLodManager : Node3D
         long operationSequence)
     {
         ulong enqueueStartUsec = Time.GetTicksUsec();
-        List<TerrainBlockData> displayedBlocks = new();
+        List<TerrainBlockData> displayedVisualRefreshBlocks = new();
+        List<TerrainBlockData> displayedFieldOnlyBlocks = new();
         List<TerrainBlockId> requeuedBlocks = new();
         int intersectedBlockCount = 0;
         int visibleFinestBlockCount = 0;
+        int visibleFieldOnlyBlockCount = 0;
         int queuedVisibleBlockCount = 0;
 
         foreach (TerrainBlockData block in _blocks.Values)
@@ -677,11 +680,23 @@ public partial class TerrainLodManager : Node3D
                     continue;
                 }
 
-                displayedBlocks.Add(block);
                 intersectedBlockCount++;
-                if (block.Id.Lod == FinestTerrainLod)
+                bool requiresVisualRefresh =
+                    !stamp.HasValue ||
+                    block.DisplayedRefreshRequiresVisualRefresh ||
+                    ShouldRefreshDisplayedBlockVisuals(block, stamp.Value);
+                if (requiresVisualRefresh)
                 {
-                    visibleFinestBlockCount++;
+                    displayedVisualRefreshBlocks.Add(block);
+                    if (block.Id.Lod == FinestTerrainLod)
+                    {
+                        visibleFinestBlockCount++;
+                    }
+                }
+                else
+                {
+                    displayedFieldOnlyBlocks.Add(block);
+                    visibleFieldOnlyBlockCount++;
                 }
 
                 continue;
@@ -709,47 +724,34 @@ public partial class TerrainLodManager : Node3D
             EnqueueFieldBuildDispatch(blockId);
         }
 
-        foreach (TerrainBlockData displayedBlock in displayedBlocks)
+        foreach (TerrainBlockData displayedBlock in displayedVisualRefreshBlocks)
         {
-            Aabb localDirtyWorldBounds = stamp?.WorldBounds ?? dirtyWorldBounds;
-            TerrainChunkDirtyBoundsSnapshot localDirtyBounds = BuildLocalDirtyBoundsSnapshot(displayedBlock.Id, localDirtyWorldBounds);
-            bool requiresFullFieldRebuild = !stamp.HasValue || displayedBlock.DisplayedRefreshDirty;
-            TerrainEditStampData? latestStamp = requiresFullFieldRebuild ? null : stamp;
-            if (displayedBlock.DisplayedRefreshDirty)
-            {
-                localDirtyBounds = CombineLocalDirtyBoundsSnapshots(
-                    displayedBlock.Id,
-                    displayedBlock.DisplayedRefreshDirtyBounds,
-                    localDirtyBounds,
-                    fallbackToFullChunk: displayedBlock.DisplayedRefreshRequiresFullFieldRebuild);
-            }
-
-            if (!localDirtyBounds.HasBounds)
-            {
-                localDirtyBounds = BuildFullChunkDirtyBoundsSnapshot(displayedBlock.Id);
-                requiresFullFieldRebuild = true;
-                latestStamp = null;
-            }
-
-            displayedBlock.MarkDisplayedRefreshDirty(
+            if (QueueDisplayedBlockRefresh(
+                displayedBlock,
+                dirtyWorldBounds,
+                stamp,
                 operationSequence,
-                localDirtyBounds,
-                latestStamp,
-                requiresFullFieldRebuild);
-            InvalidateBlockDispatch(_fieldBuildDispatchTokens, displayedBlock.Id);
-            InvalidateBlockDispatch(_meshBuildDispatchTokens, displayedBlock.Id);
-            InvalidateBlockDispatch(_commitDispatchTokens, displayedBlock.Id);
-            InvalidateBlockDispatch(_collisionDispatchTokens, displayedBlock.Id);
-            if (EnqueueDisplayedRefreshForCurrentState(displayedBlock))
+                requiresVisualRefresh: true))
             {
                 queuedVisibleBlockCount++;
             }
         }
 
+        foreach (TerrainBlockData displayedBlock in displayedFieldOnlyBlocks)
+        {
+            QueueDisplayedBlockRefresh(
+                displayedBlock,
+                dirtyWorldBounds,
+                stamp,
+                operationSequence,
+                requiresVisualRefresh: false);
+        }
+
         return new TerrainEditInvalidationStats(
             intersectedBlockCount,
-            displayedBlocks.Count,
+            displayedVisualRefreshBlocks.Count,
             visibleFinestBlockCount,
+            visibleFieldOnlyBlockCount,
             requeuedBlocks.Count,
             queuedVisibleBlockCount,
             (Time.GetTicksUsec() - enqueueStartUsec) / 1000.0,
@@ -854,6 +856,11 @@ public partial class TerrainLodManager : Node3D
 
         if (block.HasDisplayedRefreshFieldReady)
         {
+            if (!block.DisplayedRefreshRequiresVisualRefresh)
+            {
+                return false;
+            }
+
             EnqueueMeshBuildDispatch(block.Id, urgent: true);
             return true;
         }
@@ -1690,6 +1697,78 @@ public partial class TerrainLodManager : Node3D
         return tracker.Snapshot;
     }
 
+    private bool QueueDisplayedBlockRefresh(
+        TerrainBlockData displayedBlock,
+        Aabb dirtyWorldBounds,
+        TerrainEditStampData? stamp,
+        long operationSequence,
+        bool requiresVisualRefresh)
+    {
+        Aabb localDirtyWorldBounds = stamp?.WorldBounds ?? dirtyWorldBounds;
+        TerrainChunkDirtyBoundsSnapshot localDirtyBounds = BuildLocalDirtyBoundsSnapshot(displayedBlock.Id, localDirtyWorldBounds);
+        bool requiresFullFieldRebuild = !stamp.HasValue || displayedBlock.DisplayedRefreshDirty;
+        TerrainEditStampData? latestStamp = requiresFullFieldRebuild ? null : stamp;
+        bool combinedRequiresVisualRefresh =
+            requiresVisualRefresh ||
+            displayedBlock.DisplayedRefreshRequiresVisualRefresh;
+        if (displayedBlock.DisplayedRefreshDirty)
+        {
+            localDirtyBounds = CombineLocalDirtyBoundsSnapshots(
+                displayedBlock.Id,
+                displayedBlock.DisplayedRefreshDirtyBounds,
+                localDirtyBounds,
+                fallbackToFullChunk: displayedBlock.DisplayedRefreshRequiresFullFieldRebuild);
+        }
+
+        if (!localDirtyBounds.HasBounds)
+        {
+            localDirtyBounds = BuildFullChunkDirtyBoundsSnapshot(displayedBlock.Id);
+            requiresFullFieldRebuild = true;
+            latestStamp = null;
+        }
+
+        displayedBlock.MarkDisplayedRefreshDirty(
+            operationSequence,
+            localDirtyBounds,
+            latestStamp,
+            requiresFullFieldRebuild,
+            combinedRequiresVisualRefresh);
+        InvalidateBlockDispatch(_fieldBuildDispatchTokens, displayedBlock.Id);
+        InvalidateBlockDispatch(_meshBuildDispatchTokens, displayedBlock.Id);
+        InvalidateBlockDispatch(_commitDispatchTokens, displayedBlock.Id);
+        InvalidateBlockDispatch(_collisionDispatchTokens, displayedBlock.Id);
+        return EnqueueDisplayedRefreshForCurrentState(displayedBlock);
+    }
+
+    private bool ShouldRefreshDisplayedBlockVisuals(TerrainBlockData block, TerrainEditStampData stamp)
+    {
+        TerrainRenderer renderer = block?.Renderer;
+        if (renderer == null || !IsInstanceValid(renderer))
+        {
+            return true;
+        }
+
+        float surfaceBandPadding = ResolveDisplayedRefreshSurfaceBandPadding(block.Id, stamp);
+        return !renderer.TryGetVisualSurfaceWorldBounds(surfaceBandPadding, out Aabb surfaceWorldBounds) ||
+               stamp.OverlapsPrecisely(surfaceWorldBounds);
+    }
+
+    private float ResolveDisplayedRefreshSurfaceBandPadding(TerrainBlockId blockId, TerrainEditStampData stamp)
+    {
+        float voxelSize = TerrainMetrics.GetVoxelSize(_config, blockId.Lod);
+        float basePadding = Mathf.Max(voxelSize * 1.5f, _config.BaseVoxelSize);
+        return stamp.Kind switch
+        {
+            TerrainEditStampKind.Sphere => Mathf.Max(
+                basePadding,
+                Mathf.Max(stamp.Radius, voxelSize) + Mathf.Max(stamp.RetextureMargin, voxelSize * 0.5f)),
+            TerrainEditStampKind.Slash => Mathf.Max(
+                basePadding,
+                Mathf.Max(stamp.Depth * 0.5f, voxelSize * 0.5f) + Mathf.Max(stamp.RetextureMargin, voxelSize * 0.75f)),
+            _ => basePadding
+        };
+    }
+
     private TerrainChunkDirtyBoundsTracker CreateDirtyBoundsTracker(TerrainBlockId blockId)
     {
         return new TerrainChunkDirtyBoundsTracker(
@@ -2166,6 +2245,13 @@ public partial class TerrainLodManager : Node3D
                 continue;
             }
 
+            if (!block.DisplayedRefreshRequiresVisualRefresh)
+            {
+                block.CommitDisplayedRefreshFieldOnly(result.Field);
+                AccumulateDisplayedRefreshAsyncRebuild(result.DisplayedRefreshOperationSequence, result.WorkerBuildMs);
+                continue;
+            }
+
             block.SetDisplayedRefreshField(result.Field);
             AccumulateDisplayedRefreshAsyncRebuild(result.DisplayedRefreshOperationSequence, result.WorkerBuildMs);
             EnqueueMeshBuildDispatch(block.Id, urgent: true);
@@ -2190,7 +2276,9 @@ public partial class TerrainLodManager : Node3D
             {
                 buildPurpose = TerrainBlockBuildPurpose.RequestedContent;
             }
-            else if (block.HasDisplayedRefreshFieldReady && IsBlockDisplayingVisuals(block))
+            else if (block.HasDisplayedRefreshFieldReady &&
+                     block.DisplayedRefreshRequiresVisualRefresh &&
+                     IsBlockDisplayingVisuals(block))
             {
                 buildPurpose = TerrainBlockBuildPurpose.DisplayedRefresh;
                 displayedRefreshRevision = block.DisplayedRefreshRevision;

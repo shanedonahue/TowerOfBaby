@@ -1,7 +1,5 @@
-# Godot 4+ specific ignores
 .import/
 .godot/
-.codex
 .export/
 .mono/
 bin/
@@ -10,3 +8,4 @@ assets/
 .vscode/
 *.user
 *.tmp
+.codex

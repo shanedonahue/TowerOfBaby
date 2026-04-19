@@ -43,6 +43,7 @@ public sealed class TerrainBlockData
     public TerrainChunkDirtyBoundsSnapshot DisplayedRefreshDirtyBounds { get; private set; } = TerrainChunkDirtyBoundsSnapshot.Empty;
     public TerrainEditStampData? DisplayedRefreshLatestStamp { get; private set; }
     public bool DisplayedRefreshRequiresFullFieldRebuild { get; private set; }
+    public bool DisplayedRefreshRequiresVisualRefresh { get; private set; }
     public double CollisionDispatchEligibleAtSeconds { get; private set; }
     public bool HasDisplayedRefreshFieldReady => DisplayedRefreshDirty && Field != null && !HasDisplayedRefreshMeshReady;
     public bool HasDisplayedRefreshMeshReady { get; private set; }
@@ -121,7 +122,8 @@ public sealed class TerrainBlockData
         long operationSequence,
         TerrainChunkDirtyBoundsSnapshot dirtyBounds,
         TerrainEditStampData? latestStamp,
-        bool requiresFullFieldRebuild)
+        bool requiresFullFieldRebuild,
+        bool requiresVisualRefresh)
     {
         DisplayedRefreshDirty = true;
         DisplayedRefreshRevision++;
@@ -129,9 +131,14 @@ public sealed class TerrainBlockData
         DisplayedRefreshDirtyBounds = dirtyBounds;
         DisplayedRefreshLatestStamp = latestStamp;
         DisplayedRefreshRequiresFullFieldRebuild = requiresFullFieldRebuild;
-        PendingCollisionRefreshOperationSequence = 0;
-        CollisionPending = false;
-        CollisionDispatchEligibleAtSeconds = 0.0;
+        DisplayedRefreshRequiresVisualRefresh = requiresVisualRefresh;
+        if (requiresVisualRefresh)
+        {
+            PendingCollisionRefreshOperationSequence = 0;
+            CollisionPending = false;
+            CollisionDispatchEligibleAtSeconds = 0.0;
+        }
+
         ClearTransientBuildArtifacts();
     }
 
@@ -152,6 +159,16 @@ public sealed class TerrainBlockData
         Mesh = mesh;
         HasDisplayedRefreshMeshReady = true;
         SeamBuild = TerrainSeamBuildResult.None;
+    }
+
+    public void CommitDisplayedRefreshFieldOnly(VoxelChunkData field)
+    {
+        FieldBuildRunning = false;
+        MeshBuildRunning = false;
+        Field = null;
+        PersistableField = field;
+        HasDisplayedRefreshMeshReady = false;
+        ClearDisplayedRefreshState();
     }
 
     public void SetPendingCollisionRefreshOperation(long operationSequence)
@@ -284,5 +301,6 @@ public sealed class TerrainBlockData
         DisplayedRefreshDirtyBounds = TerrainChunkDirtyBoundsSnapshot.Empty;
         DisplayedRefreshLatestStamp = null;
         DisplayedRefreshRequiresFullFieldRebuild = false;
+        DisplayedRefreshRequiresVisualRefresh = false;
     }
 }

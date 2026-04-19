@@ -42,6 +42,8 @@ public partial class TerrainRenderer : Node3D
     private Vector3[] _seamNormals = System.Array.Empty<Vector3>();
     private Vector2[] _seamUvs = System.Array.Empty<Vector2>();
     private Color[] _seamColors = System.Array.Empty<Color>();
+    private Aabb _cachedVisualLocalBounds;
+    private bool _hasCachedVisualLocalBounds;
     private TerrainVisualDebugMode _debugView = TerrainVisualDebugMode.Lit;
 
     public TerrainBlockId BlockId { get; private set; }
@@ -121,6 +123,7 @@ public partial class TerrainRenderer : Node3D
         _surfaceMaterials = meshBuild.SurfaceMaterials;
         _biomeWeights = meshBuild.BiomeWeights;
         _tangents = meshBuild.Tangents;
+        UpdateCachedVisualLocalBounds();
         ApplyCachedVisuals(surfaceColorizer, resetCollision: true);
     }
 
@@ -176,6 +179,23 @@ public partial class TerrainRenderer : Node3D
     public bool HasVisuals => _meshInstance?.Mesh != null;
     public bool HasCachedVisualData => _vertices.Length > 0;
 
+    public bool TryGetVisualSurfaceWorldBounds(float padding, out Aabb bounds)
+    {
+        if (!_hasCachedVisualLocalBounds)
+        {
+            bounds = default;
+            return false;
+        }
+
+        float safePadding = Mathf.Max(0.0f, padding);
+        Vector3 margin = Vector3.One * safePadding;
+        Vector3 origin = GlobalTransform.Origin;
+        bounds = new Aabb(
+            origin + _cachedVisualLocalBounds.Position - margin,
+            _cachedVisualLocalBounds.Size + (margin * 2.0f));
+        return true;
+    }
+
     public void ApplyCollision(bool includeCollision)
     {
         EnsureNodes();
@@ -210,6 +230,8 @@ public partial class TerrainRenderer : Node3D
         _seamNormals = System.Array.Empty<Vector3>();
         _seamUvs = System.Array.Empty<Vector2>();
         _seamColors = System.Array.Empty<Color>();
+        _cachedVisualLocalBounds = default;
+        _hasCachedVisualLocalBounds = false;
         HideVisuals();
         _collision.Shape = null;
     }
@@ -263,6 +285,34 @@ public partial class TerrainRenderer : Node3D
         }
 
         return _vertices.Length > 0 ? BuildCachedCollisionMesh() : null;
+    }
+
+    private void UpdateCachedVisualLocalBounds()
+    {
+        if (_vertices.Length == 0)
+        {
+            _cachedVisualLocalBounds = default;
+            _hasCachedVisualLocalBounds = false;
+            return;
+        }
+
+        Vector3 min = _vertices[0];
+        Vector3 max = _vertices[0];
+        for (int i = 1; i < _vertices.Length; i++)
+        {
+            Vector3 vertex = _vertices[i];
+            min = new Vector3(
+                Mathf.Min(min.X, vertex.X),
+                Mathf.Min(min.Y, vertex.Y),
+                Mathf.Min(min.Z, vertex.Z));
+            max = new Vector3(
+                Mathf.Max(max.X, vertex.X),
+                Mathf.Max(max.Y, vertex.Y),
+                Mathf.Max(max.Z, vertex.Z));
+        }
+
+        _cachedVisualLocalBounds = new Aabb(min, max - min);
+        _hasCachedVisualLocalBounds = true;
     }
 
     private ArrayMesh BuildCachedVisualMesh(TerrainSurfaceColorizer surfaceColorizer)
