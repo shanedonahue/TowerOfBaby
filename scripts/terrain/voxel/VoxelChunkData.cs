@@ -227,6 +227,24 @@ public sealed class VoxelChunkData : IDisposable
         return snapshot;
     }
 
+    public VoxelChunkData CreateEditableCopy(bool includeTransientDetailBrick)
+    {
+        VoxelChunkData copy = new(PointsPerAxis, VoxelSize, Origin, IsoLevel);
+        Array.Copy(_densities, copy._densities, _pointCount);
+        Array.Copy(_materials, copy._materials, _pointCount);
+        if (_detailBrick != null && (includeTransientDetailBrick || _detailBrick.HasPersistentEdits))
+        {
+            copy._detailBrick = _detailBrick.CreateCopy();
+        }
+
+        if (_persistedDetailRegions.Count > 0)
+        {
+            copy._persistedDetailRegions.AddRange(_persistedDetailRegions);
+        }
+
+        return copy;
+    }
+
     public void LoadFromBuffers(float[] densities, byte[] materials)
     {
         if (densities.Length != _pointCount || materials.Length != _pointCount)
@@ -576,7 +594,7 @@ public sealed class VoxelChunkData : IDisposable
         VoxelDetailBrickData existing,
         out DetailBrickCoverage coverage)
     {
-        int effectiveScale = existing?.DetailScale ?? Math.Max(2, detailScale);
+        int effectiveScale = Math.Max(existing?.DetailScale ?? 2, Math.Max(2, detailScale));
         int effectivePadding = Math.Max(0, paddingCoarseCells);
 
         Vector3 start = requestedLocalBounds.Position;

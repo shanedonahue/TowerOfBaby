@@ -74,7 +74,18 @@ public partial class TerrainRenderer : Node3D
         BlockId = blockId;
         Name = $"TerrainBlock_L{blockId.Lod}_{blockId.Index.X}_{blockId.Index.Y}_{blockId.Index.Z}";
         Position = origin;
+        Visible = true;
         EnsureNodes();
+    }
+
+    public void ResetForPool()
+    {
+        EnsureNodes();
+        ClearVisuals();
+        BlockId = default;
+        Name = "TerrainBlock_Pooled";
+        Position = Vector3.Zero;
+        Visible = false;
     }
 
     public void ApplyMesh(

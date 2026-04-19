@@ -142,6 +142,16 @@ public sealed class VoxelDetailBrickData : IDisposable
         return new VoxelDetailBrickData(CoarseCellMin, CoarseCellCount, DetailScale, dataSnapshot, HasPersistentEdits);
     }
 
+    public VoxelDetailBrickData CreateCopy()
+    {
+        return new VoxelDetailBrickData(
+            CoarseCellMin,
+            CoarseCellCount,
+            DetailScale,
+            Data.CreateEditableCopy(includeTransientDetailBrick: false),
+            HasPersistentEdits);
+    }
+
     public void Dispose()
     {
         Data?.Dispose();

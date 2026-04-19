@@ -122,18 +122,18 @@ public static class VoxelTerrainEditing
                     float density = data.GetDensity(x, y, z);
                     float distance = position.DistanceTo(edit.Center);
                     float paintInfluence = 1.0f - Mathf.Clamp(distance / retextureRadius, 0.0f, 1.0f);
-                    VoxelMaterialId terrainMaterial = materialResolver(position, density);
-                    VoxelMaterialId nextMaterial = terrainMaterial;
+                    VoxelMaterialId currentMaterial = data.GetMaterial(x, y, z);
+                    VoxelMaterialId nextMaterial = currentMaterial;
                     if ((paintInfluence * edit.PaintStrength) >= 0.18f &&
                         density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
                         nextMaterial = ResolveEditedSurfaceMaterial(
-                            terrainMaterial,
+                            currentMaterial,
                             position - edit.Center,
                             edit.DeltaDensity);
                     }
 
-                    if (data.GetMaterial(x, y, z) != nextMaterial)
+                    if (currentMaterial != nextMaterial)
                     {
                         data.SetMaterial(x, y, z, nextMaterial);
                         modified = true;
@@ -236,8 +236,8 @@ public static class VoxelTerrainEditing
 
                     materialSamplesTouched++;
                     float density = data.GetDensity(x, y, z);
-                    VoxelMaterialId terrainMaterial = materialResolver(position, density);
-                    VoxelMaterialId nextMaterial = terrainMaterial;
+                    VoxelMaterialId currentMaterial = data.GetMaterial(x, y, z);
+                    VoxelMaterialId nextMaterial = currentMaterial;
                     if ((paintInfluence * edit.PaintStrength) >= 0.16f &&
                         density >= data.IsoLevel - (data.VoxelSize * NearSurfaceMaterialBias))
                     {
@@ -248,12 +248,12 @@ public static class VoxelTerrainEditing
                         }
 
                         nextMaterial = ResolveEditedSurfaceMaterial(
-                            terrainMaterial,
+                            currentMaterial,
                             exposureNormal,
                             edit.DensityDelta);
                     }
 
-                    if (data.GetMaterial(x, y, z) != nextMaterial)
+                    if (currentMaterial != nextMaterial)
                     {
                         data.SetMaterial(x, y, z, nextMaterial);
                         modified = true;

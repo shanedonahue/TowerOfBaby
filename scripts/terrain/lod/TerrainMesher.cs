@@ -51,6 +51,35 @@ public sealed class TerrainMesher
         return data;
     }
 
+    public VoxelChunkData BuildDisplayedRefreshField(
+        TerrainBlockId blockId,
+        VoxelChunkData currentField,
+        TerrainChunkDirtyBoundsSnapshot dirtyBounds,
+        TerrainEditStampData? latestStamp,
+        IReadOnlyList<TerrainEditRegion> editRegions)
+    {
+        if (currentField == null ||
+            !dirtyBounds.HasBounds ||
+            !latestStamp.HasValue ||
+            editRegions == null ||
+            editRegions.Count == 0)
+        {
+            return BuildField(blockId, editRegions);
+        }
+
+        VoxelChunkData data = currentField.CreateEditableCopy(includeTransientDetailBrick: true);
+        VoxelFieldGenerator fieldGenerator = CreateFieldGenerator();
+        PrepareDisplayedRefreshDetail(data, dirtyBounds.LocalBounds, editRegions, fieldGenerator);
+        latestStamp.Value.Apply(data, fieldGenerator.SampleMaterial);
+        if (data.DetailBrick != null &&
+            Intersects(data.DetailBrick.LocalBounds, dirtyBounds.LocalBounds))
+        {
+            latestStamp.Value.Apply(data.DetailBrick.Data, fieldGenerator.SampleMaterial);
+        }
+
+        return data;
+    }
+
     public VoxelMeshBuildResult BuildMesh(VoxelChunkData data)
     {
         VoxelMeshBuildResult mesh = VoxelMesher.BuildMesh(data, _meshOptions);
@@ -152,6 +181,49 @@ public sealed class TerrainMesher
         }
     }
 
+    private void PrepareDisplayedRefreshDetail(
+        VoxelChunkData data,
+        Aabb dirtyLocalBounds,
+        IReadOnlyList<TerrainEditRegion> editRegions,
+        VoxelFieldGenerator fieldGenerator)
+    {
+        bool hasDetailBounds = false;
+        Aabb combinedLocalBounds = dirtyLocalBounds;
+        int detailScale = 0;
+
+        for (int i = 0; i < editRegions.Count; i++)
+        {
+            TerrainEditRegion region = editRegions[i];
+            if (!region.TryBuildLocalRegion(data.Origin, data.ChunkSize, out TerrainPersistedDetailRegionData localRegion))
+            {
+                continue;
+            }
+
+            data.UpsertPersistedDetailRegion(localRegion);
+            combinedLocalBounds = hasDetailBounds
+                ? Union(combinedLocalBounds, localRegion.LocalBounds)
+                : Union(dirtyLocalBounds, localRegion.LocalBounds);
+            hasDetailBounds = true;
+            detailScale = Math.Max(
+                detailScale,
+                region.ResolveDetailScale(_config.BaseVoxelSize, data.VoxelSize, MaxEditDetailScale));
+        }
+
+        if (!hasDetailBounds)
+        {
+            return;
+        }
+
+        data.EnsureDetailBrick(
+            combinedLocalBounds,
+            detailScale,
+            paddingCoarseCells: 1,
+            fieldGenerator.SampleDensity,
+            fieldGenerator.SampleMaterial,
+            persistentEdits: true,
+            preserveExistingCoverage: true);
+    }
+
     private static Aabb Union(Aabb a, Aabb b)
     {
         Vector3 aEnd = a.Position + a.Size;
@@ -165,5 +237,18 @@ public sealed class TerrainMesher
             Mathf.Max(aEnd.Y, bEnd.Y),
             Mathf.Max(aEnd.Z, bEnd.Z));
         return new Aabb(min, max - min);
+    }
+
+    private static bool Intersects(Aabb a, Aabb b)
+    {
+        Vector3 aEnd = a.Position + a.Size;
+        Vector3 bEnd = b.Position + b.Size;
+        return
+            a.Position.X < bEnd.X &&
+            aEnd.X > b.Position.X &&
+            a.Position.Y < bEnd.Y &&
+            aEnd.Y > b.Position.Y &&
+            a.Position.Z < bEnd.Z &&
+            aEnd.Z > b.Position.Z;
     }
 }

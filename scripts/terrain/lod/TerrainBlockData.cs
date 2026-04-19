@@ -40,8 +40,20 @@ public sealed class TerrainBlockData
     public int DisplayedRefreshRevision { get; private set; }
     public long DisplayedRefreshOperationSequence { get; private set; }
     public long PendingCollisionRefreshOperationSequence { get; private set; }
+    public TerrainChunkDirtyBoundsSnapshot DisplayedRefreshDirtyBounds { get; private set; } = TerrainChunkDirtyBoundsSnapshot.Empty;
+    public TerrainEditStampData? DisplayedRefreshLatestStamp { get; private set; }
+    public bool DisplayedRefreshRequiresFullFieldRebuild { get; private set; }
+    public double CollisionDispatchEligibleAtSeconds { get; private set; }
     public bool HasDisplayedRefreshFieldReady => DisplayedRefreshDirty && Field != null && !HasDisplayedRefreshMeshReady;
     public bool HasDisplayedRefreshMeshReady { get; private set; }
+    public bool CanIncrementallyRefreshDisplayedField =>
+        DisplayedRefreshDirty &&
+        !DisplayedRefreshRequiresFullFieldRebuild &&
+        DisplayedRefreshDirtyBounds.HasBounds &&
+        DisplayedRefreshLatestStamp.HasValue &&
+        PersistableField != null;
+    public bool IsCollisionDispatchEligible(double nowSeconds) =>
+        CollisionDispatchEligibleAtSeconds <= 0.0 || nowSeconds >= CollisionDispatchEligibleAtSeconds;
 
     public int BeginFieldBuild()
     {
@@ -59,6 +71,7 @@ public sealed class TerrainBlockData
         FieldBuildRunning = false;
         Field = field;
         PersistableField = field;
+        ClearDisplayedRefreshState();
         HasDisplayedRefreshMeshReady = false;
         State = TerrainBlockState.FieldReady;
     }
@@ -87,6 +100,7 @@ public sealed class TerrainBlockData
         MeshBuildRunning = false;
         Mesh = mesh;
         TriangleCount = mesh.TotalTriangleCount;
+        ClearDisplayedRefreshState();
         HasDisplayedRefreshMeshReady = false;
         State = TerrainBlockState.MeshReady;
     }
@@ -98,18 +112,26 @@ public sealed class TerrainBlockData
         MeshBuildRunning = false;
         TriangleCount = mesh.TotalTriangleCount;
         CollisionPending = collisionPending;
-        DisplayedRefreshDirty = false;
-        DisplayedRefreshOperationSequence = 0;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
+        ClearDisplayedRefreshState();
     }
 
-    public void MarkDisplayedRefreshDirty(long operationSequence)
+    public void MarkDisplayedRefreshDirty(
+        long operationSequence,
+        TerrainChunkDirtyBoundsSnapshot dirtyBounds,
+        TerrainEditStampData? latestStamp,
+        bool requiresFullFieldRebuild)
     {
         DisplayedRefreshDirty = true;
         DisplayedRefreshRevision++;
         DisplayedRefreshOperationSequence = operationSequence;
+        DisplayedRefreshDirtyBounds = dirtyBounds;
+        DisplayedRefreshLatestStamp = latestStamp;
+        DisplayedRefreshRequiresFullFieldRebuild = requiresFullFieldRebuild;
         PendingCollisionRefreshOperationSequence = 0;
         CollisionPending = false;
+        CollisionDispatchEligibleAtSeconds = 0.0;
         ClearTransientBuildArtifacts();
     }
 
@@ -134,7 +156,16 @@ public sealed class TerrainBlockData
 
     public void SetPendingCollisionRefreshOperation(long operationSequence)
     {
+        CollisionPending = true;
         PendingCollisionRefreshOperationSequence = operationSequence;
+        CollisionDispatchEligibleAtSeconds = 0.0;
+    }
+
+    public void SetPendingCollisionRefreshOperation(long operationSequence, double eligibleAtSeconds)
+    {
+        CollisionPending = true;
+        PendingCollisionRefreshOperationSequence = operationSequence;
+        CollisionDispatchEligibleAtSeconds = eligibleAtSeconds;
     }
 
     public long ConsumePendingCollisionRefreshOperation()
@@ -163,9 +194,9 @@ public sealed class TerrainBlockData
         Desired = true;
         ReleaseEligibleAtSeconds = 0.0;
         CollisionPending = collisionPending;
-        DisplayedRefreshDirty = false;
-        DisplayedRefreshOperationSequence = 0;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
+        ClearDisplayedRefreshState();
         State = TerrainBlockState.Visible;
     }
 
@@ -175,6 +206,7 @@ public sealed class TerrainBlockData
         ReleaseEligibleAtSeconds = 0.0;
         CollisionPending = false;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
         State = TerrainBlockState.Visible;
     }
 
@@ -184,17 +216,20 @@ public sealed class TerrainBlockData
         ReleaseEligibleAtSeconds = releaseEligibleAtSeconds;
         CollisionPending = false;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
         State = TerrainBlockState.Releasable;
     }
 
-    public void MarkCollisionPending()
+    public void MarkCollisionPending(double eligibleAtSeconds = 0.0)
     {
         CollisionPending = true;
+        CollisionDispatchEligibleAtSeconds = eligibleAtSeconds;
     }
 
     public void MarkCollisionReady()
     {
         CollisionPending = false;
+        CollisionDispatchEligibleAtSeconds = 0.0;
     }
 
     public bool IsHeldForRelease(double nowSeconds)
@@ -209,9 +244,9 @@ public sealed class TerrainBlockData
         MeshBuildRunning = false;
         CollisionPending = false;
         TriangleCount = 0;
-        DisplayedRefreshDirty = false;
-        DisplayedRefreshOperationSequence = 0;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
+        ClearDisplayedRefreshState();
         FieldBuildRevision++;
         MeshBuildRevision++;
         State = TerrainBlockState.Requested;
@@ -223,9 +258,9 @@ public sealed class TerrainBlockData
         FieldBuildRunning = false;
         MeshBuildRunning = false;
         CollisionPending = false;
-        DisplayedRefreshDirty = false;
-        DisplayedRefreshOperationSequence = 0;
         PendingCollisionRefreshOperationSequence = 0;
+        CollisionDispatchEligibleAtSeconds = 0.0;
+        ClearDisplayedRefreshState();
     }
 
     public bool TryGetPersistableField(out VoxelChunkData field)
@@ -240,5 +275,14 @@ public sealed class TerrainBlockData
         Mesh = VoxelMeshBuildResult.Empty;
         SeamBuild = TerrainSeamBuildResult.None;
         HasDisplayedRefreshMeshReady = false;
+    }
+
+    private void ClearDisplayedRefreshState()
+    {
+        DisplayedRefreshDirty = false;
+        DisplayedRefreshOperationSequence = 0;
+        DisplayedRefreshDirtyBounds = TerrainChunkDirtyBoundsSnapshot.Empty;
+        DisplayedRefreshLatestStamp = null;
+        DisplayedRefreshRequiresFullFieldRebuild = false;
     }
 }

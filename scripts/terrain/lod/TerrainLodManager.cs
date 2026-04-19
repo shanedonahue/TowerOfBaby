@@ -83,6 +83,10 @@ public partial class TerrainLodManager : Node3D
     [Export(PropertyHint.Range, "1,32,1")] public int ReleasesPerFrame = 2;
     [Export] public bool GenerateCollisionForCoarseLods;
 
+    [ExportGroup("Edit Refresh")]
+    [Export(PropertyHint.Range, "0,250,5")] public float DisplayedRefreshCollisionDelayMs = 90.0f;
+    [Export(PropertyHint.Range, "0,512,8")] public int MaxPooledRenderers = 128;
+
     [ExportGroup("Startup")]
     [Export] public bool RestorePlayerPositionFromStartupState = true;
     [Export] public bool EnableStartupStatePersistence = true;
@@ -122,6 +126,7 @@ public partial class TerrainLodManager : Node3D
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _commitDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _collisionDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _releaseDispatcherQueue = new();
+    private readonly Queue<TerrainRenderer> _rendererPool = new();
     private readonly Dictionary<TerrainBlockId, TerrainLodSupersededBlockTransition> _supersededBlockTransitions = new();
     private readonly Dictionary<TerrainBlockId, int> _createDispatchTokens = new();
     private readonly Dictionary<TerrainBlockId, int> _fieldBuildDispatchTokens = new();
@@ -706,7 +711,31 @@ public partial class TerrainLodManager : Node3D
 
         foreach (TerrainBlockData displayedBlock in displayedBlocks)
         {
-            displayedBlock.MarkDisplayedRefreshDirty(operationSequence);
+            Aabb localDirtyWorldBounds = stamp?.WorldBounds ?? dirtyWorldBounds;
+            TerrainChunkDirtyBoundsSnapshot localDirtyBounds = BuildLocalDirtyBoundsSnapshot(displayedBlock.Id, localDirtyWorldBounds);
+            bool requiresFullFieldRebuild = !stamp.HasValue || displayedBlock.DisplayedRefreshDirty;
+            TerrainEditStampData? latestStamp = requiresFullFieldRebuild ? null : stamp;
+            if (displayedBlock.DisplayedRefreshDirty)
+            {
+                localDirtyBounds = CombineLocalDirtyBoundsSnapshots(
+                    displayedBlock.Id,
+                    displayedBlock.DisplayedRefreshDirtyBounds,
+                    localDirtyBounds,
+                    fallbackToFullChunk: displayedBlock.DisplayedRefreshRequiresFullFieldRebuild);
+            }
+
+            if (!localDirtyBounds.HasBounds)
+            {
+                localDirtyBounds = BuildFullChunkDirtyBoundsSnapshot(displayedBlock.Id);
+                requiresFullFieldRebuild = true;
+                latestStamp = null;
+            }
+
+            displayedBlock.MarkDisplayedRefreshDirty(
+                operationSequence,
+                localDirtyBounds,
+                latestStamp,
+                requiresFullFieldRebuild);
             InvalidateBlockDispatch(_fieldBuildDispatchTokens, displayedBlock.Id);
             InvalidateBlockDispatch(_meshBuildDispatchTokens, displayedBlock.Id);
             InvalidateBlockDispatch(_commitDispatchTokens, displayedBlock.Id);
@@ -1621,6 +1650,129 @@ public partial class TerrainLodManager : Node3D
         return true;
     }
 
+    private TerrainChunkDirtyBoundsSnapshot BuildLocalDirtyBoundsSnapshot(TerrainBlockId blockId, Aabb dirtyWorldBounds)
+    {
+        TerrainChunkDirtyBoundsTracker tracker = CreateDirtyBoundsTracker(blockId);
+        Aabb blockBounds = TerrainMetrics.GetBlockBounds(_config, blockId);
+        if (TryIntersectBounds(blockBounds, dirtyWorldBounds, out Aabb overlapWorldBounds))
+        {
+            tracker.Include(new Aabb(overlapWorldBounds.Position - blockBounds.Position, overlapWorldBounds.Size));
+        }
+
+        return tracker.Snapshot;
+    }
+
+    private TerrainChunkDirtyBoundsSnapshot BuildFullChunkDirtyBoundsSnapshot(TerrainBlockId blockId)
+    {
+        TerrainChunkDirtyBoundsTracker tracker = CreateDirtyBoundsTracker(blockId);
+        tracker.IncludeFullChunk();
+        return tracker.Snapshot;
+    }
+
+    private TerrainChunkDirtyBoundsSnapshot CombineLocalDirtyBoundsSnapshots(
+        TerrainBlockId blockId,
+        TerrainChunkDirtyBoundsSnapshot current,
+        TerrainChunkDirtyBoundsSnapshot incoming,
+        bool fallbackToFullChunk)
+    {
+        if (!current.HasBounds || !incoming.HasBounds)
+        {
+            return fallbackToFullChunk
+                ? BuildFullChunkDirtyBoundsSnapshot(blockId)
+                : current.HasBounds
+                    ? current
+                    : incoming;
+        }
+
+        TerrainChunkDirtyBoundsTracker tracker = CreateDirtyBoundsTracker(blockId);
+        tracker.Include(current.LocalBounds);
+        tracker.Include(incoming.LocalBounds);
+        return tracker.Snapshot;
+    }
+
+    private TerrainChunkDirtyBoundsTracker CreateDirtyBoundsTracker(TerrainBlockId blockId)
+    {
+        return new TerrainChunkDirtyBoundsTracker(
+            TerrainMetrics.GetBlockSpan(_config, blockId.Lod),
+            TerrainMetrics.GetVoxelSize(_config, blockId.Lod),
+            _config.PointsPerAxis);
+    }
+
+    private TerrainSeamFace ResolveDisplayedRefreshSeamFaces(TerrainBlockData block)
+    {
+        if (block == null)
+        {
+            return TerrainSeamFace.None;
+        }
+
+        TerrainChunkDirtyBoundsSnapshot dirtyBounds = block.DisplayedRefreshDirtyBounds;
+        if (!dirtyBounds.HasBounds)
+        {
+            return TerrainSeamFace.None;
+        }
+
+        if (block.DisplayedRefreshRequiresFullFieldRebuild || dirtyBounds.Coverage >= 0.85)
+        {
+            return TerrainSeamFace.NegativeX |
+                   TerrainSeamFace.PositiveX |
+                   TerrainSeamFace.NegativeY |
+                   TerrainSeamFace.PositiveY |
+                   TerrainSeamFace.NegativeZ |
+                   TerrainSeamFace.PositiveZ;
+        }
+
+        float blockSpan = TerrainMetrics.GetBlockSpan(_config, block.Id.Lod);
+        float faceMargin = Mathf.Max(TerrainMetrics.GetVoxelSize(_config, block.Id.Lod) * 2.0f, 0.001f);
+        Vector3 dirtyEnd = dirtyBounds.LocalBounds.Position + dirtyBounds.LocalBounds.Size;
+        TerrainSeamFace faces = TerrainSeamFace.None;
+        if (dirtyBounds.LocalBounds.Position.X <= faceMargin)
+        {
+            faces |= TerrainSeamFace.NegativeX;
+        }
+
+        if (dirtyEnd.X >= blockSpan - faceMargin)
+        {
+            faces |= TerrainSeamFace.PositiveX;
+        }
+
+        if (dirtyBounds.LocalBounds.Position.Y <= faceMargin)
+        {
+            faces |= TerrainSeamFace.NegativeY;
+        }
+
+        if (dirtyEnd.Y >= blockSpan - faceMargin)
+        {
+            faces |= TerrainSeamFace.PositiveY;
+        }
+
+        if (dirtyBounds.LocalBounds.Position.Z <= faceMargin)
+        {
+            faces |= TerrainSeamFace.NegativeZ;
+        }
+
+        if (dirtyEnd.Z >= blockSpan - faceMargin)
+        {
+            faces |= TerrainSeamFace.PositiveZ;
+        }
+
+        return faces;
+    }
+
+    private double ResolveDisplayedRefreshCollisionDelaySeconds(TerrainChunkDirtyBoundsSnapshot dirtyBounds)
+    {
+        if (DisplayedRefreshCollisionDelayMs <= 0.0f || !dirtyBounds.HasBounds)
+        {
+            return 0.0;
+        }
+
+        if (dirtyBounds.Coverage >= 0.40)
+        {
+            return 0.0;
+        }
+
+        return DisplayedRefreshCollisionDelayMs / 1000.0;
+    }
+
     private static bool IsStickyEditRegion(TerrainEditRegion region)
     {
         return region != null &&
@@ -1692,12 +1844,48 @@ public partial class TerrainLodManager : Node3D
 
     private void CreateBlock(TerrainBlockId blockId)
     {
-        TerrainRenderer renderer = new();
+        TerrainRenderer renderer = RentTerrainRenderer();
         renderer.Initialize(blockId, TerrainMetrics.GetBlockOrigin(_config, blockId));
-        AddChild(renderer);
         long instanceVersion = Interlocked.Increment(ref _blockInstanceVersionSequence);
         _blocks[blockId] = new TerrainBlockData(blockId, renderer, instanceVersion);
         _recentCreationTimes.Enqueue(_currentTimeSeconds);
+    }
+
+    private TerrainRenderer RentTerrainRenderer()
+    {
+        while (_rendererPool.Count > 0)
+        {
+            TerrainRenderer pooledRenderer = _rendererPool.Dequeue();
+            if (pooledRenderer == null || !IsInstanceValid(pooledRenderer))
+            {
+                continue;
+            }
+
+            pooledRenderer.Visible = true;
+            return pooledRenderer;
+        }
+
+        TerrainRenderer renderer = new();
+        AddChild(renderer);
+        return renderer;
+    }
+
+    private void RecycleTerrainRenderer(TerrainRenderer renderer)
+    {
+        if (renderer == null || !IsInstanceValid(renderer))
+        {
+            return;
+        }
+
+        int maxPooledRenderers = Mathf.Max(0, MaxPooledRenderers);
+        if (maxPooledRenderers == 0 || _rendererPool.Count >= maxPooledRenderers)
+        {
+            renderer.QueueFree();
+            return;
+        }
+
+        renderer.ResetForPool();
+        _rendererPool.Enqueue(renderer);
     }
 
     private bool IsStartupBoostActive()
@@ -1781,6 +1969,7 @@ public partial class TerrainLodManager : Node3D
         ApplyCompletedMeshBuildResults();
         ProcessMeshCommitDispatch();
         RefreshCollisionCoverage();
+        DispatchPendingCollisionRefreshes();
         ProcessCollisionDispatch();
         ProcessReleaseDispatch();
     }
@@ -1845,6 +2034,13 @@ public partial class TerrainLodManager : Node3D
             int revision = block.BeginFieldBuild();
             long instanceVersion = block.InstanceVersion;
             TerrainEditRegion[] editRegions = GetEditRegionsForBlock(blockId);
+            VoxelChunkData persistableField = null;
+            bool canIncrementallyRefreshDisplayedField =
+                buildPurpose == TerrainBlockBuildPurpose.DisplayedRefresh &&
+                block.CanIncrementallyRefreshDisplayedField &&
+                block.TryGetPersistableField(out persistableField);
+            TerrainChunkDirtyBoundsSnapshot displayedRefreshDirtyBounds = block.DisplayedRefreshDirtyBounds;
+            TerrainEditStampData? displayedRefreshLatestStamp = block.DisplayedRefreshLatestStamp;
             Interlocked.Increment(ref _activeFieldWorkerJobs);
             _ = Task.Run(() =>
             {
@@ -1854,7 +2050,14 @@ public partial class TerrainLodManager : Node3D
                     TerrainBlockFieldLoadResult fieldResult = buildPurpose == TerrainBlockBuildPurpose.RequestedContent
                         ? AcquireRequestedField(blockId, editRegions)
                         : new TerrainBlockFieldLoadResult(
-                            _mesher.BuildField(blockId, editRegions),
+                            canIncrementallyRefreshDisplayedField
+                                ? _mesher.BuildDisplayedRefreshField(
+                                    blockId,
+                                    persistableField,
+                                    displayedRefreshDirtyBounds,
+                                    displayedRefreshLatestStamp,
+                                    editRegions)
+                                : _mesher.BuildField(blockId, editRegions),
                             TerrainChunkLoadSource.Resident);
                     if (IsShuttingDown)
                     {
@@ -2133,8 +2336,8 @@ public partial class TerrainLodManager : Node3D
     {
         int commitBudget = GetCurrentMeshCommitBudget();
         List<TerrainBlockId> deferredCommitRequeues = new();
-        HashSet<TerrainBlockId> displayedRefreshSeamRoots = new();
-        HashSet<TerrainBlockId> currentDeformSeamRoots = new();
+        Dictionary<TerrainBlockId, TerrainSeamFace> displayedRefreshSeamRoots = new();
+        Dictionary<TerrainBlockId, TerrainSeamFace> currentDeformSeamRoots = new();
         while (_lastCommitCount < commitBudget &&
                TryDequeueBlockDispatch(_commitDispatcherQueue, _commitDispatchTokens, out TerrainBlockId blockId))
         {
@@ -2213,8 +2416,8 @@ public partial class TerrainLodManager : Node3D
 
     private void CommitDisplayedRefreshBlock(
         TerrainBlockData block,
-        HashSet<TerrainBlockId> displayedRefreshSeamRoots,
-        HashSet<TerrainBlockId> currentDeformSeamRoots)
+        Dictionary<TerrainBlockId, TerrainSeamFace> displayedRefreshSeamRoots,
+        Dictionary<TerrainBlockId, TerrainSeamFace> currentDeformSeamRoots)
     {
         if (block.Renderer == null || !IsInstanceValid(block.Renderer))
         {
@@ -2227,15 +2430,20 @@ public partial class TerrainLodManager : Node3D
             ? EvaluateSuccessorCoverage(block.Id)
             : null;
         bool shouldMaintainCollision = ShouldMaintainCollisionCoverage(block, mesh.TotalTriangleCount, coverage);
-        bool queueCollisionRefresh = shouldMaintainCollision || block.Renderer.HasCollision;
+        bool queueCollisionRefresh = shouldMaintainCollision;
         long operationSequence = block.DisplayedRefreshOperationSequence;
+        TerrainChunkDirtyBoundsSnapshot dirtyBounds = block.DisplayedRefreshDirtyBounds;
+        TerrainSeamFace dirtySeamFaces = ResolveDisplayedRefreshSeamFaces(block);
         ulong applyStartUsec = Time.GetTicksUsec();
         block.Renderer.ApplyVisualMesh(mesh, _activeTerrainDebugView, _surfaceColorizer);
         block.RefreshDisplayedContent(mesh, collisionPending: queueCollisionRefresh);
-        displayedRefreshSeamRoots.Add(block.Id);
-        if (operationSequence == _lastDeformOperationSequence)
+        if (dirtySeamFaces != TerrainSeamFace.None)
         {
-            currentDeformSeamRoots.Add(block.Id);
+            AddDisplayedRefreshSeamRoot(displayedRefreshSeamRoots, block.Id, dirtySeamFaces);
+            if (operationSequence == _lastDeformOperationSequence)
+            {
+                AddDisplayedRefreshSeamRoot(currentDeformSeamRoots, block.Id, dirtySeamFaces);
+            }
         }
 
         double applyMs = (Time.GetTicksUsec() - applyStartUsec) / 1000.0;
@@ -2245,8 +2453,14 @@ public partial class TerrainLodManager : Node3D
         AccumulateDisplayedRefreshCommit(operationSequence);
         if (queueCollisionRefresh)
         {
-            block.SetPendingCollisionRefreshOperation(operationSequence);
-            EnqueueCollisionDispatch(block.Id);
+            double collisionDelaySeconds = ResolveDisplayedRefreshCollisionDelaySeconds(dirtyBounds);
+            block.SetPendingCollisionRefreshOperation(
+                operationSequence,
+                _currentTimeSeconds + collisionDelaySeconds);
+            if (collisionDelaySeconds <= 0.0)
+            {
+                EnqueueCollisionDispatch(block.Id);
+            }
         }
 
         _lastCommitSummary =
@@ -2275,6 +2489,31 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
+    private void DispatchPendingCollisionRefreshes()
+    {
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (!block.CollisionPending ||
+                !block.IsCollisionDispatchEligible(_currentTimeSeconds) ||
+                _collisionDispatchTokens.ContainsKey(block.Id) ||
+                block.State is not (TerrainBlockState.Visible or TerrainBlockState.Releasable))
+            {
+                continue;
+            }
+
+            TerrainLodSuccessorCoverageStatus? coverage = block.State == TerrainBlockState.Releasable
+                ? EvaluateSuccessorCoverage(block.Id)
+                : null;
+            if (!ShouldMaintainCollisionCoverage(block, coverage))
+            {
+                block.MarkCollisionReady();
+                continue;
+            }
+
+            EnqueueCollisionDispatch(block.Id);
+        }
+    }
+
     private void ProcessCollisionDispatch()
     {
         int collisionBudget = GetCurrentCollisionBudget();
@@ -2282,7 +2521,8 @@ public partial class TerrainLodManager : Node3D
                TryDequeueBlockDispatch(_collisionDispatcherQueue, _collisionDispatchTokens, out TerrainBlockId blockId))
         {
             if (!_blocks.TryGetValue(blockId, out TerrainBlockData block) ||
-                (block.State != TerrainBlockState.Visible && block.State != TerrainBlockState.Releasable))
+                (block.State != TerrainBlockState.Visible && block.State != TerrainBlockState.Releasable) ||
+                !block.IsCollisionDispatchEligible(_currentTimeSeconds))
             {
                 continue;
             }
@@ -2419,7 +2659,7 @@ public partial class TerrainLodManager : Node3D
         }
 
         block.CancelPendingData();
-        block.Renderer.QueueFree();
+        RecycleTerrainRenderer(block.Renderer);
         RemoveBlockFromDispatcherQueues(blockId);
         MarkVisibleMixedLodSeamsDirtyAround(blockId);
         _lastReleaseCount++;
@@ -2445,23 +2685,56 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
-    private HashSet<TerrainBlockId> CollectDisplayedRefreshSeamCandidates(IEnumerable<TerrainBlockId> rootBlockIds)
+    private void AddDisplayedRefreshSeamRoot(
+        Dictionary<TerrainBlockId, TerrainSeamFace> roots,
+        TerrainBlockId blockId,
+        TerrainSeamFace affectedFaces)
+    {
+        if (affectedFaces == TerrainSeamFace.None)
+        {
+            return;
+        }
+
+        if (roots.TryGetValue(blockId, out TerrainSeamFace existingFaces))
+        {
+            roots[blockId] = existingFaces | affectedFaces;
+            return;
+        }
+
+        roots[blockId] = affectedFaces;
+    }
+
+    private HashSet<TerrainBlockId> CollectDisplayedRefreshSeamCandidates(
+        IReadOnlyDictionary<TerrainBlockId, TerrainSeamFace> rootBlockFaces)
     {
         HashSet<TerrainBlockId> candidates = new();
-        foreach (TerrainBlockId rootBlockId in rootBlockIds)
+        foreach (KeyValuePair<TerrainBlockId, TerrainSeamFace> pair in rootBlockFaces)
         {
-            AddDisplayedRefreshSeamCandidates(candidates, rootBlockId);
+            AddDisplayedRefreshSeamCandidates(candidates, pair.Key, pair.Value);
         }
 
         return candidates;
     }
 
-    private void AddDisplayedRefreshSeamCandidates(HashSet<TerrainBlockId> candidates, TerrainBlockId blockId)
+    private void AddDisplayedRefreshSeamCandidates(
+        HashSet<TerrainBlockId> candidates,
+        TerrainBlockId blockId,
+        TerrainSeamFace affectedFaces)
     {
+        if (affectedFaces == TerrainSeamFace.None)
+        {
+            return;
+        }
+
         candidates.Add(blockId);
 
         foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
         {
+            if ((affectedFaces & face) == 0)
+            {
+                continue;
+            }
+
             if (TryGetVisibleDisplayedRefreshCoarseNeighbor(blockId, face, out TerrainBlockId coarseNeighbor))
             {
                 candidates.Add(coarseNeighbor);
@@ -2475,6 +2748,11 @@ public partial class TerrainLodManager : Node3D
 
         foreach ((TerrainSeamFace face, Vector3I offset) in SeamNeighborDirections)
         {
+            if ((affectedFaces & face) == 0)
+            {
+                continue;
+            }
+
             TerrainBlockId neighborParent = new(blockId.Lod, blockId.Index - offset);
             foreach (TerrainBlockId child in TerrainMetrics.GetChildren(neighborParent))
             {
@@ -3284,8 +3562,15 @@ public partial class TerrainLodManager : Node3D
                     (block.CollisionPending ||
                      (block.TriangleCount > 0 && ShouldIncludeCollision(block.Id) && !block.Renderer.HasCollision)))
                 {
-                    block.MarkCollisionPending();
-                    EnqueueCollisionDispatch(block.Id);
+                    if (!block.CollisionPending)
+                    {
+                        block.MarkCollisionPending();
+                    }
+
+                    if (block.IsCollisionDispatchEligible(_currentTimeSeconds))
+                    {
+                        EnqueueCollisionDispatch(block.Id);
+                    }
                 }
                 break;
             case TerrainBlockState.Releasable:
