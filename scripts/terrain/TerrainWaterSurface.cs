@@ -1,3 +1,4 @@
+using System;
 using Godot;
 
 namespace TowerOfBaby.Terrain;
@@ -47,6 +48,11 @@ public partial class TerrainWaterSurface : Node3D
     private PlaneMesh _surfaceMesh = null!;
     private ShaderMaterial _waterMaterial = null!;
     private bool _warnedMissingShader;
+    private string _lastTerrainWorldPath = string.Empty;
+    private string _lastFollowTargetPath = string.Empty;
+    private int _lastSurfaceSettingsSignature;
+    private Vector3 _lastAppliedOrigin = new(float.NaN, float.NaN, float.NaN);
+    private bool _surfaceSettingsDirty = true;
 
     public override void _EnterTree()
     {
@@ -55,9 +61,9 @@ public partial class TerrainWaterSurface : Node3D
 
     public override void _Ready()
     {
-        ResolveReferences();
+        ResolveReferences(force: true);
         EnsureSurface();
-        ApplySurfaceSettings();
+        ApplySurfaceSettingsIfDirty();
         UpdateSurfaceTransform();
     }
 
@@ -65,17 +71,34 @@ public partial class TerrainWaterSurface : Node3D
     {
         ResolveReferences();
         EnsureSurface();
-        ApplySurfaceSettings();
+        ApplySurfaceSettingsIfDirty();
         UpdateSurfaceTransform();
     }
 
-    private void ResolveReferences()
+    private void ResolveReferences(bool force = false)
     {
-        _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetParent() as TerrainWorld;
-        _followTarget =
-            GetNodeOrNull<Node3D>(FollowTargetPath) ??
-            ResolveTerrainTrackedCharacter() ??
-            GetViewport()?.GetCamera3D();
+        string terrainWorldPath = TerrainWorldPath.ToString();
+        if (force ||
+            !string.Equals(_lastTerrainWorldPath, terrainWorldPath, StringComparison.Ordinal) ||
+            _terrainWorld == null ||
+            !IsInstanceValid(_terrainWorld))
+        {
+            _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetParent() as TerrainWorld;
+            _lastTerrainWorldPath = terrainWorldPath;
+            _surfaceSettingsDirty = true;
+        }
+
+        string followTargetPath = FollowTargetPath.ToString();
+        if (force ||
+            !string.Equals(_lastFollowTargetPath, followTargetPath, StringComparison.Ordinal) ||
+            (FollowViewer && (_followTarget == null || !IsInstanceValid(_followTarget))))
+        {
+            _followTarget =
+                GetNodeOrNull<Node3D>(FollowTargetPath) ??
+                ResolveTerrainTrackedCharacter() ??
+                GetViewport()?.GetCamera3D();
+            _lastFollowTargetPath = followTargetPath;
+        }
     }
 
     private Node3D ResolveTerrainTrackedCharacter()
@@ -103,6 +126,8 @@ public partial class TerrainWaterSurface : Node3D
             {
                 _surface.Owner = GetTree().EditedSceneRoot;
             }
+
+            _surfaceSettingsDirty = true;
         }
 
         _surfaceMesh = _surface.Mesh as PlaneMesh;
@@ -115,6 +140,7 @@ public partial class TerrainWaterSurface : Node3D
                 SubdivideWidth = 1
             };
             _surface.Mesh = _surfaceMesh;
+            _surfaceSettingsDirty = true;
         }
 
         _waterMaterial = _surface.MaterialOverride as ShaderMaterial;
@@ -139,12 +165,19 @@ public partial class TerrainWaterSurface : Node3D
                 Shader = waterShader
             };
             _surface.MaterialOverride = _waterMaterial;
+            _surfaceSettingsDirty = true;
         }
     }
 
-    private void ApplySurfaceSettings()
+    private void ApplySurfaceSettingsIfDirty()
     {
         if (_surface == null || _surfaceMesh == null || _waterMaterial == null)
+        {
+            return;
+        }
+
+        int settingsSignature = BuildSurfaceSettingsSignature();
+        if (!_surfaceSettingsDirty && settingsSignature == _lastSurfaceSettingsSignature)
         {
             return;
         }
@@ -170,6 +203,8 @@ public partial class TerrainWaterSurface : Node3D
         _waterMaterial.SetShaderParameter("roughness_far", Mathf.Clamp(RoughnessFar, 0.0f, 1.0f));
         _waterMaterial.SetShaderParameter("shore_glow", Mathf.Clamp(ShoreGlow, 0.0f, 1.0f));
         _waterMaterial.SetShaderParameter("macro_tint_strength", Mathf.Clamp(MacroTintStrength, 0.0f, 0.25f));
+        _lastSurfaceSettingsSignature = settingsSignature;
+        _surfaceSettingsDirty = false;
     }
 
     private void UpdateSurfaceTransform()
@@ -192,8 +227,40 @@ public partial class TerrainWaterSurface : Node3D
             ? Mathf.Snapped(center.Z, snapStep)
             : center.Z;
 
-        GlobalTransform = new Transform3D(
-            Basis.Identity,
-            new Vector3(snappedX, waterLevel, snappedZ));
+        Vector3 desiredOrigin = new(snappedX, waterLevel, snappedZ);
+        if (desiredOrigin.DistanceSquaredTo(_lastAppliedOrigin) <= 0.0001f)
+        {
+            return;
+        }
+
+        GlobalTransform = new Transform3D(Basis.Identity, desiredOrigin);
+        _lastAppliedOrigin = desiredOrigin;
+    }
+
+    private int BuildSurfaceSettingsSignature()
+    {
+        HashCode hash = new();
+        hash.Add(FollowViewer);
+        hash.Add(SurfaceSize);
+        hash.Add(CenterSnapStep);
+        hash.Add(SurfaceLevelOffset);
+        hash.Add(ShallowColor);
+        hash.Add(DeepColor);
+        hash.Add(ShoreColor);
+        hash.Add(FresnelColor);
+        hash.Add(ShallowDepth);
+        hash.Add(DeepDepth);
+        hash.Add(ShoreFadeDepth);
+        hash.Add(ShallowAlpha);
+        hash.Add(DeepAlpha);
+        hash.Add(FresnelStrength);
+        hash.Add(FresnelPower);
+        hash.Add(SpecularStrength);
+        hash.Add(Metallic);
+        hash.Add(RoughnessNear);
+        hash.Add(RoughnessFar);
+        hash.Add(ShoreGlow);
+        hash.Add(MacroTintStrength);
+        return hash.ToHashCode();
     }
 }

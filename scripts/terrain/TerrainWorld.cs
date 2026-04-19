@@ -1,4 +1,5 @@
 using Godot;
+using TowerOfBaby.Debugging;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -164,8 +165,17 @@ public partial class TerrainWorld : Node3D
 
     private TerrainWorldProfileSnapshot BuildFallbackProfileSnapshot()
     {
+        TerrainTelemetryModeSnapshot telemetryMode = TerrainTelemetry.GetModeSnapshot();
         return new TerrainWorldProfileSnapshot
         {
+            TelemetryMode = telemetryMode.ModeLabel,
+            CaptureSessionActive = telemetryMode.CaptureSessionActive,
+            CaptureIntervalSeconds = telemetryMode.CaptureIntervalSeconds,
+            ExpensiveMetricsEnabled = telemetryMode.ExpensiveMetricsEnabled,
+            LodTransitionTraceEnabled = telemetryMode.LodTransitionProbeEnabled,
+            GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
+            DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
+            PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
             TerrainStatsEnabled = false,
             MeshBackendName = "lod_blocks_missing",
             SearchThrottleState = "lod_blocks",

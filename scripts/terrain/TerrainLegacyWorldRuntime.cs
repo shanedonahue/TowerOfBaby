@@ -2,6 +2,7 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using TowerOfBaby.Debugging;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -695,6 +696,7 @@ public partial class TerrainLegacyWorldRuntime : Node3D
 
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
     {
+        TerrainTelemetryModeSnapshot telemetryMode = TerrainTelemetry.GetModeSnapshot();
         TerrainInstrumentationSnapshot terrainInstrumentation = _terrainStats == null
             ? TerrainInstrumentationSnapshot.Empty
             : _terrainStats.GetSnapshot();
@@ -775,6 +777,14 @@ public partial class TerrainLegacyWorldRuntime : Node3D
 
         return new TerrainWorldProfileSnapshot
         {
+            TelemetryMode = telemetryMode.ModeLabel,
+            CaptureSessionActive = telemetryMode.CaptureSessionActive,
+            CaptureIntervalSeconds = telemetryMode.CaptureIntervalSeconds,
+            ExpensiveMetricsEnabled = telemetryMode.ExpensiveMetricsEnabled,
+            LodTransitionTraceEnabled = telemetryMode.LodTransitionProbeEnabled,
+            GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
+            DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
+            PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
             TerrainStatsEnabled = terrainInstrumentation.Enabled,
             ActiveChunkCount = activeCount,
             ResidentChunkCount = _residentChunks.Count,
@@ -837,7 +847,7 @@ public partial class TerrainLegacyWorldRuntime : Node3D
             LastRequestsReactivatedByCooldownExpiryCount = _lastRequestsReactivatedByCooldownExpiryCount,
             LastRequestsReactivatedByPressureExitCount = _lastRequestsReactivatedByPressureExitCount,
             LastCoalescedRebuildRequestCount = _lastCoalescedRebuildRequestCount,
-            MeshBackendName = _meshBackend?.BackendName ?? "n/a",
+            MeshBackendName = $"legacy::{_meshBackend?.BackendName ?? "n/a"}",
             LastDesiredSearchMs = _desiredSetBuilder.LastSearchMs,
             LastPriorityEvaluationMs = _lastPriorityEvaluationMs,
             LastVisibilityHeuristicMs = _lastVisibilityHeuristicMs,
@@ -917,7 +927,7 @@ public partial class TerrainLegacyWorldRuntime : Node3D
             FrontierCompactionCount = _desiredSetBuilder.FrontierCompactionCount,
             DirtyPersistWrites = _cacheManager.DirtyPersistWrites,
             StartupPromotionWrites = _cacheManager.StartupPromotionWrites,
-            SearchThrottleState = _desiredSetBuilder.ThrottleState.ToString(),
+            SearchThrottleState = "retired",
             SearchInvalidationReason = _desiredSetBuilder.LastInvalidationReason,
             TrackedBiomeId = trackedBiome.DominantBiome,
             TrackedBiomeSummary = trackedBiome.Summary,

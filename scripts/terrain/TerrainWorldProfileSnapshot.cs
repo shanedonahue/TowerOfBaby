@@ -2,6 +2,14 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainWorldProfileSnapshot
 {
+    public string TelemetryMode { get; init; } = string.Empty;
+    public bool CaptureSessionActive { get; init; }
+    public double CaptureIntervalSeconds { get; init; }
+    public bool ExpensiveMetricsEnabled { get; init; }
+    public bool LodTransitionTraceEnabled { get; init; }
+    public bool GrassTraceEnabled { get; init; }
+    public bool DeformTraceEnabled { get; init; }
+    public bool PersistenceTraceEnabled { get; init; }
     public bool TerrainStatsEnabled { get; init; }
     public int ActiveChunkCount { get; init; }
     public int ResidentChunkCount { get; init; }

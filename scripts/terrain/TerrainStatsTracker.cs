@@ -83,10 +83,12 @@ internal readonly record struct TerrainInstrumentationSnapshot(
             LastPersistenceSaveScope: "n/a");
 }
 
+// Legacy-only trace writer for TerrainLegacyWorldRuntime. Current gameplay uses
+// TerrainLodManager + TerrainTelemetry, so keep this isolated from the live path.
 internal sealed class TerrainStatsTracker
 {
     private const string Prefix = "[TerrainStats]";
-    private const string LogRelativePath = "user://profiling/terrain_stats_latest.log";
+    private const string LogRelativePath = "user://profiling/legacy_terrain_stats_latest.log";
     private const int DeferredDetailSuppressionFlushThreshold = 32;
     private readonly object _logLock = new();
     private readonly StreamWriter _logWriter;

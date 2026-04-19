@@ -4,10 +4,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using TowerOfBaby.Debugging;
 using TowerOfBaby.Terrain.Voxel;
 
 namespace TowerOfBaby.Terrain;
@@ -42,8 +42,10 @@ public partial class TerrainLodManager : Node3D
     }
 
     private const int FinestTerrainLod = 0;
-    private const string TransitionLogPrefix = "[TerrainLodTransition]";
-    private const string TransitionLogRelativePath = "user://profiling/terrain_lod_transition_latest.log";
+    private const string LodTransitionTracePrefix = "[TerrainLodTransition]";
+    private const string DeformTracePrefix = "[TerrainDeform]";
+    private const string PersistenceTracePrefix = "[TerrainPersistence]";
+    private const double ProfileSnapshotRefreshIntervalSeconds = 0.25;
     private const int MaxCreateBlocksPerFrame = 32;
     private const int MaxFieldWorkerJobs = 8;
     private const int MaxMeshWorkerJobs = 8;
@@ -162,7 +164,6 @@ public partial class TerrainLodManager : Node3D
     private readonly Dictionary<TerrainBlockId, PendingPersistenceSaveState> _pendingPersistenceSaves = new();
     private readonly ConcurrentDictionary<TerrainBlockId, int> _persistenceWriteVersions = new();
     private readonly object _persistenceWriteLock = new();
-    private readonly object _transitionLogLock = new();
     private readonly HashSet<TerrainBlockId> _dirtyVisibleMixedLodSeamBlocks = new();
 
     private TerrainConfig _config = null!;
@@ -171,6 +172,7 @@ public partial class TerrainLodManager : Node3D
     private TerrainMesher _mesher = null!;
     private TerrainSurfaceColorizer _surfaceColorizer = null!;
     private TerrainWorldProfileSnapshot _latestProfileSnapshot = null!;
+    private int _latestProfileTelemetryConfigurationVersion;
     private TerrainWorld _terrainWorld = null!;
     private Node3D _trackedCharacter = null!;
     private TerrainBlockId _currentCenterParent;
@@ -278,12 +280,12 @@ public partial class TerrainLodManager : Node3D
     private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
     private int[] _currentLodBlockCounts = System.Array.Empty<int>();
     private int[] _currentSplitParentCounts = System.Array.Empty<int>();
-    private StreamWriter _transitionLogWriter = null!;
-    private bool _warnedTransitionLogFailure;
     private string _lastSupersededTransitionSummary = "none";
     private string _lastMixedLodSeamSummary = "none";
     private bool _allVisibleMixedLodSeamsDirty;
     private float _lastConfiguredSurfaceWaterLevel = float.NaN;
+    private double _nextProfileSnapshotRefreshAtSeconds;
+    private bool _profileSnapshotDirty = true;
     private double _startupSelectionStartSeconds = -1.0;
     private double _startupFirstVisibleTerrainMs = -1.0;
     private double _startupCompleteMs = -1.0;
@@ -313,14 +315,13 @@ public partial class TerrainLodManager : Node3D
         _trackedCharacter = ResolveTrackedCharacter();
         LoadPersistedLodRestoreKeys();
         TryInitializeStartupRestoreState();
-        _latestProfileSnapshot = BuildProfileSnapshot();
+        RefreshProfileSnapshotIfNeeded(force: true);
     }
 
     public override void _ExitTree()
     {
         BeginShutdown();
         SaveStartupState();
-        CloseTransitionLogWriter();
     }
 
     public override void _Process(double delta)
@@ -338,7 +339,7 @@ public partial class TerrainLodManager : Node3D
         {
             RefreshVisibleMixedLodSeamsIfNeeded();
             RefreshLifecycleRates();
-            _latestProfileSnapshot = BuildProfileSnapshot();
+            RefreshProfileSnapshotIfNeeded();
             return;
         }
 
@@ -370,7 +371,7 @@ public partial class TerrainLodManager : Node3D
         RefreshVisibleMixedLodSeamsIfNeeded();
         RefreshLifecycleRates();
         UpdateInitialLoadState();
-        _latestProfileSnapshot = BuildProfileSnapshot();
+        RefreshProfileSnapshotIfNeeded();
     }
 
     private void RefreshVisibleMixedLodSeamsIfNeeded()
@@ -403,9 +404,35 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
+    private void InvalidateProfileSnapshot()
+    {
+        _profileSnapshotDirty = true;
+    }
+
+    private void RefreshProfileSnapshotIfNeeded(bool force = false)
+    {
+        int telemetryConfigurationVersion = TerrainTelemetry.ConfigurationVersion;
+        double nowSeconds = Time.GetTicksUsec() / 1_000_000.0;
+        if (!force &&
+            _latestProfileSnapshot != null &&
+            !_profileSnapshotDirty &&
+            telemetryConfigurationVersion == _latestProfileTelemetryConfigurationVersion &&
+            nowSeconds < _nextProfileSnapshotRefreshAtSeconds)
+        {
+            return;
+        }
+
+        _currentTimeSeconds = nowSeconds;
+        _latestProfileSnapshot = BuildProfileSnapshot();
+        _latestProfileTelemetryConfigurationVersion = telemetryConfigurationVersion;
+        _nextProfileSnapshotRefreshAtSeconds = nowSeconds + ProfileSnapshotRefreshIntervalSeconds;
+        _profileSnapshotDirty = false;
+    }
+
     public TerrainWorldProfileSnapshot GetProfileSnapshot()
     {
-        return _latestProfileSnapshot ??= BuildProfileSnapshot();
+        RefreshProfileSnapshotIfNeeded();
+        return _latestProfileSnapshot;
     }
 
     public string GetDebugSummary()
@@ -545,7 +572,7 @@ public partial class TerrainLodManager : Node3D
 
         MarkAllVisibleMixedLodSeamsDirty();
         RefreshVisibleMixedLodSeamsIfNeeded();
-        _latestProfileSnapshot = BuildProfileSnapshot();
+        InvalidateProfileSnapshot();
         return true;
     }
 
@@ -646,7 +673,22 @@ public partial class TerrainLodManager : Node3D
             _lastEditOperationPrefix = $"{operation} none";
             RefreshLastEditOperationSummary();
             _lastEditRegionSummary = _lastEditOperationSummary;
-            _latestProfileSnapshot = BuildProfileSnapshot();
+            WriteDeformTrace(
+                operation,
+                changed: false,
+                deformMs: _lastDeformMs,
+                invalidatedPersistedBlockCount: 0,
+                editedBlockCount: 0,
+                estimatedEditedSamples: 0,
+                detailPromotions: 0,
+                visibleBlockCount: 0,
+                visibleFinestBlockCount: 0,
+                requeuedBlockCount: 0,
+                queuedVisibleBlockCount: 0,
+                registrationMs: registrationMs,
+                enqueueMs: 0.0,
+                syncWorkMs: 0.0);
+            InvalidateProfileSnapshot();
             return;
         }
 
@@ -692,7 +734,22 @@ public partial class TerrainLodManager : Node3D
             $"{operation} {mutation.Summary} {invalidation.Summary} persist_invalidate {invalidatedPersistedBlockCount} est_samples {estimatedEditedSamples}";
         RefreshLastEditOperationSummary();
         _lastEditRegionSummary = _lastEditOperationSummary;
-        _latestProfileSnapshot = BuildProfileSnapshot();
+        WriteDeformTrace(
+            operation,
+            changed: true,
+            deformMs: deformMs,
+            invalidatedPersistedBlockCount: invalidatedPersistedBlockCount,
+            editedBlockCount: invalidation.IntersectedBlockCount,
+            estimatedEditedSamples: estimatedEditedSamples,
+            detailPromotions: detailPromotions,
+            visibleBlockCount: invalidation.VisibleBlockCount,
+            visibleFinestBlockCount: invalidation.VisibleFinestBlockCount,
+            requeuedBlockCount: invalidation.RequeuedBlockCount,
+            queuedVisibleBlockCount: invalidation.QueuedVisibleBlockCount,
+            registrationMs: registrationMs,
+            enqueueMs: invalidation.EnqueueMs,
+            syncWorkMs: invalidation.SyncWorkMs);
+        InvalidateProfileSnapshot();
     }
 
     private TerrainEditInvalidationStats InvalidateBlocksForEditMutation(
@@ -945,7 +1002,7 @@ public partial class TerrainLodManager : Node3D
             TerrainChunkLoadSource.ProceduralGeneration);
     }
 
-    private void RecordFieldLoad(TerrainChunkLoadSource source, double workerMs)
+    private void RecordFieldLoad(TerrainBlockId blockId, TerrainChunkLoadSource source, double workerMs)
     {
         switch (source)
         {
@@ -953,11 +1010,17 @@ public partial class TerrainLodManager : Node3D
                 _lastStartupChunkLoadCount++;
                 _lastStartupChunkLoadMs += workerMs;
                 _startupRestoredBlockCount++;
+                WritePersistenceTrace(
+                    "field_load",
+                    $"block={blockId} source=startup_snapshot worker_ms={workerMs:0.000}");
                 break;
             case TerrainChunkLoadSource.PersistedChunk:
                 _lastPersistedChunkLoadCount++;
                 _lastPersistedChunkLoadMs += workerMs;
                 _persistedRestoredBlockCount++;
+                WritePersistenceTrace(
+                    "field_load",
+                    $"block={blockId} source=persisted_block worker_ms={workerMs:0.000}");
                 break;
             case TerrainChunkLoadSource.ProceduralGeneration:
                 _lastGeneratedChunkLoadCount++;
@@ -1014,6 +1077,9 @@ public partial class TerrainLodManager : Node3D
             field,
             GetPersistenceWriteVersion(block.Id));
         _persistenceSaveQueue.Enqueue(new QueuedPersistenceSaveEntry(block.Id, token));
+        WritePersistenceTrace(
+            "save_queued",
+            $"block={block.Id} kind={BuildPersistenceSaveScope(kind)} queue_depth={ComputePersistenceQueueDepth()}");
     }
 
     private static TerrainPersistenceSaveKind MergePersistenceSaveKinds(
@@ -1311,6 +1377,10 @@ public partial class TerrainLodManager : Node3D
             {
                 _startupPromotionWrites++;
             }
+
+            WritePersistenceTrace(
+                "shutdown_save",
+                $"block={saveWork.BlockId} kind={BuildPersistenceSaveScope(saveWork.Kind)} save_ms={(serialized.SerializationMs + writeMs):0.000} serialize_ms={serialized.SerializationMs:0.000}");
         }
     }
 
@@ -2409,6 +2479,9 @@ public partial class TerrainLodManager : Node3D
 
             if (!result.Succeeded)
             {
+                WritePersistenceTrace(
+                    "save_failed",
+                    $"block={result.BlockId} kind={BuildPersistenceSaveScope(result.Kind)} reason=\"{Sanitize(result.FailureMessage)}\"");
                 GD.PushWarning(
                     $"Terrain LOD persistence save failed | block {result.BlockId} | kind {result.Kind} | {result.FailureMessage}");
                 continue;
@@ -2431,6 +2504,9 @@ public partial class TerrainLodManager : Node3D
             }
 
             _lastPersistenceSaveScope = BuildPersistenceSaveScope(result.Kind);
+            WritePersistenceTrace(
+                "save_completed",
+                $"block={result.BlockId} kind={_lastPersistenceSaveScope} save_ms={result.SaveMs:0.000} serialize_ms={result.SerializationMs:0.000} queue_depth={ComputePersistenceQueueDepth()}");
         }
     }
 
@@ -2715,7 +2791,7 @@ public partial class TerrainLodManager : Node3D
             block.SetField(result.Field);
             _lastFieldBuildCount++;
             _lastFieldBuildMs += result.WorkerBuildMs;
-            RecordFieldLoad(result.Source, result.WorkerBuildMs);
+            RecordFieldLoad(block.Id, result.Source, result.WorkerBuildMs);
             QueuePersistenceSaveForLoadedBlock(block, result.Source);
             EnqueueMeshBuildDispatch(block.Id);
         }
@@ -3615,28 +3691,29 @@ public partial class TerrainLodManager : Node3D
 
     private void WriteMixedLodSeamDiagnosticsLog(TerrainBlockId blockId, TerrainSeamBuildResult seamBuild)
     {
-        if (seamBuild.FaceDiagnostics == null || seamBuild.FaceDiagnostics.Length == 0 || !EnsureTransitionLogWriter())
+        if (seamBuild.FaceDiagnostics == null ||
+            seamBuild.FaceDiagnostics.Length == 0 ||
+            !TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.LodTransition))
         {
             return;
         }
 
-        lock (_transitionLogLock)
-        {
-            _transitionLogWriter!.WriteLine(
-                $"{TransitionLogPrefix} event=seam_build block={blockId} requested={TerrainSeamMesher.DescribeFaces(seamBuild.RequestedFaces)} " +
-                $"generated={TerrainSeamMesher.DescribeFaces(seamBuild.GeneratedFaces)} strategy={seamBuild.Strategy} " +
-                $"transition_faces={seamBuild.TransitionFaceCount} skirt_faces={seamBuild.SkirtFaceCount} skipped_faces={seamBuild.ExplicitSkipFaceCount} suppressed_faces={seamBuild.SuppressedFaceCount} " +
-                $"triangles={seamBuild.Mesh.TotalTriangleCount}");
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.LodTransition,
+            $"{LodTransitionTracePrefix} event=seam_build block={blockId} requested={TerrainSeamMesher.DescribeFaces(seamBuild.RequestedFaces)} " +
+            $"generated={TerrainSeamMesher.DescribeFaces(seamBuild.GeneratedFaces)} strategy={seamBuild.Strategy} " +
+            $"transition_faces={seamBuild.TransitionFaceCount} skirt_faces={seamBuild.SkirtFaceCount} skipped_faces={seamBuild.ExplicitSkipFaceCount} suppressed_faces={seamBuild.SuppressedFaceCount} " +
+            $"triangles={seamBuild.Mesh.TotalTriangleCount}");
 
-            foreach (TerrainSeamFaceDiagnostic diagnostic in seamBuild.FaceDiagnostics)
-            {
-                string neighborId = diagnostic.TransitionNeighborId?.ToString() ?? "none";
-                _transitionLogWriter.WriteLine(
-                    $"{TransitionLogPrefix} event=seam_face block={blockId} face={TerrainSeamMesher.DescribeFaces(diagnostic.Face)} " +
-                    $"requested={FormatBool(diagnostic.Requested)} suppressed={FormatBool(diagnostic.Suppressed)} transition_neighbor={neighborId} " +
-                    $"transition_attempted={FormatBool(diagnostic.TransitionAttempted)} transition_succeeded={FormatBool(diagnostic.TransitionSucceeded)} " +
-                    $"skirt_fallback={FormatBool(diagnostic.SkirtFallbackEnabled)} final_mode={TerrainSeamMesher.GetDisplayName(diagnostic.FinalMode)}");
-            }
+        foreach (TerrainSeamFaceDiagnostic diagnostic in seamBuild.FaceDiagnostics)
+        {
+            string neighborId = diagnostic.TransitionNeighborId?.ToString() ?? "none";
+            TerrainTelemetry.AppendProbeLine(
+                TerrainTelemetryProbe.LodTransition,
+                $"{LodTransitionTracePrefix} event=seam_face block={blockId} face={TerrainSeamMesher.DescribeFaces(diagnostic.Face)} " +
+                $"requested={FormatBool(diagnostic.Requested)} suppressed={FormatBool(diagnostic.Suppressed)} transition_neighbor={neighborId} " +
+                $"transition_attempted={FormatBool(diagnostic.TransitionAttempted)} transition_succeeded={FormatBool(diagnostic.TransitionSucceeded)} " +
+                $"skirt_fallback={FormatBool(diagnostic.SkirtFallbackEnabled)} final_mode={TerrainSeamMesher.GetDisplayName(diagnostic.FinalMode)}");
         }
     }
 
@@ -5160,13 +5237,13 @@ public partial class TerrainLodManager : Node3D
         transition.LastSuccessorStatesSummary = coverage.SuccessorStatesSummary;
         _lastSupersededTransitionSummary = BuildSupersededTransitionSummary(transition);
 
-        if (!EnsureTransitionLogWriter())
+        if (!TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.LodTransition))
         {
             return;
         }
 
         string line =
-            $"{TransitionLogPrefix} event={eventName} out={transition.OutgoingBlockId} out_lod={transition.OutgoingBlockId.Lod} " +
+            $"{LodTransitionTracePrefix} event={eventName} out={transition.OutgoingBlockId} out_lod={transition.OutgoingBlockId.Lod} " +
             $"out_state={(state.HasValue ? SanitizeState(state.Value) : "missing")} out_has_visuals={FormatBool(outgoingHasVisuals)} " +
             $"succ={coverage.SuccessorIdsSummary} succ_lods={coverage.SuccessorLodsSummary} succ_states={coverage.SuccessorStatesSummary} " +
             $"visual_ready={FormatBool(coverage.VisualCoverageReady)} physics_ready={FormatBool(coverage.PhysicsCoverageReady)} reason={reason} " +
@@ -5178,79 +5255,7 @@ public partial class TerrainLodManager : Node3D
             $"removed_to_hide_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.HiddenAtSeconds)} " +
             $"removed_to_release_ms={FormatTimestamp(transition.RemovedAtSeconds, transition.ReleasedAtSeconds)} " +
             $"age_ms={ElapsedMilliseconds(transition.RemovedAtSeconds, _currentTimeSeconds).ToString("0.000", CultureInfo.InvariantCulture)}";
-        lock (_transitionLogLock)
-        {
-            _transitionLogWriter!.WriteLine(line);
-        }
-    }
-
-    private bool EnsureTransitionLogWriter()
-    {
-        if (!OS.IsDebugBuild())
-        {
-            return false;
-        }
-
-        if (_transitionLogWriter != null)
-        {
-            return true;
-        }
-
-        try
-        {
-            string rootPath = ProjectSettings.GlobalizePath("user://profiling");
-            Directory.CreateDirectory(rootPath);
-            string logPath = ProjectSettings.GlobalizePath(TransitionLogRelativePath);
-            _transitionLogWriter = new StreamWriter(
-                new FileStream(logPath, FileMode.Create, System.IO.FileAccess.Write, FileShare.ReadWrite),
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
-            {
-                AutoFlush = true
-            };
-            lock (_transitionLogLock)
-            {
-                _transitionLogWriter.WriteLine(
-                    $"{TransitionLogPrefix} event=session_begin utc={DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)} path=\"{logPath}\"");
-            }
-
-            _warnedTransitionLogFailure = false;
-            return true;
-        }
-        catch (Exception exception)
-        {
-            _transitionLogWriter?.Dispose();
-            _transitionLogWriter = null;
-            if (!_warnedTransitionLogFailure)
-            {
-                GD.PushWarning(
-                    $"TerrainLodManager could not open transition telemetry log at {TransitionLogRelativePath}: {exception.Message}");
-                _warnedTransitionLogFailure = true;
-            }
-
-            return false;
-        }
-    }
-
-    private void CloseTransitionLogWriter()
-    {
-        if (_transitionLogWriter == null)
-        {
-            return;
-        }
-
-        try
-        {
-            lock (_transitionLogLock)
-            {
-                _transitionLogWriter.WriteLine(
-                    $"{TransitionLogPrefix} event=session_end utc={DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)}");
-                _transitionLogWriter.Dispose();
-            }
-        }
-        finally
-        {
-            _transitionLogWriter = null;
-        }
+        TerrainTelemetry.AppendProbeLine(TerrainTelemetryProbe.LodTransition, line);
     }
 
     private static double ElapsedMilliseconds(double startedAtSeconds, double finishedAtSeconds)
@@ -5286,6 +5291,47 @@ public partial class TerrainLodManager : Node3D
             : 0.0;
     }
 
+    private void WriteDeformTrace(
+        string operation,
+        bool changed,
+        double deformMs,
+        int invalidatedPersistedBlockCount,
+        int editedBlockCount,
+        int estimatedEditedSamples,
+        int detailPromotions,
+        int visibleBlockCount,
+        int visibleFinestBlockCount,
+        int requeuedBlockCount,
+        int queuedVisibleBlockCount,
+        double registrationMs,
+        double enqueueMs,
+        double syncWorkMs)
+    {
+        if (!TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.Deform))
+        {
+            return;
+        }
+
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.Deform,
+            $"{DeformTracePrefix} event=apply op={operation} changed={FormatBool(changed)} ms={deformMs:0.000} " +
+            $"persist_invalidated={invalidatedPersistedBlockCount} blocks={editedBlockCount} samples={estimatedEditedSamples} detail_promotions={detailPromotions} " +
+            $"visible={visibleBlockCount}/{visibleFinestBlockCount} requeued={requeuedBlockCount} queued_visible={queuedVisibleBlockCount} " +
+            $"reg_ms={registrationMs:0.000} enqueue_ms={enqueueMs:0.000} sync_ms={syncWorkMs:0.000} summary=\"{Sanitize(_lastEditOperationSummary)}\"");
+    }
+
+    private void WritePersistenceTrace(string eventName, string detail)
+    {
+        if (!TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.Persistence))
+        {
+            return;
+        }
+
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.Persistence,
+            $"{PersistenceTracePrefix} event={eventName} {detail}");
+    }
+
     private static string FormatTimestamp(double? startedAtSeconds, double? finishedAtSeconds)
     {
         return startedAtSeconds.HasValue && finishedAtSeconds.HasValue
@@ -5301,6 +5347,11 @@ public partial class TerrainLodManager : Node3D
     private static string FormatBool(bool value)
     {
         return value ? "true" : "false";
+    }
+
+    private static string Sanitize(string value)
+    {
+        return (value ?? string.Empty).Replace('"', '\'');
     }
 
     private static string SanitizeState(TerrainBlockState state)
@@ -5323,6 +5374,7 @@ public partial class TerrainLodManager : Node3D
         int meshReady = 0;
         int visible = 0;
         int releasable = 0;
+        TerrainTelemetryModeSnapshot telemetryMode = TerrainTelemetry.GetModeSnapshot();
         SupersededTransitionProfileSummary supersededSummary = BuildSupersededTransitionProfileSummary();
         MixedLodSeamProfileSummary seamSummary = BuildMixedLodSeamProfileSummary();
 
@@ -5366,6 +5418,14 @@ public partial class TerrainLodManager : Node3D
 
         return new TerrainWorldProfileSnapshot
         {
+            TelemetryMode = telemetryMode.ModeLabel,
+            CaptureSessionActive = telemetryMode.CaptureSessionActive,
+            CaptureIntervalSeconds = telemetryMode.CaptureIntervalSeconds,
+            ExpensiveMetricsEnabled = telemetryMode.ExpensiveMetricsEnabled,
+            LodTransitionTraceEnabled = telemetryMode.LodTransitionProbeEnabled,
+            GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
+            DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
+            PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
             TerrainStatsEnabled = false,
             ActiveChunkCount = visible,
             ResidentChunkCount = _blocks.Count,
@@ -6158,17 +6218,15 @@ public partial class TerrainLodManager : Node3D
         IReadOnlyList<TerrainBlockId> batchBlockIds,
         int committedCount)
     {
-        if (committedCount <= 1 || !EnsureTransitionLogWriter())
+        if (committedCount <= 1 || !TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.LodTransition))
         {
             return;
         }
 
-        lock (_transitionLogLock)
-        {
-            _transitionLogWriter!.WriteLine(
-                $"{TransitionLogPrefix} event=promotion_batch parent={outgoingParent} count={committedCount} " +
-                $"successors={string.Join("|", batchBlockIds)}");
-        }
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.LodTransition,
+            $"{LodTransitionTracePrefix} event=promotion_batch parent={outgoingParent} count={committedCount} " +
+            $"successors={string.Join("|", batchBlockIds)}");
     }
 
     private readonly record struct SupersededTransitionProfileSummary(

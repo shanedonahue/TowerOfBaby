@@ -1,6 +1,7 @@
 using Godot;
 using System;
 using System.Text;
+using TowerOfBaby.Debugging;
 using TowerOfBaby.Entities.Motion;
 using TowerOfBaby.Terrain;
 
@@ -24,6 +25,7 @@ public partial class FpsOverlay : CanvasLayer
     private OverlayGraphControl _graphControl = null!;
     private Label _detailLabel = null!;
     private TerrainWorld _terrainWorld = null!;
+    private TerrainGrassSystem _terrainGrassSystem = null!;
     private ILocomotionTelemetrySource _locomotionTelemetrySource = null!;
     private float[] _frameTimesMs = Array.Empty<float>();
     private float[] _fpsSamples = Array.Empty<float>();
@@ -60,10 +62,10 @@ public partial class FpsOverlay : CanvasLayer
         BuildUi();
 
         _terrainWorld = GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("terrain_world") as TerrainWorld;
-        _locomotionTelemetrySource = ResolveLocomotionTelemetrySource();
+        _terrainGrassSystem = _terrainWorld?.GetNodeOrNull<TerrainGrassSystem>("TerrainGrassSystem");
 
         RefreshMemoryStats();
-        RefreshTelemetry(0.0, forceTextRefresh: true);
+        RefreshTelemetry(0.0, forceTextRefresh: _isExpanded);
         UpdateOverlayState(avgFrameMs: 0.0f, worstFrameMs: 0.0f);
     }
 
@@ -90,7 +92,10 @@ public partial class FpsOverlay : CanvasLayer
         _currentFps = FrameMsToFps(_averageFrameMs);
         UpdateLatestFpsSample(_currentFps);
 
-        if (_telemetryRefreshAccumulator >= TelemetryRefreshIntervalSeconds)
+        double telemetryRefreshInterval = _isExpanded
+            ? TelemetryRefreshIntervalSeconds
+            : Mathf.Max(1.0f, (float)(TelemetryRefreshIntervalSeconds * 4.0));
+        if (_telemetryRefreshAccumulator >= telemetryRefreshInterval)
         {
             double telemetryElapsed = _telemetryRefreshAccumulator;
             _telemetryRefreshAccumulator = 0.0;
@@ -112,6 +117,11 @@ public partial class FpsOverlay : CanvasLayer
 
         _isExpanded = !_isExpanded;
         _detailLabel.Visible = _isExpanded;
+        if (_isExpanded)
+        {
+            ResetChurnBaseline();
+        }
+
         RefreshTelemetry(0.0, forceTextRefresh: true);
         UpdateOverlayState(_averageFrameMs, _worstFrameMs);
         GetViewport().SetInputAsHandled();
@@ -233,16 +243,32 @@ public partial class FpsOverlay : CanvasLayer
     private void RefreshTelemetry(double elapsedSeconds, bool forceTextRefresh)
     {
         _terrainWorld ??= GetNodeOrNull<TerrainWorld>(TerrainWorldPath) ?? GetTree().GetFirstNodeInGroup("terrain_world") as TerrainWorld;
-        _locomotionTelemetrySource ??= ResolveLocomotionTelemetrySource();
+        _terrainGrassSystem ??= _terrainWorld?.GetNodeOrNull<TerrainGrassSystem>("TerrainGrassSystem");
 
         _latestTerrainSnapshot = _terrainWorld?.GetProfileSnapshot();
-        _latestLocomotionSnapshot = _locomotionTelemetrySource?.GetLocomotionTelemetrySnapshot();
         UpdateChurn(_latestTerrainSnapshot, elapsedSeconds);
 
-        if (_isExpanded || forceTextRefresh)
+        if (!_isExpanded && !forceTextRefresh)
         {
-            _detailLabel.Text = BuildExpandedText(_latestTerrainSnapshot, _latestLocomotionSnapshot);
+            return;
         }
+
+        _locomotionTelemetrySource ??= ResolveLocomotionTelemetrySource();
+        _latestLocomotionSnapshot = _locomotionTelemetrySource?.GetLocomotionTelemetrySnapshot();
+        string nextText = BuildExpandedText(_latestTerrainSnapshot, _latestLocomotionSnapshot);
+        if (!string.Equals(_detailLabel.Text, nextText, StringComparison.Ordinal))
+        {
+            _detailLabel.Text = nextText;
+        }
+    }
+
+    private void ResetChurnBaseline()
+    {
+        _hasChurnBaseline = false;
+        _churnAccumulatorSeconds = 0.0;
+        _churnHitsDelta = 0;
+        _churnMissesDelta = 0;
+        _churnEvictionsDelta = 0;
     }
 
     private void UpdateChurn(TerrainWorldProfileSnapshot snapshot, double elapsedSeconds)
@@ -303,17 +329,21 @@ public partial class FpsOverlay : CanvasLayer
     private string BuildExpandedText(TerrainWorldProfileSnapshot snapshot, LocomotionTelemetrySnapshot locomotionSnapshot)
     {
         _detailBuilder.Clear();
-        TerrainGrassSystem grassSystem = _terrainWorld?.GetNodeOrNull<TerrainGrassSystem>("TerrainGrassSystem");
         _detailBuilder.AppendLine(
             $"Perf {_currentFps:0} fps  avg {_averageFrameMs:0.00} ms  worst {_worstFrameMs:0.00} ms  up {_uptimeSeconds:0.0}s");
         _detailBuilder.AppendLine($"Memory RSS {_workingSetMiB:0} MiB  GC {_gcMiB:0} MiB");
 
         if (snapshot == null)
         {
+            TerrainTelemetryModeSnapshot telemetryMode = TerrainTelemetry.GetModeSnapshot();
+            _detailBuilder.AppendLine(
+                $"Telemetry {telemetryMode.ModeLabel}  probes {telemetryMode.ProbeSummary}  capture {(telemetryMode.CaptureSessionActive ? "on" : "off")} @ {telemetryMode.CaptureIntervalSeconds:0.0}s  expensive {(telemetryMode.ExpensiveMetricsEnabled ? "on" : "off")}");
             _detailBuilder.AppendLine("Terrain unavailable");
         }
         else if (snapshot.SearchThrottleState == "retired")
         {
+            _detailBuilder.AppendLine(
+                $"Telemetry {snapshot.TelemetryMode}  probes {BuildProbeSummary(snapshot)}  capture {(snapshot.CaptureSessionActive ? "on" : "off")} @ {snapshot.CaptureIntervalSeconds:0.0}s  expensive {(snapshot.ExpensiveMetricsEnabled ? "on" : "off")}");
             _detailBuilder.AppendLine("Terrain runtime retired from active gameplay");
             _detailBuilder.AppendLine($"Runtime {TrimForOverlay(snapshot.MeshBackendName, 84)}");
             _detailBuilder.AppendLine($"Preserved {TrimForOverlay(snapshot.TrackedBiomeSummary, 84)}");
@@ -323,6 +353,8 @@ public partial class FpsOverlay : CanvasLayer
         }
         else if (snapshot.SearchThrottleState == "lod_blocks")
         {
+            _detailBuilder.AppendLine(
+                $"Telemetry {snapshot.TelemetryMode}  probes {BuildProbeSummary(snapshot)}  capture {(snapshot.CaptureSessionActive ? "on" : "off")} @ {snapshot.CaptureIntervalSeconds:0.0}s  expensive {(snapshot.ExpensiveMetricsEnabled ? "on" : "off")}");
             _detailBuilder.AppendLine(
                 $"Terrain init {snapshot.InitialLoadProgress * 100.0f:0}%  desired {snapshot.DesiredChunkCount}  visible {snapshot.ActiveChunkCount}  release {snapshot.ToReleaseCount}");
             _detailBuilder.AppendLine(
@@ -349,13 +381,15 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine($"Handoff {TrimForOverlay(snapshot.LastRefinementHandoffSummary, 84)}");
             _detailBuilder.AppendLine($"Latest {TrimForOverlay(snapshot.LastChunkSourceSummary, 84)}");
             _detailBuilder.AppendLine($"Release {TrimForOverlay(snapshot.LastReleasedChunkSummary, 84)}");
-            if (grassSystem != null)
+            if (_terrainGrassSystem != null)
             {
-                _detailBuilder.AppendLine($"Grass {TrimForOverlay(grassSystem.GetDebugSummary(), 84)}");
+                _detailBuilder.AppendLine($"Grass {TrimForOverlay(_terrainGrassSystem.GetDebugSummary(), 84)}");
             }
         }
         else
         {
+            _detailBuilder.AppendLine(
+                $"Telemetry {snapshot.TelemetryMode}  probes {BuildProbeSummary(snapshot)}  capture {(snapshot.CaptureSessionActive ? "on" : "off")} @ {snapshot.CaptureIntervalSeconds:0.0}s  expensive {(snapshot.ExpensiveMetricsEnabled ? "on" : "off")}");
             _detailBuilder.AppendLine(
                 $"Terrain init {snapshot.InitialLoadProgress * 100.0f:0}%  hit {ComputeHitRate(snapshot.CacheHits, snapshot.CacheMisses):0}%  churn h/m/e {_churnHitsDelta}/{_churnMissesDelta}/{_churnEvictionsDelta}");
             _detailBuilder.AppendLine(
@@ -412,9 +446,9 @@ public partial class FpsOverlay : CanvasLayer
             _detailBuilder.AppendLine($"Selected {TrimForOverlay(snapshot.LastSelectedChunkSummary)}");
             _detailBuilder.AppendLine($"Released {TrimForOverlay(snapshot.LastReleasedChunkSummary)}");
             _detailBuilder.AppendLine($"Source {TrimForOverlay(snapshot.LastChunkSourceSummary)}");
-            if (grassSystem != null)
+            if (_terrainGrassSystem != null)
             {
-                _detailBuilder.AppendLine($"Grass {TrimForOverlay(grassSystem.GetDebugSummary())}");
+                _detailBuilder.AppendLine($"Grass {TrimForOverlay(_terrainGrassSystem.GetDebugSummary())}");
             }
         }
 
@@ -495,6 +529,42 @@ public partial class FpsOverlay : CanvasLayer
         }
 
         return total / count;
+    }
+
+    private static string BuildProbeSummary(TerrainWorldProfileSnapshot snapshot)
+    {
+        StringBuilder builder = new();
+        if (snapshot.LodTransitionTraceEnabled)
+        {
+            builder.Append("lod_transition");
+        }
+
+        if (snapshot.GrassTraceEnabled)
+        {
+            AppendProbeName(builder, "grass");
+        }
+
+        if (snapshot.DeformTraceEnabled)
+        {
+            AppendProbeName(builder, "deform");
+        }
+
+        if (snapshot.PersistenceTraceEnabled)
+        {
+            AppendProbeName(builder, "persistence");
+        }
+
+        return builder.Length == 0 ? "none" : builder.ToString();
+    }
+
+    private static void AppendProbeName(StringBuilder builder, string probeName)
+    {
+        if (builder.Length > 0)
+        {
+            builder.Append(", ");
+        }
+
+        builder.Append(probeName);
     }
 
     private ILocomotionTelemetrySource ResolveLocomotionTelemetrySource()

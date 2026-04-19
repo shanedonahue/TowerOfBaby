@@ -7,6 +7,8 @@ namespace TowerOfBaby.Scene;
 
 public partial class GameController : Node3D
 {
+    private const Key TelemetryCaptureToggleKey = Key.F7;
+
     public enum PlayerStartMode
     {
         ResumeSerializedLocation = 0,
@@ -27,6 +29,14 @@ public partial class GameController : Node3D
     [Export] public bool ClearProfilingLogsOnReady;
     [Export] public bool ClearStartupCacheOnReady;
     [Export] public bool ClearAllTerrainCacheOnReady;
+    [ExportGroup("Debug Telemetry")]
+    [Export] public bool EnableTelemetryCaptureOnReady;
+    [Export(PropertyHint.Range, "0.1,30,0.1")] public double TelemetryCaptureIntervalSeconds = 1.0;
+    [Export] public bool EnableTelemetryExpensiveMetrics;
+    [Export] public bool EnableTerrainLodTransitionProbe;
+    [Export] public bool EnableGrassTraceProbe;
+    [Export] public bool EnableDeformTraceProbe;
+    [Export] public bool EnablePersistenceTraceProbe;
 
     private TerrainWorld _terrainWorld = null!;
     private Node3D _player = null!;
@@ -36,7 +46,7 @@ public partial class GameController : Node3D
     private Label _loadingLabel = null!;
     private CanvasLayer _terrainDebugOverlay = null!;
     private Label _terrainDebugLabel = null!;
-    private PerformanceRunLogger _performanceLogger = null!;
+    private TelemetryCaptureSession _telemetryCaptureSession = null!;
     private Transform3D _playerSpawnTransform;
 
     public override void _Ready()
@@ -69,14 +79,8 @@ public partial class GameController : Node3D
         };
         AddChild(_brushPreview);
 
-        // _performanceLogger = new PerformanceRunLogger
-        // {
-        //     Name = "PerformanceRunLogger",
-        //     TerrainWorldPath = TerrainWorldPath
-        // };
-        // AddChild(_performanceLogger);
-
         ApplyDebugCacheClears();
+        ConfigureTelemetry();
 
         BuildLoadingOverlay();
         BuildTerrainDebugOverlay();
@@ -93,6 +97,12 @@ public partial class GameController : Node3D
         }
     }
 
+    public override void _ExitTree()
+    {
+        _telemetryCaptureSession?.StopCapture("game_controller_exit");
+        TerrainTelemetry.FlushProbeArtifacts();
+    }
+
     public override void _Process(double delta)
     {
         UpdateLoadingOverlay();
@@ -101,6 +111,11 @@ public partial class GameController : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (TryHandleTelemetryCaptureToggle(@event))
+        {
+            return;
+        }
+
         if (TryHandleTerrainDebugViewSelector(@event))
         {
             return;
@@ -367,8 +382,10 @@ public partial class GameController : Node3D
         }
 
         TerrainVisualDebugMode debugView = _terrainWorld.GetTerrainDebugView();
+        TerrainTelemetryModeSnapshot telemetryMode = TerrainTelemetry.GetModeSnapshot();
         _terrainDebugLabel.Text =
-            $"Terrain View: {debugView.GetDisplayName()}  F6 next  Shift+F6 prev";
+            $"Terrain View: {debugView.GetDisplayName()}  F6 next  Shift+F6 prev\n" +
+            $"Telemetry: {telemetryMode.ModeLabel}  probes {telemetryMode.ProbeSummary}  F7 capture toggle";
     }
 
     private void HandleInitialLoadCompleted()
@@ -396,6 +413,32 @@ public partial class GameController : Node3D
         return true;
     }
 
+    private bool TryHandleTelemetryCaptureToggle(InputEvent @event)
+    {
+        if (!OS.IsDebugBuild() ||
+            @event is not InputEventKey keyEvent ||
+            !keyEvent.Pressed ||
+            keyEvent.Echo ||
+            keyEvent.Keycode != TelemetryCaptureToggleKey)
+        {
+            return false;
+        }
+
+        EnsureTelemetryCaptureSession();
+        if (_telemetryCaptureSession.IsCapturing)
+        {
+            _telemetryCaptureSession.StopCapture("hotkey");
+        }
+        else
+        {
+            _telemetryCaptureSession.StartCapture("hotkey");
+        }
+
+        UpdateTerrainDebugOverlay();
+        GetViewport().SetInputAsHandled();
+        return true;
+    }
+
     private void SetPlayerLoadingState(bool active)
     {
         if (_player == null)
@@ -415,6 +458,42 @@ public partial class GameController : Node3D
         }
 
         _player.GlobalTransform = _playerSpawnTransform;
+    }
+
+    private void ConfigureTelemetry()
+    {
+        TerrainTelemetry.Configure(new TerrainTelemetryBootstrap(
+            EnableTelemetryCaptureOnReady,
+            TelemetryCaptureIntervalSeconds,
+            EnableTelemetryExpensiveMetrics,
+            EnableTerrainLodTransitionProbe,
+            EnableGrassTraceProbe,
+            EnableDeformTraceProbe,
+            EnablePersistenceTraceProbe));
+
+        if (!TerrainTelemetry.ShouldAutoStartCapture)
+        {
+            return;
+        }
+
+        EnsureTelemetryCaptureSession();
+        _telemetryCaptureSession.StartCapture("startup");
+    }
+
+    private void EnsureTelemetryCaptureSession()
+    {
+        if (_telemetryCaptureSession != null && IsInstanceValid(_telemetryCaptureSession))
+        {
+            return;
+        }
+
+        _telemetryCaptureSession = new TelemetryCaptureSession
+        {
+            Name = "TelemetryCaptureSession",
+            TerrainWorldPath = TerrainWorldPath,
+            CaptureIntervalSeconds = TerrainTelemetry.CaptureIntervalSeconds
+        };
+        AddChild(_telemetryCaptureSession);
     }
 
     private void ApplyDebugCacheClears()
@@ -473,7 +552,9 @@ public partial class GameController : Node3D
                 break;
             }
 
-            if (directory.CurrentIsDir() || !fileName.EndsWith(".log"))
+            if (directory.CurrentIsDir() ||
+                (!fileName.EndsWith(".log", System.StringComparison.OrdinalIgnoreCase) &&
+                 !fileName.EndsWith(".json", System.StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
