@@ -69,12 +69,12 @@ public partial class GameController : Node3D
         };
         AddChild(_brushPreview);
 
-        _performanceLogger = new PerformanceRunLogger
-        {
-            Name = "PerformanceRunLogger",
-            TerrainWorldPath = TerrainWorldPath
-        };
-        AddChild(_performanceLogger);
+        // _performanceLogger = new PerformanceRunLogger
+        // {
+        //     Name = "PerformanceRunLogger",
+        //     TerrainWorldPath = TerrainWorldPath
+        // };
+        // AddChild(_performanceLogger);
 
         ApplyDebugCacheClears();
 

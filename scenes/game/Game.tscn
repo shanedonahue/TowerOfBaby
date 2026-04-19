@@ -7,10 +7,10 @@
 [ext_resource type="Script" uid="uid://sk18b0hqnatk" path="res://scripts/world/OutdoorLookController.cs" id="6_look"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.23, 0.55, 0.9, 1)
-sky_horizon_color = Color(0.78, 0.9, 1, 1)
-ground_bottom_color = Color(0.21, 0.24, 0.28, 1)
-ground_horizon_color = Color(0.48, 0.57, 0.62, 1)
+sky_top_color = Color(0.18, 0.57, 0.96, 1)
+sky_horizon_color = Color(0.82, 0.93, 1, 1)
+ground_bottom_color = Color(0.23, 0.27, 0.31, 1)
+ground_horizon_color = Color(0.52, 0.61, 0.66, 1)
 sun_angle_max = 18.0
 
 [sub_resource type="Sky" id="Sky_sky"]
@@ -23,19 +23,20 @@ ambient_light_source = 3
 ambient_light_sky_contribution = 0.36
 reflected_light_source = 2
 tonemap_mode = 2
-tonemap_exposure = 0.92
+tonemap_exposure = 0.98
 fog_mode = 1
 fog_sun_scatter = 0.05
-fog_density = 0.032
-fog_aerial_perspective = 0.68
-fog_sky_affect = 0.78
-fog_depth_curve = 1.35
-fog_depth_begin = 72.0
-fog_depth_end = 340.0
+fog_density = 0.026
+fog_aerial_perspective = 0.62
+fog_sky_affect = 0.72
+fog_depth_curve = 1.08
+fog_depth_begin = 95.0
+fog_depth_end = 360.0
 
 [node name="Game" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")
 TerrainWorldPath = NodePath("TerrainWorld")
+EnableTerrainDebugViewSelector = false
 
 [node name="Player" parent="." unique_id=222714919 instance=ExtResource("3_humanoid")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)
@@ -48,9 +49,9 @@ environment = SubResource("Environment_main")
 
 [node name="SunLight" type="DirectionalLight3D" parent="." unique_id=126458690]
 transform = Transform3D(0.82903755, -0.41556132, 0.37417302, 0, 0.66913056, 0.7431448, -0.55919284, -0.61609507, 0.55473435, 0, 35, 0)
-light_color = Color(1, 0.95, 0.84, 1)
+light_color = Color(1, 0.96, 0.86, 1)
 light_energy = 1.35
-light_indirect_energy = 0.1
+light_indirect_energy = 0.11
 shadow_enabled = true
 
 [node name="OutdoorLookController" type="Node" parent="." unique_id=191334561]
