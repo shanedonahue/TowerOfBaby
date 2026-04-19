@@ -47,6 +47,9 @@ public partial class TerrainLodManager : Node3D
     private const int MaxCollisionBuildsPerFrame = 16;
     private const int MaxReleasesPerFrame = 32;
     private const int MaxCoherentPromotionBatchSuccessors = 8;
+    private const int MaxDisplayedRefreshWorkerBurstJobs = 2;
+    private const int MaxDisplayedRefreshCommitBurstPerFrame = 6;
+    private const int DisplayedRefreshFollowThroughPasses = 2;
     private static readonly (TerrainSeamFace Face, Vector3I Offset)[] SeamNeighborDirections =
     {
         (TerrainSeamFace.NegativeX, new Vector3I(-1, 0, 0)),
@@ -120,7 +123,9 @@ public partial class TerrainLodManager : Node3D
     private readonly Queue<double> _recentReleaseTimes = new();
     private readonly Queue<double> _recentDesiredSetChangeTimes = new();
     private readonly ConcurrentQueue<CompletedFieldBuildResult> _completedFieldBuildResults = new();
+    private readonly ConcurrentQueue<CompletedFieldBuildResult> _completedDisplayedRefreshFieldBuildResults = new();
     private readonly ConcurrentQueue<CompletedMeshBuildResult> _completedMeshBuildResults = new();
+    private readonly ConcurrentQueue<CompletedMeshBuildResult> _completedDisplayedRefreshMeshBuildResults = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _createDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _fieldBuildDispatcherQueue = new();
     private readonly PriorityQueue<QueuedBlockDispatchEntry, BlockDispatchPriority> _meshBuildDispatcherQueue = new();
@@ -1147,7 +1152,15 @@ public partial class TerrainLodManager : Node3D
         {
         }
 
+        while (_completedDisplayedRefreshFieldBuildResults.TryDequeue(out _))
+        {
+        }
+
         while (_completedMeshBuildResults.TryDequeue(out _))
+        {
+        }
+
+        while (_completedDisplayedRefreshMeshBuildResults.TryDequeue(out _))
         {
         }
     }
@@ -1985,6 +1998,7 @@ public partial class TerrainLodManager : Node3D
         int configured = IsStartupBoostActive()
             ? Mathf.Max(FieldWorkerJobs, StartupFieldWorkerJobs)
             : FieldWorkerJobs;
+        configured += Mathf.Min(MaxDisplayedRefreshWorkerBurstJobs, CountPendingDisplayedRefreshDispatches(_fieldBuildDispatchTokens));
         return Mathf.Clamp(configured, 1, MaxFieldWorkerJobs);
     }
 
@@ -1993,6 +2007,7 @@ public partial class TerrainLodManager : Node3D
         int configured = IsStartupBoostActive()
             ? Mathf.Max(MeshWorkerJobs, StartupMeshWorkerJobs)
             : MeshWorkerJobs;
+        configured += Mathf.Min(MaxDisplayedRefreshWorkerBurstJobs, CountPendingDisplayedRefreshDispatches(_meshBuildDispatchTokens));
         return Mathf.Clamp(configured, 1, MaxMeshWorkerJobs);
     }
 
@@ -2017,6 +2032,7 @@ public partial class TerrainLodManager : Node3D
         int configured = IsStartupBoostActive()
             ? Mathf.Max(MeshCommitsPerFrame, StartupMeshCommitsPerFrame)
             : MeshCommitsPerFrame;
+        configured += Mathf.Min(MaxDisplayedRefreshCommitBurstPerFrame, CountPendingDisplayedRefreshDispatches(_commitDispatchTokens));
         return Mathf.Clamp(configured, 1, MaxMeshCommitsPerFrame);
     }
 
@@ -2047,6 +2063,7 @@ public partial class TerrainLodManager : Node3D
         StartMeshBuildWorkers();
         ApplyCompletedMeshBuildResults();
         ProcessMeshCommitDispatch();
+        ProcessDisplayedRefreshFollowThroughPasses();
         RefreshCollisionCoverage();
         DispatchPendingCollisionRefreshes();
         ProcessCollisionDispatch();
@@ -2143,7 +2160,7 @@ public partial class TerrainLodManager : Node3D
                         return;
                     }
 
-                    _completedFieldBuildResults.Enqueue(
+                    EnqueueCompletedFieldBuildResult(
                         new CompletedFieldBuildResult(
                             blockId,
                             instanceVersion,
@@ -2163,7 +2180,7 @@ public partial class TerrainLodManager : Node3D
                         return;
                     }
 
-                    _completedFieldBuildResults.Enqueue(
+                    EnqueueCompletedFieldBuildResult(
                         new CompletedFieldBuildResult(
                             blockId,
                             instanceVersion,
@@ -2186,6 +2203,12 @@ public partial class TerrainLodManager : Node3D
 
     private void ApplyCompletedFieldBuildResults()
     {
+        ApplyCompletedDisplayedRefreshFieldBuildResults();
+        ApplyCompletedRequestedFieldBuildResults();
+    }
+
+    private void ApplyCompletedRequestedFieldBuildResults()
+    {
         int applyBudget = GetCurrentFieldResultApplyBudget();
         while (_completedFieldBuildResults.TryPeek(out CompletedFieldBuildResult nextResult))
         {
@@ -2207,27 +2230,36 @@ public partial class TerrainLodManager : Node3D
             }
 
             block.ClearFieldBuildRunning(result.Revision);
-            if (result.BuildPurpose == TerrainBlockBuildPurpose.RequestedContent)
+            if (!block.Desired || block.State != TerrainBlockState.Requested)
             {
-                if (!block.Desired || block.State != TerrainBlockState.Requested)
-                {
-                    continue;
-                }
-
-                if (!result.Succeeded || result.Field == null)
-                {
-                    EnqueueFieldBuildDispatch(block.Id);
-                    continue;
-                }
-
-                block.SetField(result.Field);
-                _lastFieldBuildCount++;
-                _lastFieldBuildMs += result.WorkerBuildMs;
-                RecordFieldLoad(result.Source, result.WorkerBuildMs);
-                EnqueueMeshBuildDispatch(block.Id);
                 continue;
             }
 
+            if (!result.Succeeded || result.Field == null)
+            {
+                EnqueueFieldBuildDispatch(block.Id);
+                continue;
+            }
+
+            block.SetField(result.Field);
+            _lastFieldBuildCount++;
+            _lastFieldBuildMs += result.WorkerBuildMs;
+            RecordFieldLoad(result.Source, result.WorkerBuildMs);
+            EnqueueMeshBuildDispatch(block.Id);
+        }
+    }
+
+    private void ApplyCompletedDisplayedRefreshFieldBuildResults()
+    {
+        while (_completedDisplayedRefreshFieldBuildResults.TryDequeue(out CompletedFieldBuildResult result))
+        {
+            if (!_blocks.TryGetValue(result.BlockId, out TerrainBlockData block) ||
+                !block.MatchesFieldBuild(result.InstanceVersion, result.Revision))
+            {
+                continue;
+            }
+
+            block.ClearFieldBuildRunning(result.Revision);
             if (!block.DisplayedRefreshDirty || !IsBlockDisplayingVisuals(block))
             {
                 continue;
@@ -2315,7 +2347,7 @@ public partial class TerrainLodManager : Node3D
                         return;
                     }
 
-                    _completedMeshBuildResults.Enqueue(
+                    EnqueueCompletedMeshBuildResult(
                         new CompletedMeshBuildResult(
                             blockId,
                             instanceVersion,
@@ -2334,7 +2366,7 @@ public partial class TerrainLodManager : Node3D
                         return;
                     }
 
-                    _completedMeshBuildResults.Enqueue(
+                    EnqueueCompletedMeshBuildResult(
                         new CompletedMeshBuildResult(
                             blockId,
                             instanceVersion,
@@ -2355,6 +2387,12 @@ public partial class TerrainLodManager : Node3D
     }
 
     private void ApplyCompletedMeshBuildResults()
+    {
+        ApplyCompletedDisplayedRefreshMeshBuildResults();
+        ApplyCompletedRequestedMeshBuildResults();
+    }
+
+    private void ApplyCompletedRequestedMeshBuildResults()
     {
         int applyBudget = GetCurrentMeshResultApplyBudget();
         while (_completedMeshBuildResults.TryPeek(out CompletedMeshBuildResult nextResult))
@@ -2377,26 +2415,35 @@ public partial class TerrainLodManager : Node3D
             }
 
             block.ClearMeshBuildRunning(result.Revision);
-            if (result.BuildPurpose == TerrainBlockBuildPurpose.RequestedContent)
+            if (!block.Desired || block.State != TerrainBlockState.FieldReady)
             {
-                if (!block.Desired || block.State != TerrainBlockState.FieldReady)
-                {
-                    continue;
-                }
-
-                if (!result.Succeeded || !result.Mesh.HasValue)
-                {
-                    EnqueueMeshBuildDispatch(block.Id);
-                    continue;
-                }
-
-                block.SetMesh(result.Mesh.Value);
-                _lastMeshBuildCount++;
-                _lastMeshBuildMs += result.WorkerBuildMs;
-                EnqueueCommitDispatch(block.Id);
                 continue;
             }
 
+            if (!result.Succeeded || !result.Mesh.HasValue)
+            {
+                EnqueueMeshBuildDispatch(block.Id);
+                continue;
+            }
+
+            block.SetMesh(result.Mesh.Value);
+            _lastMeshBuildCount++;
+            _lastMeshBuildMs += result.WorkerBuildMs;
+            EnqueueCommitDispatch(block.Id);
+        }
+    }
+
+    private void ApplyCompletedDisplayedRefreshMeshBuildResults()
+    {
+        while (_completedDisplayedRefreshMeshBuildResults.TryDequeue(out CompletedMeshBuildResult result))
+        {
+            if (!_blocks.TryGetValue(result.BlockId, out TerrainBlockData block) ||
+                !block.MatchesMeshBuild(result.InstanceVersion, result.Revision))
+            {
+                continue;
+            }
+
+            block.ClearMeshBuildRunning(result.Revision);
             if (!block.DisplayedRefreshDirty || !IsBlockDisplayingVisuals(block))
             {
                 continue;
@@ -2500,6 +2547,23 @@ public partial class TerrainLodManager : Node3D
         }
 
         TryFinalizeDisplayedRefreshConvergence(_lastDeformOperationSequence);
+    }
+
+    private void ProcessDisplayedRefreshFollowThroughPasses()
+    {
+        if (!HasPendingDisplayedRefreshVisualConvergence())
+        {
+            return;
+        }
+
+        for (int pass = 0; pass < DisplayedRefreshFollowThroughPasses && HasPendingDisplayedRefreshVisualConvergence(); pass++)
+        {
+            StartFieldBuildWorkers();
+            ApplyCompletedDisplayedRefreshFieldBuildResults();
+            StartMeshBuildWorkers();
+            ApplyCompletedDisplayedRefreshMeshBuildResults();
+            ProcessMeshCommitDispatch();
+        }
     }
 
     private void CommitDisplayedRefreshBlock(
@@ -3841,6 +3905,67 @@ public partial class TerrainLodManager : Node3D
         tokens.Remove(blockId);
     }
 
+    private void EnqueueCompletedFieldBuildResult(CompletedFieldBuildResult result)
+    {
+        if (result.BuildPurpose == TerrainBlockBuildPurpose.DisplayedRefresh)
+        {
+            _completedDisplayedRefreshFieldBuildResults.Enqueue(result);
+            return;
+        }
+
+        _completedFieldBuildResults.Enqueue(result);
+    }
+
+    private void EnqueueCompletedMeshBuildResult(CompletedMeshBuildResult result)
+    {
+        if (result.BuildPurpose == TerrainBlockBuildPurpose.DisplayedRefresh)
+        {
+            _completedDisplayedRefreshMeshBuildResults.Enqueue(result);
+            return;
+        }
+
+        _completedMeshBuildResults.Enqueue(result);
+    }
+
+    private int CountPendingDisplayedRefreshDispatches(IReadOnlyDictionary<TerrainBlockId, int> dispatchTokens)
+    {
+        int count = 0;
+        foreach (TerrainBlockId blockId in dispatchTokens.Keys)
+        {
+            if (_blocks.TryGetValue(blockId, out TerrainBlockData block) &&
+                block.DisplayedRefreshDirty &&
+                IsBlockDisplayingVisuals(block))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private bool HasPendingDisplayedRefreshVisualConvergence()
+    {
+        foreach (TerrainBlockData block in _blocks.Values)
+        {
+            if (block.DisplayedRefreshDirty && IsBlockDisplayingVisuals(block))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private int GetCompletedFieldBuildResultCount()
+    {
+        return _completedFieldBuildResults.Count + _completedDisplayedRefreshFieldBuildResults.Count;
+    }
+
+    private int GetCompletedMeshBuildResultCount()
+    {
+        return _completedMeshBuildResults.Count + _completedDisplayedRefreshMeshBuildResults.Count;
+    }
+
     private void UpdateInitialLoadState()
     {
         if (!_selectionInitialized)
@@ -4725,8 +4850,8 @@ public partial class TerrainLodManager : Node3D
             $"split {BuildTierCountSummary(_currentSplitParentCounts, 'p', FinestTerrainLod + 1)}  " +
             $"seam {MixedLodSeamMode.GetDisplayName()} t/s/k/sup {seamSummary.TransitionFaceCount}/{seamSummary.SkirtFaceCount}/{seamSummary.ExplicitSkipFaceCount}/{seamSummary.SuppressedFaceCount}  " +
             $"sup a/r/v/h/p/f {supersededSummary.ActiveCount}/{supersededSummary.WaitingForMarkReleasableCount}/{supersededSummary.WaitingForVisualCoverageCount}/{supersededSummary.WaitingForHideCount}/{supersededSummary.WaitingForPhysicsCoverageCount}/{supersededSummary.WaitingForReleaseCount}  " +
-            $"dispatch c{_createDispatchTokens.Count}  fq/r/d {_fieldBuildDispatchTokens.Count}/{Volatile.Read(ref _activeFieldWorkerJobs)}/{_completedFieldBuildResults.Count}  " +
-            $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{_completedMeshBuildResults.Count}  " +
+            $"dispatch c{_createDispatchTokens.Count}  fq/r/d {_fieldBuildDispatchTokens.Count}/{Volatile.Read(ref _activeFieldWorkerJobs)}/{GetCompletedFieldBuildResultCount()}  " +
+            $"mq/r/d {_meshBuildDispatchTokens.Count}/{Volatile.Read(ref _activeMeshWorkerJobs)}/{GetCompletedMeshBuildResultCount()}  " +
             $"commit {_commitDispatchTokens.Count}  coll {_collisionDispatchTokens.Count}  release {_releaseDispatchTokens.Count}  " +
             $"set/s {_blockSetChangeRatePerSecond:0.0}  create/s {_blockCreateRatePerSecond:0.0}  release/s {_blockReleaseRatePerSecond:0.0}";
     }
