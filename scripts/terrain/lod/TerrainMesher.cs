@@ -97,6 +97,16 @@ public sealed class TerrainMesher
         return _surfaceSampler.SampleSurfaceHeight(worldX, worldZ);
     }
 
+    public float SampleSurfaceSlope(float worldX, float worldZ)
+    {
+        return _surfaceSampler.SampleSurfaceSlope(worldX, worldZ);
+    }
+
+    public TerrainShapeTelemetrySample SampleTerrainShapeTelemetry(float worldX, float worldZ)
+    {
+        return _surfaceSampler.SampleTerrainShapeTelemetry(worldX, worldZ);
+    }
+
     private VoxelFieldGenerator CreateFieldGenerator()
     {
         return new VoxelFieldGenerator(

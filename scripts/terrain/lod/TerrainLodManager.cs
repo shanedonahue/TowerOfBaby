@@ -45,7 +45,11 @@ public partial class TerrainLodManager : Node3D
     private const string LodTransitionTracePrefix = "[TerrainLodTransition]";
     private const string DeformTracePrefix = "[TerrainDeform]";
     private const string PersistenceTracePrefix = "[TerrainPersistence]";
+    private const string TerrainShapeTracePrefix = "[TerrainShape]";
     private const double ProfileSnapshotRefreshIntervalSeconds = 0.25;
+    private const double TerrainShapeProbeIntervalSeconds = 1.5;
+    private const int TerrainShapeProbeRadiusSteps = 4;
+    private const float TerrainShapeProbeSpacingMeters = 16.0f;
     private const int MaxCreateBlocksPerFrame = 32;
     private const int MaxFieldWorkerJobs = 8;
     private const int MaxMeshWorkerJobs = 8;
@@ -180,6 +184,7 @@ public partial class TerrainLodManager : Node3D
     private TerrainBlockId _currentViewerParent;
     private Vector3 _lastViewerPosition;
     private double _currentTimeSeconds;
+    private double _nextTerrainShapeProbeAtSeconds;
     private string _lastSelectionSummary = "waiting_for_viewer";
     private string _lastTierSelectionSummary = "Tier summary waiting_for_viewer.";
     private string _lastRefinementHandoffSummary = "none";
@@ -376,6 +381,7 @@ public partial class TerrainLodManager : Node3D
         RefreshVisibleMixedLodSeamsIfNeeded();
         RefreshLifecycleRates();
         UpdateInitialLoadState();
+        MaybeWriteTerrainShapeProbe(_lastViewerPosition);
         RefreshProfileSnapshotIfNeeded();
     }
 
@@ -1031,6 +1037,9 @@ public partial class TerrainLodManager : Node3D
                 _lastGeneratedChunkLoadCount++;
                 _lastGeneratedChunkLoadMs += workerMs;
                 _procedurallyGeneratedBlockCount++;
+                WritePersistenceTrace(
+                    "field_load",
+                    $"block={blockId} source=procedural_generation worker_ms={workerMs:0.000}");
                 break;
         }
     }
@@ -5337,6 +5346,152 @@ public partial class TerrainLodManager : Node3D
             $"{PersistenceTracePrefix} event={eventName} {detail}");
     }
 
+    private void MaybeWriteTerrainShapeProbe(Vector3 viewerPosition)
+    {
+        if (_mesher == null ||
+            !TerrainTelemetry.IsProbeEnabled(TerrainTelemetryProbe.TerrainShape) ||
+            _currentTimeSeconds < _nextTerrainShapeProbeAtSeconds)
+        {
+            return;
+        }
+
+        _nextTerrainShapeProbeAtSeconds = _currentTimeSeconds + TerrainShapeProbeIntervalSeconds;
+
+        TerrainShapeTelemetrySample centerSample = _mesher.SampleTerrainShapeTelemetry(viewerPosition.X, viewerPosition.Z);
+        int samplesPerAxis = (TerrainShapeProbeRadiusSteps * 2) + 1;
+        int sampleCapacity = samplesPerAxis * samplesPerAxis;
+        List<float> slopeSamples = new(sampleCapacity);
+
+        float heightMin = float.MaxValue;
+        float heightMax = float.MinValue;
+        double heightSum = 0.0;
+        double heightSquaredSum = 0.0;
+        double slopeSum = 0.0;
+        float slopeMax = 0.0f;
+        int readableSlopeCount = 0;
+        int moderateSlopeCount = 0;
+        int steepSlopeCount = 0;
+        int activeMountainCount = 0;
+        int activeCoreCount = 0;
+        double plainsFlattenSum = 0.0;
+        double swampSoftenSum = 0.0;
+        double mountainSystemMaskSum = 0.0;
+        double mountainLiftMaskSum = 0.0;
+        double mountainShoulderMaskSum = 0.0;
+        double mountainCoreMaskSum = 0.0;
+        double mountainLiftDampingSum = 0.0;
+        double hillDampingSum = 0.0;
+        double coreHillDampingSum = 0.0;
+        double coreLocalReliefDampingSum = 0.0;
+        double regionalContributionAbsSum = 0.0;
+        double mountainLiftContributionAbsSum = 0.0;
+        double mountainBackboneContributionAbsSum = 0.0;
+        double heroPeakContributionAbsSum = 0.0;
+        double secondaryRidgeContributionAbsSum = 0.0;
+        double hillContributionAbsSum = 0.0;
+        double localReliefContributionAbsSum = 0.0;
+        double surfaceBreakupContributionAbsSum = 0.0;
+        double waterShapingDeltaSum = 0.0;
+
+        for (int zStep = -TerrainShapeProbeRadiusSteps; zStep <= TerrainShapeProbeRadiusSteps; zStep++)
+        {
+            for (int xStep = -TerrainShapeProbeRadiusSteps; xStep <= TerrainShapeProbeRadiusSteps; xStep++)
+            {
+                float sampleX = viewerPosition.X + (xStep * TerrainShapeProbeSpacingMeters);
+                float sampleZ = viewerPosition.Z + (zStep * TerrainShapeProbeSpacingMeters);
+                TerrainShapeTelemetrySample sample = _mesher.SampleTerrainShapeTelemetry(sampleX, sampleZ);
+                float height = sample.TerrainHeight;
+                float slope = sample.SurfaceSlope;
+
+                heightMin = Mathf.Min(heightMin, height);
+                heightMax = Mathf.Max(heightMax, height);
+                heightSum += height;
+                heightSquaredSum += height * height;
+                slopeSum += slope;
+                slopeMax = Mathf.Max(slopeMax, slope);
+                slopeSamples.Add(slope);
+
+                if (slope >= 0.08f)
+                {
+                    readableSlopeCount++;
+                }
+
+                if (slope >= 0.12f)
+                {
+                    moderateSlopeCount++;
+                }
+
+                if (slope >= 0.18f)
+                {
+                    steepSlopeCount++;
+                }
+
+                if (sample.MountainSystemMask >= 0.25f)
+                {
+                    activeMountainCount++;
+                }
+
+                if (sample.MountainCoreMask >= 0.25f)
+                {
+                    activeCoreCount++;
+                }
+
+                plainsFlattenSum += sample.PlainsFlattenMask;
+                swampSoftenSum += sample.SwampSoftenMask;
+                mountainSystemMaskSum += sample.MountainSystemMask;
+                mountainLiftMaskSum += sample.MountainSystemLiftMask;
+                mountainShoulderMaskSum += sample.MountainShoulderMask;
+                mountainCoreMaskSum += sample.MountainCoreMask;
+                mountainLiftDampingSum += sample.MountainLiftDamping;
+                hillDampingSum += sample.HillDamping;
+                coreHillDampingSum += sample.CoreHillDamping;
+                coreLocalReliefDampingSum += sample.CoreLocalReliefDamping;
+                regionalContributionAbsSum += Mathf.Abs(sample.RegionalContribution);
+                mountainLiftContributionAbsSum += Mathf.Abs(sample.MountainLiftContribution);
+                mountainBackboneContributionAbsSum += Mathf.Abs(sample.MountainBackboneContribution);
+                heroPeakContributionAbsSum += Mathf.Abs(sample.HeroPeakContribution);
+                secondaryRidgeContributionAbsSum += Mathf.Abs(sample.SecondaryRidgeContribution);
+                hillContributionAbsSum += Mathf.Abs(sample.HillContribution);
+                localReliefContributionAbsSum += Mathf.Abs(sample.LocalReliefContribution);
+                surfaceBreakupContributionAbsSum += Mathf.Abs(sample.SurfaceBreakupContribution);
+                waterShapingDeltaSum += sample.WaterShapingDelta;
+            }
+        }
+
+        int sampleCount = slopeSamples.Count;
+        if (sampleCount == 0)
+        {
+            return;
+        }
+
+        slopeSamples.Sort();
+        float heightAverage = (float)(heightSum / sampleCount);
+        float heightVariance = Mathf.Max(0.0f, (float)((heightSquaredSum / sampleCount) - (heightAverage * heightAverage)));
+        float heightStdDev = Mathf.Sqrt(heightVariance);
+        float slopeAverage = (float)(slopeSum / sampleCount);
+        float slopeP75 = ComputePercentile(slopeSamples, 0.75f);
+        float slopeP90 = ComputePercentile(slopeSamples, 0.90f);
+
+        string line =
+            $"{TerrainShapeTracePrefix} event=surface_window viewer={FormatVector3(viewerPosition)} " +
+            $"grid={samplesPerAxis} spacing={FormatProbeFloat(TerrainShapeProbeSpacingMeters)} samples={sampleCount} " +
+            $"center_h={FormatProbeFloat(centerSample.TerrainHeight)} center_slope={FormatProbeFloat(centerSample.SurfaceSlope)} " +
+            $"center_mask sys/lift/shoulder/core={FormatProbeFloat(centerSample.MountainSystemMask)}/{FormatProbeFloat(centerSample.MountainSystemLiftMask)}/{FormatProbeFloat(centerSample.MountainShoulderMask)}/{FormatProbeFloat(centerSample.MountainCoreMask)} " +
+            $"center_damp lift/hill/core_h/core_local={FormatProbeFloat(centerSample.MountainLiftDamping)}/{FormatProbeFloat(centerSample.HillDamping)}/{FormatProbeFloat(centerSample.CoreHillDamping)}/{FormatProbeFloat(centerSample.CoreLocalReliefDamping)} " +
+            $"center_contrib lift/backbone/hill/local={FormatProbeFloat(centerSample.MountainLiftContribution)}/{FormatProbeFloat(centerSample.MountainBackboneContribution)}/{FormatProbeFloat(centerSample.HillContribution)}/{FormatProbeFloat(centerSample.LocalReliefContribution)} " +
+            $"height avg/span/std={FormatProbeFloat(heightAverage)}/{FormatProbeFloat(heightMax - heightMin)}/{FormatProbeFloat(heightStdDev)} " +
+            $"slope avg/p75/p90/max={FormatProbeFloat(slopeAverage)}/{FormatProbeFloat(slopeP75)}/{FormatProbeFloat(slopeP90)}/{FormatProbeFloat(slopeMax)} " +
+            $"slope_gte_0.08/0.12/0.18={readableSlopeCount}/{moderateSlopeCount}/{steepSlopeCount} " +
+            $"mask_avg plains/swamp/sys/lift/shoulder/core={FormatProbeFloat((float)(plainsFlattenSum / sampleCount))}/{FormatProbeFloat((float)(swampSoftenSum / sampleCount))}/{FormatProbeFloat((float)(mountainSystemMaskSum / sampleCount))}/{FormatProbeFloat((float)(mountainLiftMaskSum / sampleCount))}/{FormatProbeFloat((float)(mountainShoulderMaskSum / sampleCount))}/{FormatProbeFloat((float)(mountainCoreMaskSum / sampleCount))} " +
+            $"damp_avg lift/hill/core_h/core_local={FormatProbeFloat((float)(mountainLiftDampingSum / sampleCount))}/{FormatProbeFloat((float)(hillDampingSum / sampleCount))}/{FormatProbeFloat((float)(coreHillDampingSum / sampleCount))}/{FormatProbeFloat((float)(coreLocalReliefDampingSum / sampleCount))} " +
+            $"contrib_abs_avg reg/lift/backbone/hero/ridge/hill/local/surface={FormatProbeFloat((float)(regionalContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(mountainLiftContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(mountainBackboneContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(heroPeakContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(secondaryRidgeContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(hillContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(localReliefContributionAbsSum / sampleCount))}/{FormatProbeFloat((float)(surfaceBreakupContributionAbsSum / sampleCount))} " +
+            $"water_delta_avg={FormatProbeFloat((float)(waterShapingDeltaSum / sampleCount))} " +
+            $"active sys/core={activeMountainCount}/{activeCoreCount} " +
+            $"loads_last s/p/g={_lastStartupChunkLoadCount}/{_lastPersistedChunkLoadCount}/{_lastGeneratedChunkLoadCount} " +
+            $"loads_total s/p/g={_startupRestoredBlockCount}/{_persistedRestoredBlockCount}/{_procedurallyGeneratedBlockCount}";
+        TerrainTelemetry.AppendProbeLine(TerrainTelemetryProbe.TerrainShape, line);
+    }
+
     private static string FormatTimestamp(double? startedAtSeconds, double? finishedAtSeconds)
     {
         return startedAtSeconds.HasValue && finishedAtSeconds.HasValue
@@ -5352,6 +5507,31 @@ public partial class TerrainLodManager : Node3D
     private static string FormatBool(bool value)
     {
         return value ? "true" : "false";
+    }
+
+    private static string FormatProbeFloat(float value)
+    {
+        return value.ToString("0.000", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatVector3(Vector3 value)
+    {
+        return $"{FormatProbeFloat(value.X)},{FormatProbeFloat(value.Y)},{FormatProbeFloat(value.Z)}";
+    }
+
+    private static float ComputePercentile(List<float> sortedValues, float percentile)
+    {
+        if (sortedValues == null || sortedValues.Count == 0)
+        {
+            return 0.0f;
+        }
+
+        float clampedPercentile = Mathf.Clamp(percentile, 0.0f, 1.0f);
+        int index = Mathf.Clamp(
+            Mathf.RoundToInt((sortedValues.Count - 1) * clampedPercentile),
+            0,
+            sortedValues.Count - 1);
+        return sortedValues[index];
     }
 
     private static string Sanitize(string value)
@@ -5431,6 +5611,7 @@ public partial class TerrainLodManager : Node3D
             GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
             DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
             PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
+            TerrainShapeTraceEnabled = telemetryMode.TerrainShapeProbeEnabled,
             TerrainStatsEnabled = false,
             ActiveChunkCount = visible,
             ResidentChunkCount = _blocks.Count,

@@ -10,6 +10,7 @@ public sealed class TerrainWorldProfileSnapshot
     public bool GrassTraceEnabled { get; init; }
     public bool DeformTraceEnabled { get; init; }
     public bool PersistenceTraceEnabled { get; init; }
+    public bool TerrainShapeTraceEnabled { get; init; }
     public bool TerrainStatsEnabled { get; init; }
     public int ActiveChunkCount { get; init; }
     public int ResidentChunkCount { get; init; }

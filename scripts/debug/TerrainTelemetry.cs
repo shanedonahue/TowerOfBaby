@@ -11,7 +11,8 @@ public enum TerrainTelemetryProbe
     LodTransition = 0,
     Grass = 1,
     Deform = 2,
-    Persistence = 3
+    Persistence = 3,
+    TerrainShape = 4
 }
 
 public readonly record struct TerrainTelemetryBootstrap(
@@ -21,7 +22,8 @@ public readonly record struct TerrainTelemetryBootstrap(
     bool EnableLodTransitionProbe,
     bool EnableGrassProbe,
     bool EnableDeformProbe,
-    bool EnablePersistenceProbe);
+    bool EnablePersistenceProbe,
+    bool EnableTerrainShapeProbe);
 
 public readonly record struct TerrainTelemetryModeSnapshot(
     bool CaptureEnabledOnReady,
@@ -31,13 +33,15 @@ public readonly record struct TerrainTelemetryModeSnapshot(
     bool LodTransitionProbeEnabled,
     bool GrassProbeEnabled,
     bool DeformProbeEnabled,
-    bool PersistenceProbeEnabled)
+    bool PersistenceProbeEnabled,
+    bool TerrainShapeProbeEnabled)
 {
     public bool AnyProbeEnabled =>
         LodTransitionProbeEnabled ||
         GrassProbeEnabled ||
         DeformProbeEnabled ||
-        PersistenceProbeEnabled;
+        PersistenceProbeEnabled ||
+        TerrainShapeProbeEnabled;
 
     public string ModeLabel =>
         TerrainTelemetry.BuildModeLabel(CaptureSessionActive, AnyProbeEnabled);
@@ -59,7 +63,8 @@ public static class TerrainTelemetry
         [TerrainTelemetryProbe.LodTransition] = new List<string>(),
         [TerrainTelemetryProbe.Grass] = new List<string>(),
         [TerrainTelemetryProbe.Deform] = new List<string>(),
-        [TerrainTelemetryProbe.Persistence] = new List<string>()
+        [TerrainTelemetryProbe.Persistence] = new List<string>(),
+        [TerrainTelemetryProbe.TerrainShape] = new List<string>()
     };
 
     private static readonly HashSet<TerrainTelemetryProbe> PendingProbeOverrides = new();
@@ -71,7 +76,8 @@ public static class TerrainTelemetry
         LodTransitionProbeEnabled: false,
         GrassProbeEnabled: false,
         DeformProbeEnabled: false,
-        PersistenceProbeEnabled: false);
+        PersistenceProbeEnabled: false,
+        TerrainShapeProbeEnabled: false);
     private static DateTime _configuredAtUtc = DateTime.UtcNow;
     private static int _configurationVersion = 1;
     private static bool _probeArtifactsFlushed;
@@ -131,6 +137,7 @@ public static class TerrainTelemetry
             bool grassProbeEnabled = bootstrap.EnableGrassProbe;
             bool deformProbeEnabled = bootstrap.EnableDeformProbe;
             bool persistenceProbeEnabled = bootstrap.EnablePersistenceProbe;
+            bool terrainShapeProbeEnabled = bootstrap.EnableTerrainShapeProbe;
 
             foreach (TerrainTelemetryProbe probe in PendingProbeOverrides)
             {
@@ -139,7 +146,8 @@ public static class TerrainTelemetry
                     ref lodTransitionProbeEnabled,
                     ref grassProbeEnabled,
                     ref deformProbeEnabled,
-                    ref persistenceProbeEnabled);
+                    ref persistenceProbeEnabled,
+                    ref terrainShapeProbeEnabled);
             }
 
             ApplyCommandLineOverrides(
@@ -149,7 +157,8 @@ public static class TerrainTelemetry
                 ref lodTransitionProbeEnabled,
                 ref grassProbeEnabled,
                 ref deformProbeEnabled,
-                ref persistenceProbeEnabled);
+                ref persistenceProbeEnabled,
+                ref terrainShapeProbeEnabled);
 
             TerrainTelemetryModeSnapshot nextSnapshot = new(
                 CaptureEnabledOnReady: autoStartCapture,
@@ -159,7 +168,8 @@ public static class TerrainTelemetry
                 LodTransitionProbeEnabled: lodTransitionProbeEnabled,
                 GrassProbeEnabled: grassProbeEnabled,
                 DeformProbeEnabled: deformProbeEnabled,
-                PersistenceProbeEnabled: persistenceProbeEnabled);
+                PersistenceProbeEnabled: persistenceProbeEnabled,
+                TerrainShapeProbeEnabled: terrainShapeProbeEnabled);
 
             if (!nextSnapshot.Equals(_modeSnapshot))
             {
@@ -202,6 +212,7 @@ public static class TerrainTelemetry
                 TerrainTelemetryProbe.Grass => _modeSnapshot with { GrassProbeEnabled = true },
                 TerrainTelemetryProbe.Deform => _modeSnapshot with { DeformProbeEnabled = true },
                 TerrainTelemetryProbe.Persistence => _modeSnapshot with { PersistenceProbeEnabled = true },
+                TerrainTelemetryProbe.TerrainShape => _modeSnapshot with { TerrainShapeProbeEnabled = true },
                 _ => _modeSnapshot
             };
             _configurationVersion++;
@@ -355,6 +366,11 @@ public static class TerrainTelemetry
             enabledProbes.Add("persistence");
         }
 
+        if (modeSnapshot.TerrainShapeProbeEnabled)
+        {
+            enabledProbes.Add("terrain_shape");
+        }
+
         return enabledProbes.Count == 0
             ? "none"
             : string.Join(", ", enabledProbes);
@@ -367,7 +383,8 @@ public static class TerrainTelemetry
         ref bool lodTransitionProbeEnabled,
         ref bool grassProbeEnabled,
         ref bool deformProbeEnabled,
-        ref bool persistenceProbeEnabled)
+        ref bool persistenceProbeEnabled,
+        ref bool terrainShapeProbeEnabled)
     {
         foreach (string rawArg in OS.GetCmdlineArgs())
         {
@@ -406,7 +423,8 @@ public static class TerrainTelemetry
                         ref lodTransitionProbeEnabled,
                         ref grassProbeEnabled,
                         ref deformProbeEnabled,
-                        ref persistenceProbeEnabled);
+                        ref persistenceProbeEnabled,
+                        ref terrainShapeProbeEnabled);
                 }
             }
         }
@@ -417,7 +435,8 @@ public static class TerrainTelemetry
         ref bool lodTransitionProbeEnabled,
         ref bool grassProbeEnabled,
         ref bool deformProbeEnabled,
-        ref bool persistenceProbeEnabled)
+        ref bool persistenceProbeEnabled,
+        ref bool terrainShapeProbeEnabled)
     {
         switch (probe)
         {
@@ -433,6 +452,9 @@ public static class TerrainTelemetry
             case TerrainTelemetryProbe.Persistence:
                 persistenceProbeEnabled = true;
                 break;
+            case TerrainTelemetryProbe.TerrainShape:
+                terrainShapeProbeEnabled = true;
+                break;
         }
     }
 
@@ -441,7 +463,8 @@ public static class TerrainTelemetry
         ref bool lodTransitionProbeEnabled,
         ref bool grassProbeEnabled,
         ref bool deformProbeEnabled,
-        ref bool persistenceProbeEnabled)
+        ref bool persistenceProbeEnabled,
+        ref bool terrainShapeProbeEnabled)
     {
         switch ((probeName ?? string.Empty).Trim().ToLowerInvariant())
         {
@@ -450,6 +473,7 @@ public static class TerrainTelemetry
                 grassProbeEnabled = true;
                 deformProbeEnabled = true;
                 persistenceProbeEnabled = true;
+                terrainShapeProbeEnabled = true;
                 break;
             case "lod":
             case "lod_transition":
@@ -464,6 +488,11 @@ public static class TerrainTelemetry
                 break;
             case "persistence":
                 persistenceProbeEnabled = true;
+                break;
+            case "terrain":
+            case "shape":
+            case "terrain_shape":
+                terrainShapeProbeEnabled = true;
                 break;
         }
     }
@@ -489,6 +518,7 @@ public static class TerrainTelemetry
             TerrainTelemetryProbe.Grass => _modeSnapshot.GrassProbeEnabled,
             TerrainTelemetryProbe.Deform => _modeSnapshot.DeformProbeEnabled,
             TerrainTelemetryProbe.Persistence => _modeSnapshot.PersistenceProbeEnabled,
+            TerrainTelemetryProbe.TerrainShape => _modeSnapshot.TerrainShapeProbeEnabled,
             _ => false
         };
     }
@@ -515,6 +545,7 @@ public static class TerrainTelemetry
             TerrainTelemetryProbe.Grass => "grass trace",
             TerrainTelemetryProbe.Deform => "deform trace",
             TerrainTelemetryProbe.Persistence => "persistence trace",
+            TerrainTelemetryProbe.TerrainShape => "terrain shape trace",
             _ => probe.ToString()
         };
     }
@@ -527,6 +558,7 @@ public static class TerrainTelemetry
             TerrainTelemetryProbe.Grass => "grass",
             TerrainTelemetryProbe.Deform => "deform",
             TerrainTelemetryProbe.Persistence => "persistence",
+            TerrainTelemetryProbe.TerrainShape => "terrain_shape",
             _ => probe.ToString().ToLowerInvariant()
         };
     }

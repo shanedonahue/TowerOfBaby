@@ -38,6 +38,7 @@ public partial class GameController : Node3D
     [Export] public bool EnableGrassTraceProbe;
     [Export] public bool EnableDeformTraceProbe;
     [Export] public bool EnablePersistenceTraceProbe;
+    [Export] public bool EnableTerrainShapeProbe;
 
     private TerrainWorld _terrainWorld = null!;
     private Node3D _player = null!;
@@ -485,7 +486,8 @@ public partial class GameController : Node3D
             EnableTerrainLodTransitionProbe,
             EnableGrassTraceProbe,
             EnableDeformTraceProbe,
-            EnablePersistenceTraceProbe));
+            EnablePersistenceTraceProbe,
+            EnableTerrainShapeProbe));
 
         if (!TerrainTelemetry.ShouldAutoStartCapture)
         {

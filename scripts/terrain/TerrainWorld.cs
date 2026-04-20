@@ -109,11 +109,17 @@ public partial class TerrainWorld : Node3D
 
     public void ClearStartupCache()
     {
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.Persistence,
+            "[TerrainPersistence] event=cache_clear scope=startup");
         GetChunkStore().ClearStartupState();
     }
 
     public void ClearAllPersistentCache()
     {
+        TerrainTelemetry.AppendProbeLine(
+            TerrainTelemetryProbe.Persistence,
+            "[TerrainPersistence] event=cache_clear scope=all");
         GetChunkStore().ClearAllChunkData();
         _lodManager?.ClearPersistedEditRegions();
     }
@@ -181,6 +187,7 @@ public partial class TerrainWorld : Node3D
             GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
             DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
             PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
+            TerrainShapeTraceEnabled = telemetryMode.TerrainShapeProbeEnabled,
             TerrainStatsEnabled = false,
             MeshBackendName = "lod_blocks_missing",
             SearchThrottleState = "lod_blocks",

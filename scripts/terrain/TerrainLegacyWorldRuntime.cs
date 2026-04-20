@@ -785,6 +785,7 @@ public partial class TerrainLegacyWorldRuntime : Node3D
             GrassTraceEnabled = telemetryMode.GrassProbeEnabled,
             DeformTraceEnabled = telemetryMode.DeformProbeEnabled,
             PersistenceTraceEnabled = telemetryMode.PersistenceProbeEnabled,
+            TerrainShapeTraceEnabled = telemetryMode.TerrainShapeProbeEnabled,
             TerrainStatsEnabled = terrainInstrumentation.Enabled,
             ActiveChunkCount = activeCount,
             ResidentChunkCount = _residentChunks.Count,

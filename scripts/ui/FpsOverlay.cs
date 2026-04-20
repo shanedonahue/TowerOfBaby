@@ -554,6 +554,11 @@ public partial class FpsOverlay : CanvasLayer
             AppendProbeName(builder, "persistence");
         }
 
+        if (snapshot.TerrainShapeTraceEnabled)
+        {
+            AppendProbeName(builder, "terrain_shape");
+        }
+
         return builder.Length == 0 ? "none" : builder.ToString();
     }
 
