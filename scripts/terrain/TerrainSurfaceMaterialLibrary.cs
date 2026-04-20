@@ -16,7 +16,7 @@ internal static class TerrainSurfaceMaterialLibrary
     private const float DefaultTextureTilingScale = 0.32f;
     private const float DefaultBlendSharpness = 3.0f;
     private const float DefaultGrassSlopeMax = 0.28f;
-    private const float DefaultRockSlopeStart = 0.42f;
+    private const float DefaultRockSlopeStart = 0.34f;
     private const float DefaultVertexTintStrength = 0.22f;
     private const float DefaultNormalStrength = 0.75f;
     private const float DefaultNormalDetailMaxDistance = 72.0f;

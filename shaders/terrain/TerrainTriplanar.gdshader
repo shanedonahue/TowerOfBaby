@@ -218,10 +218,25 @@ float resolve_secondary_surface_weight(int material_id, float slope) {
         return 0.0;
     }
 
+    float transition_width = max(get_transition_width() * 3.0, 0.06);
     return smoothstep(
-        max(grass_slope_max * 0.90, 0.18),
-        max(grass_slope_max + 0.26, 0.48),
-        slope) * 0.20;
+        max(grass_slope_max - transition_width, 0.12),
+        min(grass_slope_max + transition_width, 0.92),
+        slope) * 0.24;
+}
+
+float resolve_rock_surface_weight(int material_id, float slope) {
+    if (material_id != MATERIAL_GRASS && material_id != MATERIAL_SOIL) {
+        return 0.0;
+    }
+
+    float transition_width = max(get_transition_width() * 3.5, 0.08);
+    float start_slope = max(rock_slope_start - transition_width, grass_slope_max + 0.02);
+    float end_slope = min(rock_slope_start + transition_width, 1.0);
+    float slope_weight = smoothstep(start_slope, end_slope, slope);
+    return material_id == MATERIAL_GRASS
+        ? slope_weight * 0.45
+        : slope_weight * 0.72;
 }
 
 void sample_surface_color(
@@ -238,13 +253,24 @@ void sample_surface_color(
     vec3 primary_color = sample_surface_albedo(primary_surface, position, normal, distant_mode);
 
     float secondary_weight = resolve_secondary_surface_weight(material_id, slope);
-    if (secondary_weight <= 0.001) {
-        terrain_color = primary_color;
+    vec3 blended_color = primary_color;
+    if (secondary_weight > 0.001) {
+        vec3 secondary_color = sample_surface_albedo(SURFACE_DIRT, position, normal, distant_mode);
+        blended_color = mix(primary_color, secondary_color, saturate(secondary_weight));
+        dominant_normal_layer = SURFACE_DIRT;
+    }
+
+    float rock_weight = resolve_rock_surface_weight(material_id, slope);
+    if (rock_weight <= 0.001) {
+        terrain_color = blended_color;
         return;
     }
 
-    vec3 secondary_color = sample_surface_albedo(SURFACE_DIRT, position, normal, distant_mode);
-    terrain_color = mix(primary_color, secondary_color, saturate(secondary_weight));
+    vec3 rock_color = sample_surface_albedo(SURFACE_ROCK, position, normal, distant_mode);
+    terrain_color = mix(blended_color, rock_color, saturate(rock_weight));
+    if (rock_weight >= secondary_weight || dominant_normal_layer == SURFACE_ROCK) {
+        dominant_normal_layer = SURFACE_ROCK;
+    }
 }
 
 void vertex() {
