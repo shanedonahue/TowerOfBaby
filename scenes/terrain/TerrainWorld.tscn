@@ -15,7 +15,7 @@ TerrainHeight = 10.0
 DetailHeight = 2.8
 CaveScale = 9.0
 CaveThreshold = 0.63
-WaterLevel = -3.4
+WaterLevel = -6.0
 
 [node name="TerrainLodManager" type="Node3D" parent="."]
 script = ExtResource("2_lod")

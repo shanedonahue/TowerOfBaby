@@ -21,42 +21,114 @@ public readonly record struct TerrainSurfaceColumnSample(
 
 public sealed class VoxelFieldGenerator
 {
-    private const float TerrainWarpFrequency = 0.0100f;
-    private const float TerrainWarpStrength = 8.0f;
-    private const float ContinentHeightScale = 0.80f;
-    private const float ContinentBaseOffsetScale = 0.55f;
-    private const float MountainHeightScale = 0.60f;
+    // Terrain is authored in meters so a ~2 meter player reads against believable landform scales.
+    private const float PlayerHeightMeters = 2.0f;
+    private const float DefaultMajorReliefBudgetMeters = 10.0f;
+    private const float DefaultDetailReliefBudgetMeters = 2.8f;
+    private const float TerrainSlopeSampleOffsetMeters = PlayerHeightMeters;
+
+    private const float TerrainWarpWavelengthMeters = 900.0f;
+    private const float TerrainWarpStrengthMeters = 24.0f;
+
+    private const float ContinentWavelengthMeters = 2800.0f;
+    private const float ContinentLiftMeters = 7.0f;
+    private const float ContinentBaseOffsetMeters = 6.0f;
+
+    private const float RegionalPartitionWavelengthMeters = 1200.0f;
+    private const float RegionalPartitionReliefMeters = 2.2f;
+    private const float RegionalBasinThresholdMin = 0.58f;
+    private const float RegionalBasinThresholdMax = 0.85f;
+
+    private const float MountainSystemWavelengthMeters = 760.0f;
+    private const float MountainSystemThresholdMin = 0.43f;
+    private const float MountainSystemThresholdMax = 0.78f;
+
+    private const float MountainBackboneWavelengthMeters = 210.0f;
+    private const float MountainBackboneReliefMeters = 8.5f;
+
+    private const float HeroPeakWavelengthMeters = 420.0f;
     private const float HeroPeakThresholdMin = 0.79f;
     private const float HeroPeakThresholdMax = 0.93f;
-    private const float HeroPeakMaskAmplifyPower = 0.55f;
-    private const float HeroPeakStrengthBoost = 1.42f;
-    private const float HeroPeakHeightScale = 1.35f;
-    private const float HillHeightScale = 0.10f;
-    private const float DetailContributionScale = 0.10f;
+    private const float HeroPeakMaskPower = 0.60f;
+    private const float HeroPeakReliefMeters = 4.0f;
+
+    private const float SecondaryRidgeWavelengthMeters = 170.0f;
+    private const float SecondaryRidgeReliefMeters = 3.2f;
+
+    private const float HillWavelengthMeters = 92.0f;
+    private const float HillReliefMeters = 2.4f;
+
+    private const float LocalReliefWavelengthMeters = PlayerHeightMeters * 13.0f;
+    private const float LocalReliefMeters = 1.15f;
+
+    private const float SurfaceBreakupWavelengthMeters = PlayerHeightMeters * 4.0f;
+    private const float SurfaceBreakupMeters = 0.30f;
+
+    private const float CaveWavelengthMeters = 22.0f;
+
+    private const float PlainsMacroFlattenStrength = 0.55f;
+    private const float RockyRidgeStrengthBoost = 0.30f;
+    private const float CanyonPartitionStrength = 0.78f;
+    private const float CanyonIncisionDepthMeters = 2.6f;
+    private const float SwampLowlandFlattenStrength = 0.60f;
+    private const float SwampBasinDepthMeters = 1.4f;
+    private const float VolcanicPartitionStrength = 0.70f;
+    private const float VolcanicPlateLiftMeters = 2.0f;
+    private const float VolcanicRubbleReliefMeters = 0.55f;
+
     private const float SwampVegetationBias = 0.60f;
     private const float WaterShorelineFadeMultiplier = 1.85f;
     private const float WaterSubmergedFadeMultiplier = 1.75f;
-    private const float WaterBasinThresholdMin = 0.56f;
-    private const float WaterBasinThresholdMax = 0.82f;
-    private const float WaterShelfBlendScale = 0.30f;
-    private const float WaterShelfHeightScale = 0.12f;
-    private const float WaterBasinBlendScale = 0.40f;
-    private const float WaterBasinDepthScale = 0.56f;
-    private const float WaterSwampFlattenScale = 0.40f;
-    private const float WaterSwampNearWaterOffsetScale = 0.08f;
+    private const float WaterShelfBlendBase = 0.30f;
+    private const float WaterShelfHeightOffsetMeters = 0.45f;
+    private const float WaterBasinBlendBase = 0.38f;
+    private const float WaterBasinDepthMeters = 2.2f;
+    private const float WaterSwampFlattenBlendBase = 0.40f;
+    private const float WaterSwampNearWaterOffsetMeters = 0.25f;
+    private const float SurfaceRockSlopeThreshold = 0.58f;
+    private const float SurfaceRockMidDepthSlopeThreshold = 0.34f;
+    private const float SurfaceRockShallowSlopeThreshold = 0.28f;
+    private const float AlpineSnowHeightThreshold = 0.82f;
+    private const float AlpineRockHeightThreshold = 0.74f;
+    private const float DeepRockDepthMeters = 4.8f;
+    private const float MidSoilDepthMeters = 3.6f;
+    private const float SurfaceCoverDepthMeters = 1.4f;
+    private const float ShallowCoverDepthMeters = 3.4f;
+    private const float SoilTransitionSlopeStart = 0.22f;
+    private const float SoilTransitionSlopeEnd = 0.42f;
+    private const float SoilTransitionHeightStart = 0.72f;
+    private const float SoilTransitionHeightEnd = 0.88f;
+    private const float SoilTransitionDepthStart = 1.35f;
+    private const float SoilTransitionDepthEnd = 3.80f;
+    private const float GrassCoverageBase = 0.88f;
+    private const float GrassCoverageVegetationScale = 0.18f;
+    private const float GrassCoverageMoistureScale = 0.08f;
+    private const float GrassCoverageRockyPenalty = 0.12f;
+    private const float GrassCoverageCanyonPenalty = 0.08f;
+    private const float GrassCoverageVolcanicPenalty = 0.10f;
+    private const float SoilTransitionSlopeScale = 0.68f;
+    private const float SoilTransitionDepthScale = 0.28f;
+    private const float SoilTransitionHeightScale = 0.08f;
+    private const float SoilTransitionRockyScale = 0.10f;
+    private const float SoilTransitionCanyonScale = 0.08f;
+    private const float SoilTransitionVolcanicScale = 0.12f;
     private readonly FastNoiseLite _continentNoise;
-    private readonly FastNoiseLite _shapeBiomeNoise;
-    private readonly FastNoiseLite _mountainNoise;
+    private readonly FastNoiseLite _regionalPartitionNoise;
+    private readonly FastNoiseLite _mountainSystemNoise;
+    private readonly FastNoiseLite _mountainBackboneNoise;
+    private readonly FastNoiseLite _secondaryRidgeNoise;
     private readonly FastNoiseLite _heroPeakNoise;
     private readonly FastNoiseLite _hillNoise;
-    private readonly FastNoiseLite _detailNoise;
+    private readonly FastNoiseLite _localReliefNoise;
+    private readonly FastNoiseLite _surfaceBreakupNoise;
     private readonly FastNoiseLite _warpNoiseX;
     private readonly FastNoiseLite _warpNoiseZ;
-    private readonly FastNoiseLite _waterBasinNoise;
     private readonly TerrainBiomeClassifier _biomeClassifier;
     private readonly FastNoiseLite _caveNoise;
-    private readonly float _terrainHeight;
-    private readonly float _detailHeight;
+    private readonly float _majorReliefScale;
+    private readonly float _detailReliefScale;
+    private readonly float _surfaceHeightMin;
+    private readonly float _surfaceHeightMax;
     private readonly float _caveScale;
     private readonly float _waterLevel;
     private readonly float _shorelineFalloff;
@@ -72,74 +144,101 @@ public sealed class VoxelFieldGenerator
         float shorelineFalloff,
         float waterBasinInfluence)
     {
-        _terrainHeight = terrainHeight;
-        _detailHeight = detailHeight;
+        _majorReliefScale = Mathf.Max(0.2f, terrainHeight / DefaultMajorReliefBudgetMeters);
+        _detailReliefScale = Mathf.Max(0.2f, detailHeight / DefaultDetailReliefBudgetMeters);
         _caveScale = caveScale;
         _waterLevel = waterLevel;
         _shorelineFalloff = Mathf.Max(0.4f, shorelineFalloff);
         _waterBasinInfluence = Mathf.Clamp(waterBasinInfluence, 0.0f, 1.0f);
 
+        _surfaceHeightMin =
+            ((-ContinentBaseOffsetMeters - RegionalPartitionReliefMeters - CanyonIncisionDepthMeters - SwampBasinDepthMeters) * _majorReliefScale) -
+            ((LocalReliefMeters + SurfaceBreakupMeters) * _detailReliefScale);
+        _surfaceHeightMax =
+            ((ContinentLiftMeters - ContinentBaseOffsetMeters) +
+             RegionalPartitionReliefMeters +
+             MountainBackboneReliefMeters +
+             HeroPeakReliefMeters +
+             SecondaryRidgeReliefMeters +
+             HillReliefMeters +
+             VolcanicPlateLiftMeters) * _majorReliefScale +
+            ((LocalReliefMeters + SurfaceBreakupMeters + VolcanicRubbleReliefMeters) * _detailReliefScale);
+
         _continentNoise = new FastNoiseLite
         {
             Seed = seed,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0010f
+            Frequency = FrequencyFromWavelength(ContinentWavelengthMeters)
         };
 
-        _shapeBiomeNoise = new FastNoiseLite
+        _regionalPartitionNoise = new FastNoiseLite
         {
             Seed = seed + 19,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0009f
+            NoiseType = FastNoiseLite.NoiseTypeEnum.Cellular,
+            Frequency = FrequencyFromWavelength(RegionalPartitionWavelengthMeters)
         };
 
-        _mountainNoise = new FastNoiseLite
+        _mountainSystemNoise = new FastNoiseLite
         {
             Seed = seed + 37,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+            Frequency = FrequencyFromWavelength(MountainSystemWavelengthMeters)
+        };
+
+        _mountainBackboneNoise = new FastNoiseLite
+        {
+            Seed = seed + 59,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex,
-            Frequency = 0.0100f
+            Frequency = FrequencyFromWavelength(MountainBackboneWavelengthMeters)
+        };
+
+        _secondaryRidgeNoise = new FastNoiseLite
+        {
+            Seed = seed + 71,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex,
+            Frequency = FrequencyFromWavelength(SecondaryRidgeWavelengthMeters)
         };
 
         _hillNoise = new FastNoiseLite
         {
-            Seed = seed + 59,
+            Seed = seed + 83,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0180f
+            Frequency = FrequencyFromWavelength(HillWavelengthMeters)
+        };
+
+        _localReliefNoise = new FastNoiseLite
+        {
+            Seed = seed + 101,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
+            Frequency = FrequencyFromWavelength(LocalReliefWavelengthMeters)
         };
 
         _heroPeakNoise = new FastNoiseLite
         {
-            Seed = seed + 83,
+            Seed = seed + 127,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.0022f
+            Frequency = FrequencyFromWavelength(HeroPeakWavelengthMeters)
         };
 
-        _detailNoise = new FastNoiseLite
+        _surfaceBreakupNoise = new FastNoiseLite
         {
-            Seed = seed + 101,
+            Seed = seed + 149,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Perlin,
-            Frequency = 0.0700f
+            Frequency = FrequencyFromWavelength(SurfaceBreakupWavelengthMeters)
         };
 
         _warpNoiseX = new FastNoiseLite
         {
             Seed = seed + 131,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = TerrainWarpFrequency
+            Frequency = FrequencyFromWavelength(TerrainWarpWavelengthMeters)
         };
 
         _warpNoiseZ = new FastNoiseLite
         {
             Seed = seed + 157,
             NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = TerrainWarpFrequency
-        };
-
-        _waterBasinNoise = new FastNoiseLite
-        {
-            Seed = seed + 223,
-            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
-            Frequency = 0.00135f
+            Frequency = FrequencyFromWavelength(TerrainWarpWavelengthMeters)
         };
 
         _biomeClassifier = new TerrainBiomeClassifier(seed);
@@ -148,7 +247,7 @@ public sealed class VoxelFieldGenerator
         {
             Seed = seed + 251,
             NoiseType = FastNoiseLite.NoiseTypeEnum.Cellular,
-            Frequency = 0.045f
+            Frequency = FrequencyFromWavelength(CaveWavelengthMeters)
         };
     }
 
@@ -234,22 +333,23 @@ public sealed class VoxelFieldGenerator
         Vector2 warped = WarpXZ(worldX, worldZ);
         TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldX, worldZ);
         TerrainHeightLayers layers = SampleHeightLayers(warped, biome);
-        float landPresence = Mathf.SmoothStep(0.18f, 0.72f, layers.Continent);
+        float landPresence = Mathf.SmoothStep(0.18f, 0.72f, layers.Landmass);
         float shoulderMask = Mathf.Clamp(
-            landPresence * Mathf.SmoothStep(0.12f, 0.55f, layers.Mountain),
+            (layers.MountainSystemMask * 0.45f) +
+            (layers.SecondaryRidges * 0.55f),
             0.0f,
             1.0f);
-        shoulderMask = Mathf.Clamp(shoulderMask + (layers.HeroPeakMask * 0.18f), 0.0f, 1.0f);
+        shoulderMask *= landPresence;
+        shoulderMask = Mathf.Clamp(shoulderMask + (layers.HeroPeakMask * 0.12f), 0.0f, 1.0f);
         float peakMask = Mathf.Clamp(
-            shoulderMask *
-            layers.Mountain *
+            layers.MountainBackbone *
             layers.MountainStrength *
-            Mathf.Lerp(1.0f, 1.35f, layers.HeroPeakMask),
+            Mathf.Lerp(0.90f, 1.30f, layers.HeroPeakMask),
             0.0f,
             1.0f);
         return new TerrainMountainRangeDebugSample(
             landPresence,
-            layers.ShapeBiome,
+            layers.MountainSystemMask,
             shoulderMask,
             peakMask);
     }
@@ -260,7 +360,11 @@ public sealed class VoxelFieldGenerator
         TerrainBiomeSample biome = _biomeClassifier.SampleWorldPosition(worldX, worldZ);
         TerrainHeightLayers layers = SampleHeightLayers(warped, biome);
         float terrain = BuildTerrainHeight(layers, biome);
-        float basinMask = layers.BasinMask * layers.LowlandMask * _waterBasinInfluence;
+        float basinMask =
+            layers.BasinMask *
+            layers.LowlandMask *
+            _waterBasinInfluence *
+            Mathf.Clamp(0.85f + (biome.CanyonWeight * 0.25f) + (biome.SwampWeight * 0.15f), 0.0f, 1.25f);
         return new TerrainWaterDebugSample(
             terrain,
             ComputeShoreMask(terrain),
@@ -289,53 +393,51 @@ public sealed class VoxelFieldGenerator
 
         float depthBelowSurface = terrain - worldPosition.Y;
         float vegetationSignal = biome.PlainsWeight + (biome.SwampWeight * SwampVegetationBias);
-        float normalizedHeight = Mathf.Clamp((terrain + (_terrainHeight * 0.4f)) / (_terrainHeight * 1.7f), 0.0f, 1.0f);
+        float normalizedHeight = NormalizeTerrainHeight(terrain);
 
-        if (slope > 0.55f)
+        if (slope > SurfaceRockSlopeThreshold)
         {
             return normalizedHeight > 0.68f ? VoxelMaterialId.Cliff : VoxelMaterialId.Rock;
         }
 
-        if (normalizedHeight > 0.82f && slope < 0.4f)
+        if (normalizedHeight > AlpineSnowHeightThreshold && slope < 0.4f)
         {
             return VoxelMaterialId.Snow;
         }
 
-        if (depthBelowSurface > 4.8f)
+        if (depthBelowSurface > DeepRockDepthMeters)
         {
             return VoxelMaterialId.Rock;
         }
 
-        if (depthBelowSurface > 2.3f)
+        if (depthBelowSurface > MidSoilDepthMeters)
         {
-            return slope > 0.3f ? VoxelMaterialId.Rock : VoxelMaterialId.Soil;
+            return slope > SurfaceRockMidDepthSlopeThreshold
+                ? VoxelMaterialId.Rock
+                : ResolveGroundCoverMaterial(depthBelowSurface, slope, normalizedHeight, vegetationSignal, biome);
         }
 
-        if (depthBelowSurface < 0.9f)
+        if (depthBelowSurface < SurfaceCoverDepthMeters)
         {
-            if (normalizedHeight > 0.74f)
+            if (normalizedHeight > AlpineRockHeightThreshold)
             {
                 return slope > 0.22f ? VoxelMaterialId.Rock : VoxelMaterialId.Snow;
             }
 
-            return vegetationSignal > 0.42f && slope < 0.24f
-                ? VoxelMaterialId.Grass
-                : VoxelMaterialId.Soil;
+            return ResolveGroundCoverMaterial(depthBelowSurface, slope, normalizedHeight, vegetationSignal, biome);
         }
 
-        if (depthBelowSurface < 1.8f)
+        if (depthBelowSurface < ShallowCoverDepthMeters)
         {
-            if (slope > 0.24f)
+            if (slope > SurfaceRockShallowSlopeThreshold)
             {
                 return VoxelMaterialId.Rock;
             }
 
-            return vegetationSignal > 0.56f
-                ? VoxelMaterialId.Grass
-                : VoxelMaterialId.Soil;
+            return ResolveGroundCoverMaterial(depthBelowSurface, slope, normalizedHeight, vegetationSignal, biome);
         }
 
-        return VoxelMaterialId.Soil;
+        return ResolveGroundCoverMaterial(depthBelowSurface, slope, normalizedHeight, vegetationSignal, biome);
     }
 
     private float SampleTerrainHeight(float worldX, float worldZ)
@@ -354,105 +456,188 @@ public sealed class VoxelFieldGenerator
 
     private float BuildTerrainHeight(TerrainHeightLayers layers, TerrainBiomeSample biome)
     {
-        // The surface silhouette is driven by a 2D height field, then caves perturb density beneath it.
-        float plainsFlattenMask = Mathf.SmoothStep(0.30f, 0.90f, biome.PlainsWeight * layers.LowlandMask);
-        float ruggedReliefMask = Mathf.Max(
-            layers.Mountain * layers.MountainStrength,
-            layers.Hills * layers.HillStrength * 0.65f);
-        float gentleSlopeMask = 1.0f - Mathf.SmoothStep(0.16f, 0.58f, ruggedReliefMask);
+        float plainsFlattenMask = Mathf.Clamp(biome.PlainsWeight * layers.LowlandMask * PlainsMacroFlattenStrength, 0.0f, 1.0f);
+        float swampSoftenMask = Mathf.Clamp(biome.SwampWeight * layers.LowlandMask * SwampLowlandFlattenStrength, 0.0f, 1.0f);
+        float ridgeDamping = Mathf.Clamp(1.0f - (plainsFlattenMask * 0.35f) - (swampSoftenMask * 0.18f), 0.42f, 1.0f);
+        float localReliefDamping = Mathf.Clamp(1.0f - (swampSoftenMask * 0.28f), 0.50f, 1.0f);
+        float surfaceBreakupDamping = Mathf.Clamp(1.0f - (plainsFlattenMask * 0.42f) - (swampSoftenMask * 0.18f), 0.30f, 1.0f);
+
         float terrain = 0.0f;
-        terrain += layers.Continent * (_terrainHeight * ContinentHeightScale);
-        terrain -= _terrainHeight * ContinentBaseOffsetScale;
-        float mountainLift = layers.Mountain * (_terrainHeight * MountainHeightScale * layers.MountainStrength);
-        float heroPeakLift =
-            Mathf.Pow(layers.Mountain, 1.10f) *
-            (_terrainHeight * HeroPeakHeightScale * layers.MountainStrength * layers.HeroPeakMask);
-        terrain += mountainLift + heroPeakLift;
-        terrain += layers.Hills * (_terrainHeight * HillHeightScale * layers.HillStrength * (1.0f - (plainsFlattenMask * 0.45f)));
-        terrain += layers.Detail * (
-            _detailHeight *
-            DetailContributionScale *
-            layers.DetailStrength *
-            (1.0f - (plainsFlattenMask * 0.68f)) *
-            (1.0f - (gentleSlopeMask * 0.42f)));
+
+        // Continents establish the kilometer-scale landmass bias and broad shelf height.
+        terrain += ((layers.Landmass * ContinentLiftMeters) - ContinentBaseOffsetMeters) * _majorReliefScale;
+
+        // Regional cellular partitioning provides basin/plateau clustering without becoming the main height source.
+        terrain += layers.RegionalRelief * RegionalPartitionReliefMeters * _majorReliefScale * (1.0f - (plainsFlattenMask * 0.30f));
+
+        // Ridged mountain backbones sit inside broader mountain-system masks so ranges read large at human scale.
+        terrain += layers.MountainBackbone * MountainBackboneReliefMeters * _majorReliefScale * layers.MountainStrength;
+        terrain += layers.HeroPeakMask * HeroPeakReliefMeters * _majorReliefScale * layers.MountainStrength;
+
+        // Secondary ridges, hills, and local relief fill in the space between major ranges.
+        terrain += layers.SecondaryRidges * SecondaryRidgeReliefMeters * _majorReliefScale * layers.FoothillStrength * ridgeDamping;
+        terrain += layers.Hills * HillReliefMeters * _majorReliefScale * layers.HillStrength * Mathf.Clamp(1.0f - (swampSoftenMask * 0.25f), 0.55f, 1.0f);
+
+        // This mid-frequency relief layer is deliberate: it gives the adaptive mesher more curvature to capture.
+        terrain += layers.LocalRelief * LocalReliefMeters * _detailReliefScale * layers.LocalReliefStrength * localReliefDamping;
+
+        // Tiny breakup stays low amplitude so it helps read surface roughness without turning into jitter.
+        terrain += layers.SurfaceBreakup * SurfaceBreakupMeters * _detailReliefScale * layers.SurfaceBreakupStrength * surfaceBreakupDamping;
+
+        // Biome-specific shaping stays blended by weights instead of hard switching.
+        terrain -= layers.CanyonIncisionMask * CanyonIncisionDepthMeters * _majorReliefScale;
+        terrain -= layers.SwampBasinMask * SwampBasinDepthMeters * _majorReliefScale;
+        terrain += layers.VolcanicPartitionMask * VolcanicPlateLiftMeters * _majorReliefScale;
+        terrain += layers.SurfaceBreakup * VolcanicRubbleReliefMeters * _detailReliefScale * layers.VolcanicPartitionMask;
+
         terrain = ApplyWaterAwareTerrainShaping(terrain, biome, layers.LowlandMask, layers.BasinMask);
         return terrain;
     }
 
     private TerrainHeightLayers SampleHeightLayers(Vector2 warped, TerrainBiomeSample biome)
     {
-        float continent = NoiseToUnit(SampleFbm2D(_continentNoise, warped.X, warped.Y, octaves: 4));
-        continent = Mathf.SmoothStep(0.18f, 0.82f, continent);
+        // Landmass: multi-kilometer simplex smooth mask for continental-scale presence.
+        float landmass = NoiseToUnit(SampleFbm2D(_continentNoise, warped.X, warped.Y, octaves: 4, lacunarity: 1.92f, gain: 0.56f));
+        landmass = Mathf.SmoothStep(0.18f, 0.82f, landmass);
 
-        float lowlandMask = 1.0f - Mathf.SmoothStep(0.22f, 0.78f, continent);
-        float shapeBiome = NoiseToUnit(SampleFbm2D(_shapeBiomeNoise, warped.X, warped.Y, octaves: 3));
-        shapeBiome = Mathf.SmoothStep(0.30f, 0.75f, shapeBiome);
+        float landPresence = Mathf.SmoothStep(0.16f, 0.76f, landmass);
+        float lowlandMask = 1.0f - Mathf.SmoothStep(0.32f, 0.78f, landmass);
 
-        float ruggedShapeBoost = Mathf.Clamp(
-            (biome.RockyWeight * 0.75f) +
-            (biome.CanyonWeight * 0.60f) +
-            (biome.VolcanicWeight * 1.00f),
-            0.0f,
-            1.0f);
-        float mountainStrength = Mathf.Lerp(0.0f, 1.10f, shapeBiome);
-        mountainStrength *= Mathf.Lerp(0.85f, 1.25f, ruggedShapeBoost);
-        float mountain = SampleRidge(_mountainNoise, warped.X, warped.Y);
-        mountain = Mathf.Pow(mountain, 2.2f);
-        mountain *= Mathf.SmoothStep(0.18f, 0.72f, continent);
+        // Cellular partitioning clusters basins and broken regional blocks without driving the entire height field.
+        float regionalPartitionSignal = NoiseToUnit(_regionalPartitionNoise.GetNoise2D(warped.X, warped.Y));
+        float regionalPartition = Mathf.SmoothStep(0.18f, 0.84f, regionalPartitionSignal);
+        float regionalRelief = SignedFromUnit(regionalPartition) * landPresence;
+        float basinMask = Mathf.SmoothStep(RegionalBasinThresholdMin, RegionalBasinThresholdMax, regionalPartitionSignal);
+        basinMask *= 0.65f + (lowlandMask * 0.35f);
 
-        float heroPeakMask = NoiseToUnit(SampleFbm2D(_heroPeakNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.15f, gain: 0.60f));
+        // Mountain systems: broad simplex masks decide where large ranges can exist.
+        float mountainSystemMask = NoiseToUnit(SampleFbm2D(_mountainSystemNoise, warped.X, warped.Y, octaves: 3, lacunarity: 2.02f, gain: 0.58f));
+        mountainSystemMask = Mathf.SmoothStep(MountainSystemThresholdMin, MountainSystemThresholdMax, mountainSystemMask);
+        mountainSystemMask *= landPresence;
+        mountainSystemMask *= Mathf.Lerp(0.82f, 1.16f, regionalPartition);
+        mountainSystemMask = Mathf.Clamp(mountainSystemMask, 0.0f, 1.0f);
+
+        // Ridged backbones and secondary ridges provide the sharp structure inside each mountain system.
+        float mountainBackbone = SampleRidgedFbm2D(_mountainBackboneNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.05f, gain: 0.55f);
+        mountainBackbone = Mathf.Pow(mountainBackbone, 1.85f) * mountainSystemMask;
+        float secondaryRidges = SampleRidgedFbm2D(_secondaryRidgeNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.0f, gain: 0.58f);
+        secondaryRidges *= Mathf.Lerp(0.35f, 1.0f, mountainSystemMask);
+        secondaryRidges *= 0.55f + (regionalPartition * 0.20f) + ((1.0f - lowlandMask) * 0.25f);
+        secondaryRidges = Mathf.Clamp(secondaryRidges, 0.0f, 1.0f);
+
+        // Hero peaks are sparse simplex masks layered over the backbone to create standout landmarks.
+        float heroPeakMask = NoiseToUnit(SampleFbm2D(_heroPeakNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.10f, gain: 0.60f));
         heroPeakMask = Mathf.SmoothStep(HeroPeakThresholdMin, HeroPeakThresholdMax, heroPeakMask);
-        heroPeakMask *= Mathf.SmoothStep(0.30f, 0.78f, continent);
-        heroPeakMask *= Mathf.SmoothStep(0.42f, 0.80f, mountain);
+        heroPeakMask *= Mathf.SmoothStep(0.40f, 0.82f, mountainSystemMask);
+        heroPeakMask *= Mathf.SmoothStep(0.44f, 0.84f, mountainBackbone);
         heroPeakMask = Mathf.Clamp(heroPeakMask, 0.0f, 1.0f);
         heroPeakMask = heroPeakMask <= 0.0f
             ? 0.0f
-            : Mathf.Pow(heroPeakMask, HeroPeakMaskAmplifyPower);
+            : Mathf.Pow(heroPeakMask, HeroPeakMaskPower);
 
-        mountainStrength *= Mathf.Lerp(1.0f, HeroPeakStrengthBoost, heroPeakMask);
-        mountainStrength = Mathf.Clamp(mountainStrength, 0.0f, 1.55f);
+        // Perlin fBm keeps the softer layers readable between the sharper ridge systems.
+        float hills = SampleFbm2D(_hillNoise, warped.X, warped.Y, octaves: 2, lacunarity: 1.95f, gain: 0.52f);
+        hills *= 0.75f + (lowlandMask * 0.25f);
+        float localRelief = SampleFbm2D(_localReliefNoise, warped.X, warped.Y, octaves: 2, lacunarity: 1.85f, gain: 0.58f);
+        localRelief *= 0.85f;
+        localRelief *= Mathf.Lerp(0.72f, 1.12f, (mountainSystemMask * 0.55f) + (regionalPartition * 0.45f));
+        float surfaceBreakup = _surfaceBreakupNoise.GetNoise2D(warped.X, warped.Y) * 0.75f;
 
-        float hillStrength = Mathf.Lerp(1.00f, 0.55f, shapeBiome);
-        hillStrength *= Mathf.Clamp(
-            0.82f +
-            (biome.PlainsWeight * 0.22f) -
-            (biome.SwampWeight * 0.12f),
-            0.65f,
+        float mountainStrength = Mathf.Clamp(
+            0.78f +
+            (biome.RockyWeight * RockyRidgeStrengthBoost) +
+            (biome.CanyonWeight * 0.12f) +
+            (biome.VolcanicWeight * 0.26f) +
+            (biome.Ruggedness * 0.18f) -
+            (biome.PlainsWeight * lowlandMask * 0.20f) -
+            (biome.SwampWeight * lowlandMask * 0.24f),
+            0.45f,
+            1.45f);
+        mountainStrength *= Mathf.Lerp(0.92f, 1.12f, heroPeakMask);
+        mountainStrength = Mathf.Clamp(mountainStrength, 0.45f, 1.55f);
+
+        float foothillStrength = Mathf.Clamp(
+            0.72f +
+            (biome.RockyWeight * 0.22f) +
+            (biome.CanyonWeight * 0.18f) +
+            (biome.VolcanicWeight * 0.20f) -
+            (biome.SwampWeight * 0.18f),
+            0.45f,
+            1.25f);
+
+        float hillStrength = Mathf.Clamp(
+            0.66f +
+            (biome.PlainsWeight * 0.26f) +
+            (biome.CanyonWeight * 0.08f) -
+            (biome.SwampWeight * 0.14f) -
+            (biome.VolcanicWeight * 0.04f),
+            0.40f,
             1.10f);
-        float hills = SampleFbm2D(_hillNoise, warped.X, warped.Y, octaves: 2);
-        hills *= 0.55f + (lowlandMask * 0.45f);
 
-        float detailStrength = Mathf.Clamp(
-            0.70f +
-            (biome.RockyWeight * 0.20f) +
-            (biome.VolcanicWeight * 0.35f) -
-            (biome.SwampWeight * 0.12f),
+        float localReliefStrength = Mathf.Clamp(
+            0.78f +
+            (biome.RockyWeight * 0.16f) +
+            (biome.CanyonWeight * CanyonPartitionStrength * 0.18f) +
+            (biome.VolcanicWeight * 0.26f) -
+            (biome.SwampWeight * 0.16f),
             0.55f,
-            1.20f);
-        float detail = _detailNoise.GetNoise2D(warped.X, warped.Y);
+            1.30f);
 
-        float basinMask = Mathf.SmoothStep(
-            WaterBasinThresholdMin,
-            WaterBasinThresholdMax,
-            NoiseToUnit(_waterBasinNoise.GetNoise2D(warped.X, warped.Y)));
+        float surfaceBreakupStrength = Mathf.Clamp(
+            0.55f +
+            (biome.RockyWeight * 0.10f) +
+            (biome.CanyonWeight * 0.12f) +
+            (biome.VolcanicWeight * 0.25f) -
+            (biome.PlainsWeight * 0.08f) -
+            (biome.SwampWeight * 0.18f),
+            0.28f,
+            1.05f);
+
+        float canyonIncisionMask =
+            biome.CanyonWeight *
+            basinMask *
+            (0.35f + (regionalPartition * CanyonPartitionStrength * 0.35f) + (Mathf.Abs(localRelief) * 0.30f));
+        canyonIncisionMask *= Mathf.Lerp(1.10f, 0.85f, mountainSystemMask);
+        canyonIncisionMask = Mathf.Clamp(canyonIncisionMask, 0.0f, 1.0f);
+
+        float swampBasinMask =
+            biome.SwampWeight *
+            lowlandMask *
+            (0.45f + (basinMask * 0.55f));
+        swampBasinMask = Mathf.Clamp(swampBasinMask, 0.0f, 1.0f);
+
+        float volcanicPartitionMask =
+            biome.VolcanicWeight *
+            (0.30f + (biome.Activity * VolcanicPartitionStrength)) *
+            Mathf.Lerp(regionalPartition, 1.0f - basinMask, 0.35f);
+        volcanicPartitionMask = Mathf.Clamp(volcanicPartitionMask, 0.0f, 1.0f);
 
         return new TerrainHeightLayers(
-            continent,
-            mountain,
-            hills,
-            detail,
-            lowlandMask,
+            landmass,
+            regionalPartition,
+            regionalRelief,
             basinMask,
-            shapeBiome,
+            mountainSystemMask,
+            mountainBackbone,
+            secondaryRidges,
+            hills,
+            localRelief,
+            surfaceBreakup,
+            lowlandMask,
+            heroPeakMask,
             mountainStrength,
+            foothillStrength,
             hillStrength,
-            detailStrength,
-            heroPeakMask);
+            localReliefStrength,
+            surfaceBreakupStrength,
+            canyonIncisionMask,
+            swampBasinMask,
+            volcanicPartitionMask);
     }
 
     private float SampleSlope(float worldX, float worldZ)
     {
-        const float sampleOffset = 1.75f;
+        const float sampleOffset = TerrainSlopeSampleOffsetMeters;
         float heightLeft = SampleTerrainHeight(worldX - sampleOffset, worldZ);
         float heightRight = SampleTerrainHeight(worldX + sampleOffset, worldZ);
         float heightBack = SampleTerrainHeight(worldX, worldZ - sampleOffset);
@@ -477,24 +662,24 @@ public sealed class VoxelFieldGenerator
             shorelineMask *
             lowlandMask *
             Mathf.Clamp(
-                WaterShelfBlendScale +
+                WaterShelfBlendBase +
                 (biome.PlainsWeight * 0.10f) +
                 (biome.SwampWeight * 0.16f) -
                 (biome.RockyWeight * 0.08f) -
                 (biome.CanyonWeight * 0.10f),
                 0.0f,
                 1.0f);
-        terrain = Mathf.Lerp(terrain, _waterLevel + (_shorelineFalloff * WaterShelfHeightScale), shelfBlend);
+        terrain = Mathf.Lerp(terrain, _waterLevel + WaterShelfHeightOffsetMeters, shelfBlend);
 
         float basinDepth =
-            WaterBasinDepthScale +
-            (biome.CanyonWeight * 0.18f) -
-            (biome.SwampWeight * 0.10f);
-        float basinBlend = basinMask * lowlandMask * _waterBasinInfluence * (WaterBasinBlendScale + (submergedMask * 0.18f));
-        terrain = Mathf.Lerp(terrain, _waterLevel - (_shorelineFalloff * basinDepth), basinBlend);
+            WaterBasinDepthMeters +
+            (biome.CanyonWeight * 0.70f) -
+            (biome.SwampWeight * 0.40f);
+        float basinBlend = basinMask * lowlandMask * _waterBasinInfluence * (WaterBasinBlendBase + (submergedMask * 0.18f));
+        terrain = Mathf.Lerp(terrain, _waterLevel - basinDepth, basinBlend);
 
-        float swampFlattenBlend = biome.SwampWeight * lowlandMask * (WaterSwampFlattenScale + (shorelineMask * 0.20f));
-        terrain = Mathf.Lerp(terrain, _waterLevel - (_shorelineFalloff * WaterSwampNearWaterOffsetScale), swampFlattenBlend);
+        float swampFlattenBlend = biome.SwampWeight * lowlandMask * (WaterSwampFlattenBlendBase + (shorelineMask * 0.20f));
+        terrain = Mathf.Lerp(terrain, _waterLevel - WaterSwampNearWaterOffsetMeters, swampFlattenBlend);
 
         return terrain;
     }
@@ -527,6 +712,44 @@ public sealed class VoxelFieldGenerator
         return Mathf.Clamp((value + 1.0f) * 0.5f, 0.0f, 1.0f);
     }
 
+    private static VoxelMaterialId ResolveGroundCoverMaterial(
+        float depthBelowSurface,
+        float slope,
+        float normalizedHeight,
+        float vegetationSignal,
+        TerrainBiomeSample biome)
+    {
+        float grassCoverage = Mathf.Clamp(
+            GrassCoverageBase +
+            (vegetationSignal * GrassCoverageVegetationScale) +
+            (biome.Moisture * GrassCoverageMoistureScale) -
+            (biome.RockyWeight * GrassCoverageRockyPenalty) -
+            (biome.CanyonWeight * GrassCoverageCanyonPenalty) -
+            (biome.VolcanicWeight * GrassCoverageVolcanicPenalty),
+            0.0f,
+            1.0f);
+
+        // Dirt now acts as the transition band near rockier, steeper, or slightly cut-in surfaces.
+        float soilTransition = Mathf.Clamp(
+            (Mathf.SmoothStep(SoilTransitionSlopeStart, SoilTransitionSlopeEnd, slope) * SoilTransitionSlopeScale) +
+            (Mathf.SmoothStep(SoilTransitionDepthStart, SoilTransitionDepthEnd, depthBelowSurface) * SoilTransitionDepthScale) +
+            (Mathf.SmoothStep(SoilTransitionHeightStart, SoilTransitionHeightEnd, normalizedHeight) * SoilTransitionHeightScale) +
+            (biome.RockyWeight * SoilTransitionRockyScale) +
+            (biome.CanyonWeight * SoilTransitionCanyonScale) +
+            (biome.VolcanicWeight * SoilTransitionVolcanicScale),
+            0.0f,
+            1.0f);
+
+        return grassCoverage >= soilTransition
+            ? VoxelMaterialId.Grass
+            : VoxelMaterialId.Soil;
+    }
+
+    private float NormalizeTerrainHeight(float terrain)
+    {
+        return Mathf.Clamp(Mathf.InverseLerp(_surfaceHeightMin, _surfaceHeightMax, terrain), 0.0f, 1.0f);
+    }
+
     private static float SampleFbm2D(
         FastNoiseLite noise,
         float worldX,
@@ -555,28 +778,72 @@ public sealed class VoxelFieldGenerator
             : 0.0f;
     }
 
-    private static float SampleRidge(FastNoiseLite noise, float worldX, float worldZ)
+    private static float SampleRidgedFbm2D(
+        FastNoiseLite noise,
+        float worldX,
+        float worldZ,
+        int octaves,
+        float lacunarity = 2.0f,
+        float gain = 0.5f)
     {
-        return Mathf.Clamp(1.0f - Mathf.Abs(noise.GetNoise2D(worldX, worldZ)), 0.0f, 1.0f);
+        float amplitude = 1.0f;
+        float amplitudeSum = 0.0f;
+        float total = 0.0f;
+        float sampleX = worldX;
+        float sampleZ = worldZ;
+
+        for (int octave = 0; octave < octaves; octave++)
+        {
+            float ridge = 1.0f - Mathf.Abs(noise.GetNoise2D(sampleX, sampleZ));
+            ridge *= ridge;
+            total += ridge * amplitude;
+            amplitudeSum += amplitude;
+            amplitude *= gain;
+            sampleX *= lacunarity;
+            sampleZ *= lacunarity;
+        }
+
+        return amplitudeSum > 0.0f
+            ? total / amplitudeSum
+            : 0.0f;
     }
 
     private Vector2 WarpXZ(float worldX, float worldZ)
     {
-        float warpX = _warpNoiseX.GetNoise2D(worldX, worldZ) * TerrainWarpStrength;
-        float warpZ = _warpNoiseZ.GetNoise2D(worldX, worldZ) * TerrainWarpStrength;
+        float warpX = _warpNoiseX.GetNoise2D(worldX, worldZ) * TerrainWarpStrengthMeters;
+        float warpZ = _warpNoiseZ.GetNoise2D(worldX, worldZ) * TerrainWarpStrengthMeters;
         return new Vector2(worldX + warpX, worldZ + warpZ);
     }
 
+    private static float FrequencyFromWavelength(float wavelengthMeters)
+    {
+        return 1.0f / Mathf.Max(1.0f, wavelengthMeters);
+    }
+
+    private static float SignedFromUnit(float value)
+    {
+        return (value * 2.0f) - 1.0f;
+    }
+
     private readonly record struct TerrainHeightLayers(
-        float Continent,
-        float Mountain,
-        float Hills,
-        float Detail,
-        float LowlandMask,
+        float Landmass,
+        float RegionalPartition,
+        float RegionalRelief,
         float BasinMask,
-        float ShapeBiome,
+        float MountainSystemMask,
+        float MountainBackbone,
+        float SecondaryRidges,
+        float Hills,
+        float LocalRelief,
+        float SurfaceBreakup,
+        float LowlandMask,
+        float HeroPeakMask,
         float MountainStrength,
+        float FoothillStrength,
         float HillStrength,
-        float DetailStrength,
-        float HeroPeakMask);
+        float LocalReliefStrength,
+        float SurfaceBreakupStrength,
+        float CanyonIncisionMask,
+        float SwampBasinMask,
+        float VolcanicPartitionMask);
 }

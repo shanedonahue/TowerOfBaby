@@ -590,7 +590,7 @@ public partial class TerrainLodManager : Node3D
                 DetailHeight = 2.8f,
                 CaveScale = 9.0f,
                 CaveThreshold = 0.63f,
-                WaterLevel = -3.4f,
+                WaterLevel = -6.0f,
                 ShorelineFalloff = 3.4f,
                 WaterBasinInfluence = 0.48f,
                 CoarseRadiusXZ = Mathf.Max(1, CoarsestRadiusXZ),

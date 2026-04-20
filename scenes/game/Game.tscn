@@ -36,7 +36,6 @@ fog_depth_end = 360.0
 [node name="Game" type="Node3D" unique_id=239808047]
 script = ExtResource("4_root")
 TerrainWorldPath = NodePath("TerrainWorld")
-EnableTerrainDebugViewSelector = false
 
 [node name="Player" parent="." unique_id=222714919 instance=ExtResource("3_humanoid")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 12, 6)

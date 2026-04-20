@@ -35,7 +35,7 @@ internal static class TerrainSurfaceMaterialLibrary
     private static bool _surfaceMaterialsInitialized;
     private static bool _warnedMissingTerrainMaterialResources;
     private static float _sharedRoughness = 1.0f;
-    private static float _sharedWaterLevel = -3.4f;
+    private static float _sharedWaterLevel = -6.0f;
     private static float _sharedTextureTilingScale = DefaultTextureTilingScale;
     private static float _sharedBlendSharpness = DefaultBlendSharpness;
     private static float _sharedGrassSlopeMax = DefaultGrassSlopeMax;

@@ -343,7 +343,7 @@ public partial class TerrainGrassSystem : Node3D
         float maxPlacementSlope = Mathf.Min(SelectiveGrassSlopeMax, 1.0f - slopeLimitDot);
         float highlandStart = Mathf.Max(0.0f, HighlandFadeStart);
         float highlandEnd = Mathf.Max(highlandStart + 0.01f, HighlandFadeEnd);
-        float waterLevel = _terrainWorld?.WaterLevel ?? -3.4f;
+        float waterLevel = _terrainWorld?.WaterLevel ?? -6.0f;
         float minHeightAboveWater = Mathf.Max(0.05f, MinHeightAboveWater);
         VoxelFieldGenerator placementSampler = _terrainPlacementSampler;
         float terrainQueryCellSize = ResolveTerrainSurfaceQueryCellSize(renderer.BlockId.Lod);

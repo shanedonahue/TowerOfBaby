@@ -9,6 +9,8 @@ namespace TowerOfBaby.Terrain;
 
 public sealed class TerrainChunkStore
 {
+    private const int TerrainGenerationCacheVersion = 2;
+
     public readonly record struct SerializedLodBlockSaveData(
         int PointsPerAxis,
         float VoxelSize,
@@ -26,7 +28,7 @@ public sealed class TerrainChunkStore
 
     public TerrainChunkStore(int seed)
     {
-        string rootPath = $"user://terrain_cache/world_{seed}";
+        string rootPath = $"user://terrain_cache/world_{seed}_gen_{TerrainGenerationCacheVersion}";
         DirAccess.MakeDirRecursiveAbsolute(rootPath);
         _databasePath = ProjectSettings.GlobalizePath($"{rootPath}/terrain_chunks.db");
         _connectionString = new SqliteConnectionStringBuilder
