@@ -64,6 +64,11 @@ public partial class TerrainWorld : Node3D
         return _lodManager?.InitialLoadProgress ?? 1.0f;
     }
 
+    public float SampleSurfaceHeight(float worldX, float worldZ)
+    {
+        return _lodManager?.SampleSurfaceHeight(worldX, worldZ) ?? BaseY;
+    }
+
     public void ApplyBrush(Vector3 worldCenter, bool additive)
     {
         _lodManager?.ApplyBrush(worldCenter, additive);

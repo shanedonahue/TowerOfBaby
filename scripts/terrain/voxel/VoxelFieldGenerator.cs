@@ -42,18 +42,32 @@ public sealed class VoxelFieldGenerator
     private const float MountainSystemWavelengthMeters = 760.0f;
     private const float MountainSystemThresholdMin = 0.43f;
     private const float MountainSystemThresholdMax = 0.78f;
+    private const float MountainSystemLiftThresholdMin = 0.18f;
+    private const float MountainSystemLiftThresholdMax = 0.82f;
+    private const float MountainSystemLiftMeters = 4.2f;
+    private const float MountainShoulderThresholdMin = 0.16f;
+    private const float MountainShoulderThresholdMax = 0.60f;
+    private const float MountainCoreThresholdMin = 0.54f;
+    private const float MountainCoreThresholdMax = 0.86f;
+    private const float MountainCoreAmplificationPower = 1.65f;
+    private const float MountainCoreAmplificationMax = 0.55f;
+    private const float MountainShoulderFoothillBoost = 0.16f;
+    private const float MountainShoulderLocalReliefBoost = 0.08f;
+    private const float MountainShoulderRidgeBoost = 0.18f;
+    private const float MountainCoreHillContributionMin = 0.35f;
+    private const float MountainCoreLocalReliefContributionMin = 0.72f;
 
     private const float MountainBackboneWavelengthMeters = 210.0f;
-    private const float MountainBackboneReliefMeters = 8.5f;
+    private const float MountainBackboneReliefMeters = 9.5f;
 
     private const float HeroPeakWavelengthMeters = 420.0f;
     private const float HeroPeakThresholdMin = 0.79f;
     private const float HeroPeakThresholdMax = 0.93f;
     private const float HeroPeakMaskPower = 0.60f;
-    private const float HeroPeakReliefMeters = 4.0f;
+    private const float HeroPeakReliefMeters = 5.0f;
 
     private const float SecondaryRidgeWavelengthMeters = 170.0f;
-    private const float SecondaryRidgeReliefMeters = 3.2f;
+    private const float SecondaryRidgeReliefMeters = 3.4f;
 
     private const float HillWavelengthMeters = 92.0f;
     private const float HillReliefMeters = 2.4f;
@@ -65,6 +79,8 @@ public sealed class VoxelFieldGenerator
     private const float SurfaceBreakupMeters = 0.30f;
 
     private const float CaveWavelengthMeters = 22.0f;
+    private const float CaveSurfaceFadeStartMeters = PlayerHeightMeters * 2.0f;
+    private const float CaveSurfaceFadeEndMeters = PlayerHeightMeters * 4.5f;
 
     private const float PlainsMacroFlattenStrength = 0.55f;
     private const float RockyRidgeStrengthBoost = 0.30f;
@@ -130,6 +146,7 @@ public sealed class VoxelFieldGenerator
     private readonly float _surfaceHeightMin;
     private readonly float _surfaceHeightMax;
     private readonly float _caveScale;
+    private readonly float _caveThreshold;
     private readonly float _waterLevel;
     private readonly float _shorelineFalloff;
     private readonly float _waterBasinInfluence;
@@ -147,6 +164,7 @@ public sealed class VoxelFieldGenerator
         _majorReliefScale = Mathf.Max(0.2f, terrainHeight / DefaultMajorReliefBudgetMeters);
         _detailReliefScale = Mathf.Max(0.2f, detailHeight / DefaultDetailReliefBudgetMeters);
         _caveScale = caveScale;
+        _caveThreshold = Mathf.Clamp(caveThreshold, 0.0f, 0.98f);
         _waterLevel = waterLevel;
         _shorelineFalloff = Mathf.Max(0.4f, shorelineFalloff);
         _waterBasinInfluence = Mathf.Clamp(waterBasinInfluence, 0.0f, 1.0f);
@@ -154,9 +172,13 @@ public sealed class VoxelFieldGenerator
         _surfaceHeightMin =
             ((-ContinentBaseOffsetMeters - RegionalPartitionReliefMeters - CanyonIncisionDepthMeters - SwampBasinDepthMeters) * _majorReliefScale) -
             ((LocalReliefMeters + SurfaceBreakupMeters) * _detailReliefScale);
+
+        // Surface material classification should react to the readable terrain band, not the absolute rare-peak ceiling.
+        // Using full mountain-core amplification here collapses alpine/rock breakup back toward grass.
         _surfaceHeightMax =
             ((ContinentLiftMeters - ContinentBaseOffsetMeters) +
              RegionalPartitionReliefMeters +
+             MountainSystemLiftMeters +
              MountainBackboneReliefMeters +
              HeroPeakReliefMeters +
              SecondaryRidgeReliefMeters +
@@ -335,15 +357,14 @@ public sealed class VoxelFieldGenerator
         TerrainHeightLayers layers = SampleHeightLayers(warped, biome);
         float landPresence = Mathf.SmoothStep(0.18f, 0.72f, layers.Landmass);
         float shoulderMask = Mathf.Clamp(
-            (layers.MountainSystemMask * 0.45f) +
-            (layers.SecondaryRidges * 0.55f),
+            (layers.MountainShoulderMask * 0.68f) +
+            (layers.SecondaryRidges * 0.32f),
             0.0f,
             1.0f);
         shoulderMask *= landPresence;
-        shoulderMask = Mathf.Clamp(shoulderMask + (layers.HeroPeakMask * 0.12f), 0.0f, 1.0f);
         float peakMask = Mathf.Clamp(
+            layers.MountainCoreMask *
             layers.MountainBackbone *
-            layers.MountainStrength *
             Mathf.Lerp(0.90f, 1.30f, layers.HeroPeakMask),
             0.0f,
             1.0f);
@@ -375,7 +396,7 @@ public sealed class VoxelFieldGenerator
     public float SampleDensity(Vector3 worldPosition, float terrain)
     {
         float density = terrain - worldPosition.Y;
-        density += SampleCaveContribution(worldPosition);
+        density += SampleCaveContribution(worldPosition, terrain);
         return density;
     }
 
@@ -458,9 +479,14 @@ public sealed class VoxelFieldGenerator
     {
         float plainsFlattenMask = Mathf.Clamp(biome.PlainsWeight * layers.LowlandMask * PlainsMacroFlattenStrength, 0.0f, 1.0f);
         float swampSoftenMask = Mathf.Clamp(biome.SwampWeight * layers.LowlandMask * SwampLowlandFlattenStrength, 0.0f, 1.0f);
+        float mountainLiftDamping = Mathf.Clamp(1.0f - (plainsFlattenMask * 0.32f) - (swampSoftenMask * 0.24f), 0.36f, 1.0f);
         float ridgeDamping = Mathf.Clamp(1.0f - (plainsFlattenMask * 0.35f) - (swampSoftenMask * 0.18f), 0.42f, 1.0f);
+        float hillDamping = Mathf.Clamp(1.0f - (swampSoftenMask * 0.25f), 0.55f, 1.0f);
         float localReliefDamping = Mathf.Clamp(1.0f - (swampSoftenMask * 0.28f), 0.50f, 1.0f);
         float surfaceBreakupDamping = Mathf.Clamp(1.0f - (plainsFlattenMask * 0.42f) - (swampSoftenMask * 0.18f), 0.30f, 1.0f);
+        float shoulderRidgeBoost = Mathf.Lerp(1.0f, 1.0f + MountainShoulderRidgeBoost, layers.MountainShoulderMask);
+        float coreHillDamping = Mathf.Lerp(1.0f, MountainCoreHillContributionMin, layers.MountainCoreMask);
+        float coreLocalReliefDamping = Mathf.Lerp(1.0f, MountainCoreLocalReliefContributionMin, layers.MountainCoreMask);
 
         float terrain = 0.0f;
 
@@ -470,16 +496,17 @@ public sealed class VoxelFieldGenerator
         // Regional cellular partitioning provides basin/plateau clustering without becoming the main height source.
         terrain += layers.RegionalRelief * RegionalPartitionReliefMeters * _majorReliefScale * (1.0f - (plainsFlattenMask * 0.30f));
 
-        // Ridged mountain backbones sit inside broader mountain-system masks so ranges read large at human scale.
-        terrain += layers.MountainBackbone * MountainBackboneReliefMeters * _majorReliefScale * layers.MountainStrength;
-        terrain += layers.HeroPeakMask * HeroPeakReliefMeters * _majorReliefScale * layers.MountainStrength;
+        // Broad system lift establishes the mountain mass before sharper backbones and peaks sit on top.
+        terrain += layers.MountainSystemLiftMask * MountainSystemLiftMeters * _majorReliefScale * layers.MountainStrength * mountainLiftDamping;
+        terrain += layers.MountainBackbone * MountainBackboneReliefMeters * _majorReliefScale * layers.MountainStrength * layers.MountainAmplification;
+        terrain += layers.HeroPeakMask * HeroPeakReliefMeters * _majorReliefScale * layers.MountainStrength * layers.MountainAmplification;
 
-        // Secondary ridges, hills, and local relief fill in the space between major ranges.
-        terrain += layers.SecondaryRidges * SecondaryRidgeReliefMeters * _majorReliefScale * layers.FoothillStrength * ridgeDamping;
-        terrain += layers.Hills * HillReliefMeters * _majorReliefScale * layers.HillStrength * Mathf.Clamp(1.0f - (swampSoftenMask * 0.25f), 0.55f, 1.0f);
+        // Shoulders keep foothills readable, while ordinary hills yield to the mountain silhouette in strong cores.
+        terrain += layers.SecondaryRidges * SecondaryRidgeReliefMeters * _majorReliefScale * layers.FoothillStrength * ridgeDamping * shoulderRidgeBoost;
+        terrain += layers.Hills * HillReliefMeters * _majorReliefScale * layers.HillStrength * hillDamping * coreHillDamping;
 
         // This mid-frequency relief layer is deliberate: it gives the adaptive mesher more curvature to capture.
-        terrain += layers.LocalRelief * LocalReliefMeters * _detailReliefScale * layers.LocalReliefStrength * localReliefDamping;
+        terrain += layers.LocalRelief * LocalReliefMeters * _detailReliefScale * layers.LocalReliefStrength * localReliefDamping * coreLocalReliefDamping;
 
         // Tiny breakup stays low amplitude so it helps read surface roughness without turning into jitter.
         terrain += layers.SurfaceBreakup * SurfaceBreakupMeters * _detailReliefScale * layers.SurfaceBreakupStrength * surfaceBreakupDamping;
@@ -517,6 +544,10 @@ public sealed class VoxelFieldGenerator
         mountainSystemMask *= Mathf.Lerp(0.82f, 1.16f, regionalPartition);
         mountainSystemMask = Mathf.Clamp(mountainSystemMask, 0.0f, 1.0f);
 
+        // Derived mountain-zone masks reuse the existing system layout to separate foothills, shoulders, and core ranges.
+        float mountainSystemLiftMask = Mathf.SmoothStep(MountainSystemLiftThresholdMin, MountainSystemLiftThresholdMax, mountainSystemMask);
+        float mountainCoreMask = Mathf.SmoothStep(MountainCoreThresholdMin, MountainCoreThresholdMax, mountainSystemMask);
+
         // Ridged backbones and secondary ridges provide the sharp structure inside each mountain system.
         float mountainBackbone = SampleRidgedFbm2D(_mountainBackboneNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.05f, gain: 0.55f);
         mountainBackbone = Mathf.Pow(mountainBackbone, 1.85f) * mountainSystemMask;
@@ -524,6 +555,10 @@ public sealed class VoxelFieldGenerator
         secondaryRidges *= Mathf.Lerp(0.35f, 1.0f, mountainSystemMask);
         secondaryRidges *= 0.55f + (regionalPartition * 0.20f) + ((1.0f - lowlandMask) * 0.25f);
         secondaryRidges = Mathf.Clamp(secondaryRidges, 0.0f, 1.0f);
+        float mountainShoulderMask = Mathf.SmoothStep(MountainShoulderThresholdMin, MountainShoulderThresholdMax, mountainSystemMask);
+        mountainShoulderMask *= 1.0f - (mountainCoreMask * 0.85f);
+        mountainShoulderMask = Mathf.Clamp(mountainShoulderMask + (secondaryRidges * 0.12f), 0.0f, 1.0f);
+        float mountainAmplification = 1.0f + (Mathf.Pow(mountainCoreMask, MountainCoreAmplificationPower) * MountainCoreAmplificationMax);
 
         // Hero peaks are sparse simplex masks layered over the backbone to create standout landmarks.
         float heroPeakMask = NoiseToUnit(SampleFbm2D(_heroPeakNoise, warped.X, warped.Y, octaves: 2, lacunarity: 2.10f, gain: 0.60f));
@@ -564,6 +599,8 @@ public sealed class VoxelFieldGenerator
             (biome.SwampWeight * 0.18f),
             0.45f,
             1.25f);
+        foothillStrength *= Mathf.Lerp(1.0f, 1.0f + MountainShoulderFoothillBoost, mountainShoulderMask);
+        foothillStrength = Mathf.Clamp(foothillStrength, 0.45f, 1.35f);
 
         float hillStrength = Mathf.Clamp(
             0.66f +
@@ -582,6 +619,8 @@ public sealed class VoxelFieldGenerator
             (biome.SwampWeight * 0.16f),
             0.55f,
             1.30f);
+        localReliefStrength *= Mathf.Lerp(1.0f, 1.0f + MountainShoulderLocalReliefBoost, mountainShoulderMask);
+        localReliefStrength = Mathf.Clamp(localReliefStrength, 0.55f, 1.38f);
 
         float surfaceBreakupStrength = Mathf.Clamp(
             0.55f +
@@ -618,6 +657,10 @@ public sealed class VoxelFieldGenerator
             regionalRelief,
             basinMask,
             mountainSystemMask,
+            mountainSystemLiftMask,
+            mountainShoulderMask,
+            mountainCoreMask,
+            mountainAmplification,
             mountainBackbone,
             secondaryRidges,
             hills,
@@ -701,10 +744,25 @@ public sealed class VoxelFieldGenerator
             terrain);
     }
 
-    private float SampleCaveContribution(Vector3 worldPosition)
+    private float SampleCaveContribution(Vector3 worldPosition, float terrain)
     {
+        if (_caveScale <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        float depthBelowSurface = terrain - worldPosition.Y;
+        float surfaceFade = Mathf.SmoothStep(CaveSurfaceFadeStartMeters, CaveSurfaceFadeEndMeters, depthBelowSurface);
+        if (surfaceFade <= 0.0f)
+        {
+            return 0.0f;
+        }
+
         Vector2 warped = WarpXZ(worldPosition.X, worldPosition.Z);
-        return _caveNoise.GetNoise3D(warped.X, worldPosition.Y, warped.Y) * _caveScale;
+        float caveNoise = _caveNoise.GetNoise3D(warped.X, worldPosition.Y, warped.Y);
+        float carveSignal = 1.0f - NoiseToUnit(caveNoise);
+        float carveMask = Mathf.SmoothStep(_caveThreshold, 1.0f, carveSignal);
+        return caveNoise * _caveScale * carveMask * surfaceFade;
     }
 
     private static float NoiseToUnit(float value)
@@ -831,6 +889,10 @@ public sealed class VoxelFieldGenerator
         float RegionalRelief,
         float BasinMask,
         float MountainSystemMask,
+        float MountainSystemLiftMask,
+        float MountainShoulderMask,
+        float MountainCoreMask,
+        float MountainAmplification,
         float MountainBackbone,
         float SecondaryRidges,
         float Hills,

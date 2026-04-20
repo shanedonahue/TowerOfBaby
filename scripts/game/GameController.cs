@@ -8,6 +8,7 @@ namespace TowerOfBaby.Scene;
 public partial class GameController : Node3D
 {
     private const Key TelemetryCaptureToggleKey = Key.F7;
+    private const float SceneSpawnGroundClearanceMeters = 0.08f;
 
     public enum PlayerStartMode
     {
@@ -457,7 +458,22 @@ public partial class GameController : Node3D
             return;
         }
 
-        _player.GlobalTransform = _playerSpawnTransform;
+        Transform3D groundedSpawnTransform = _playerSpawnTransform;
+        if (_terrainWorld != null)
+        {
+            float surfaceHeight = _terrainWorld.SampleSurfaceHeight(
+                groundedSpawnTransform.Origin.X,
+                groundedSpawnTransform.Origin.Z);
+            if (float.IsFinite(surfaceHeight))
+            {
+                groundedSpawnTransform.Origin = new Vector3(
+                    groundedSpawnTransform.Origin.X,
+                    surfaceHeight + SceneSpawnGroundClearanceMeters,
+                    groundedSpawnTransform.Origin.Z);
+            }
+        }
+
+        _player.GlobalTransform = groundedSpawnTransform;
     }
 
     private void ConfigureTelemetry()

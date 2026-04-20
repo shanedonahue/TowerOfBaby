@@ -300,6 +300,11 @@ public partial class TerrainLodManager : Node3D
     public TerrainVisualDebugMode ActiveTerrainDebugView => _activeTerrainDebugView;
     private bool IsShuttingDown => Volatile.Read(ref _shutdownState) != 0;
 
+    public float SampleSurfaceHeight(float worldX, float worldZ)
+    {
+        return _mesher?.SampleSurfaceHeight(worldX, worldZ) ?? (_terrainWorld?.BaseY ?? 0.0f);
+    }
+
     public override void _Ready()
     {
         _terrainWorld = GetParent() as TerrainWorld;
