@@ -79,6 +79,8 @@ public partial class TerrainLodManager : Node3D
     [ExportGroup("LOD Policy")]
     [Export(PropertyHint.Range, "3,6,1")] public int TierCount = 4;
     [Export(PropertyHint.Range, "-1,8,1")] public int Lod0NearFieldRadiusXZ = -1;
+    [Export(PropertyHint.Range, "0,4,1")] public int NearPlayerGuaranteeRadiusXZ = 1;
+    [Export(PropertyHint.Range, "1,6,1")] public int NearPlayerGuaranteeVerticalPaddingBlocks = 2;
     [Export] public int[] TierSplitRadiiXZ = { 0, 2, 2 };
     [Export(PropertyHint.Range, "1,12,1")] public int CoarsestRadiusXZ = 2;
     [Export(PropertyHint.Range, "0,2,1")] public int VerticalRadius;
@@ -134,6 +136,7 @@ public partial class TerrainLodManager : Node3D
 
     private readonly Dictionary<TerrainBlockId, TerrainBlockData> _blocks = new();
     private readonly HashSet<TerrainBlockId> _desiredBlocks = new();
+    private readonly HashSet<TerrainBlockId> _nearPlayerGuaranteedBlocks = new();
     private readonly Dictionary<int, HashSet<TerrainBlockId>> _activeSplitParentsByLod = new();
     private readonly Dictionary<int, TerrainBlockId> _currentStableCentersByLod = new();
     private readonly Dictionary<int, TerrainBlockId> _targetStableCentersByLod = new();
@@ -283,6 +286,7 @@ public partial class TerrainLodManager : Node3D
     private int _persistenceSaveSequence;
     private TerrainMixedLodSeamMode _appliedMixedLodSeamMode;
     private TerrainVisualDebugMode _activeTerrainDebugView = TerrainVisualDebugMode.Lit;
+    private Aabb _nearPlayerGuaranteeBounds;
     private int[] _currentLodBlockCounts = System.Array.Empty<int>();
     private int[] _currentSplitParentCounts = System.Array.Empty<int>();
     private string _lastSupersededTransitionSummary = "none";
@@ -1507,7 +1511,9 @@ public partial class TerrainLodManager : Node3D
 
         Dictionary<int, HashSet<TerrainBlockId>> activeSplitParentsByLod = BuildActiveSplitParentsByLod(viewerPosition);
         ReplaceSetMap(_activeSplitParentsByLod, activeSplitParentsByLod);
-        HashSet<TerrainBlockId> desired = BuildDesiredSet(_activeSplitParentsByLod);
+        HashSet<TerrainBlockId> nearPlayerGuaranteedBlocks = BuildNearPlayerGuaranteedFinestSet(viewerPosition);
+        ReplaceSet(_nearPlayerGuaranteedBlocks, nearPlayerGuaranteedBlocks);
+        HashSet<TerrainBlockId> desired = BuildDesiredSet(_activeSplitParentsByLod, _nearPlayerGuaranteedBlocks);
         _lastDesiredBlockCount = desired.Count;
         _currentLodBlockCounts = CountBlocksByLod(desired);
         _currentSplitParentCounts = CountSplitParentsByLod(_activeSplitParentsByLod);
@@ -1564,6 +1570,11 @@ public partial class TerrainLodManager : Node3D
 
     private bool IsStartupCriticalBlock(TerrainBlockId blockId, Vector3 viewerPosition)
     {
+        if (IsNearPlayerGuaranteedBlock(blockId))
+        {
+            return true;
+        }
+
         if (ShouldIncludeCollision(blockId, viewerPosition))
         {
             return true;
@@ -2152,7 +2163,16 @@ public partial class TerrainLodManager : Node3D
 
     private HashSet<TerrainBlockId> BuildDesiredSet(IReadOnlyDictionary<int, HashSet<TerrainBlockId>> splitParentsByLod)
     {
+        return BuildDesiredSet(splitParentsByLod, _nearPlayerGuaranteedBlocks);
+    }
+
+    private HashSet<TerrainBlockId> BuildDesiredSet(
+        IReadOnlyDictionary<int, HashSet<TerrainBlockId>> splitParentsByLod,
+        IReadOnlyCollection<TerrainBlockId> nearPlayerGuaranteedBlocks)
+    {
         HashSet<TerrainBlockId> desired = new();
+        HashSet<TerrainBlockId> nearPlayerGuaranteedSplitParents = BuildNearPlayerGuaranteedSplitParents(nearPlayerGuaranteedBlocks);
+        HashSet<TerrainBlockId> nearPlayerGuaranteedCoarsestBlocks = BuildNearPlayerGuaranteedCoarsestBlocks(nearPlayerGuaranteedBlocks);
         TerrainBlockId coarsestCenter = GetAncestorBlock(_currentCenterParent, GetCoarsestLod());
         int outerRadius = GetEffectiveCoarsestRadius(coarsestCenter, splitParentsByLod);
         int verticalRadius = Mathf.Max(0, _config.VerticalRadius);
@@ -2170,13 +2190,47 @@ public partial class TerrainLodManager : Node3D
                     TerrainBlockId coarsestBlock = new(
                         GetCoarsestLod(),
                         coarsestCenter.Index + new Vector3I(x, y, z));
-                    AddDesiredLeaves(coarsestBlock, splitParentsByLod, desired);
+                    AddDesiredLeaves(coarsestBlock, splitParentsByLod, nearPlayerGuaranteedSplitParents, desired);
                 }
             }
         }
 
+        foreach (TerrainBlockId guaranteedCoarsestBlock in nearPlayerGuaranteedCoarsestBlocks)
+        {
+            AddDesiredLeaves(guaranteedCoarsestBlock, splitParentsByLod, nearPlayerGuaranteedSplitParents, desired);
+        }
+
         _currentCoarsestRadius = outerRadius;
         return desired;
+    }
+
+    private HashSet<TerrainBlockId> BuildNearPlayerGuaranteedSplitParents(
+        IReadOnlyCollection<TerrainBlockId> nearPlayerGuaranteedBlocks)
+    {
+        HashSet<TerrainBlockId> splitParents = new();
+        foreach (TerrainBlockId guaranteedBlock in nearPlayerGuaranteedBlocks)
+        {
+            TerrainBlockId current = guaranteedBlock;
+            while (current.Lod < GetCoarsestLod())
+            {
+                current = GetParentBlock(current);
+                splitParents.Add(current);
+            }
+        }
+
+        return splitParents;
+    }
+
+    private HashSet<TerrainBlockId> BuildNearPlayerGuaranteedCoarsestBlocks(
+        IReadOnlyCollection<TerrainBlockId> nearPlayerGuaranteedBlocks)
+    {
+        HashSet<TerrainBlockId> coarsestBlocks = new();
+        foreach (TerrainBlockId guaranteedBlock in nearPlayerGuaranteedBlocks)
+        {
+            coarsestBlocks.Add(GetAncestorBlock(guaranteedBlock, GetCoarsestLod()));
+        }
+
+        return coarsestBlocks;
     }
 
     private static bool ShouldIncludeCoarsestCoverageOffset(int xOffset, int zOffset, int bubbleRadius)
@@ -2200,11 +2254,11 @@ public partial class TerrainLodManager : Node3D
     private void AddDesiredLeaves(
         TerrainBlockId blockId,
         IReadOnlyDictionary<int, HashSet<TerrainBlockId>> splitParentsByLod,
+        IReadOnlySet<TerrainBlockId> nearPlayerGuaranteedSplitParents,
         HashSet<TerrainBlockId> desired)
     {
         if (blockId.Lod <= FinestTerrainLod ||
-            !splitParentsByLod.TryGetValue(blockId.Lod, out HashSet<TerrainBlockId> splitParents) ||
-            !splitParents.Contains(blockId))
+            !ShouldSplitDesiredBlock(blockId, splitParentsByLod, nearPlayerGuaranteedSplitParents))
         {
             desired.Add(blockId);
             return;
@@ -2212,8 +2266,18 @@ public partial class TerrainLodManager : Node3D
 
         foreach (TerrainBlockId child in TerrainMetrics.GetChildren(blockId))
         {
-            AddDesiredLeaves(child, splitParentsByLod, desired);
+            AddDesiredLeaves(child, splitParentsByLod, nearPlayerGuaranteedSplitParents, desired);
         }
+    }
+
+    private static bool ShouldSplitDesiredBlock(
+        TerrainBlockId blockId,
+        IReadOnlyDictionary<int, HashSet<TerrainBlockId>> splitParentsByLod,
+        IReadOnlySet<TerrainBlockId> nearPlayerGuaranteedSplitParents)
+    {
+        return nearPlayerGuaranteedSplitParents.Contains(blockId) ||
+               (splitParentsByLod.TryGetValue(blockId.Lod, out HashSet<TerrainBlockId> splitParents) &&
+                splitParents.Contains(blockId));
     }
 
     private int GetEffectiveCoarsestRadius(
@@ -2379,6 +2443,7 @@ public partial class TerrainLodManager : Node3D
         _lastReleaseHeadOfLineAvoidedCount = 0;
         _lastReleaseDeferredAgeSampleCount = 0;
         _lastReleaseDeferredAgeMsTotal = 0.0;
+        FastLaneNearPlayerGuaranteedPromotions();
         ulong createBudgetStartUsec = Time.GetTicksUsec();
         float createTimeBudgetMs = GetCurrentCreateTimeBudgetMs();
         ProcessCreateDispatch(createBudgetStartUsec, createTimeBudgetMs);
@@ -2390,6 +2455,7 @@ public partial class TerrainLodManager : Node3D
         float commitTimeBudgetMs = GetCurrentMeshCommitTimeBudgetMs();
         ProcessMeshCommitDispatch(commitBudgetStartUsec, commitTimeBudgetMs);
         ProcessDisplayedRefreshFollowThroughPasses(commitBudgetStartUsec, commitTimeBudgetMs);
+        TryHideNearPlayerGuaranteedSupersededParents();
         RefreshCollisionCoverage();
         DispatchPendingCollisionRefreshes();
         ProcessCollisionDispatch();
@@ -2644,7 +2710,7 @@ public partial class TerrainLodManager : Node3D
 
             CreateBlock(blockId);
             _lastCreateCount++;
-            EnqueueFieldBuildDispatch(blockId);
+            EnqueueFieldBuildDispatch(blockId, urgent: ShouldFastLanePromotion(blockId));
         }
     }
 
@@ -2807,7 +2873,7 @@ public partial class TerrainLodManager : Node3D
             _lastFieldBuildMs += result.WorkerBuildMs;
             RecordFieldLoad(block.Id, result.Source, result.WorkerBuildMs);
             QueuePersistenceSaveForLoadedBlock(block, result.Source);
-            EnqueueMeshBuildDispatch(block.Id);
+            EnqueueMeshBuildDispatch(block.Id, urgent: ShouldFastLanePromotion(block.Id));
         }
     }
 
@@ -2993,7 +3059,7 @@ public partial class TerrainLodManager : Node3D
             block.SetMesh(result.Mesh.Value);
             _lastMeshBuildCount++;
             _lastMeshBuildMs += result.WorkerBuildMs;
-            EnqueueCommitDispatch(block.Id);
+            EnqueueCommitDispatch(block.Id, urgent: ShouldFastLanePromotion(block.Id));
         }
     }
 
@@ -4249,7 +4315,7 @@ public partial class TerrainLodManager : Node3D
         CancelSupersededBlockTransition(blockId, "desired_restored");
         if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
         {
-            EnqueueCreateDispatch(blockId);
+            EnqueueCreateDispatch(blockId, urgent: ShouldFastLanePromotion(blockId));
             return;
         }
 
@@ -4315,16 +4381,17 @@ public partial class TerrainLodManager : Node3D
 
     private void EnqueueDispatcherForCurrentState(TerrainBlockData block)
     {
+        bool urgent = ShouldFastLanePromotion(block.Id);
         switch (block.State)
         {
             case TerrainBlockState.Requested:
-                EnqueueFieldBuildDispatch(block.Id);
+                EnqueueFieldBuildDispatch(block.Id, urgent);
                 break;
             case TerrainBlockState.FieldReady:
-                EnqueueMeshBuildDispatch(block.Id);
+                EnqueueMeshBuildDispatch(block.Id, urgent);
                 break;
             case TerrainBlockState.MeshReady:
-                EnqueueCommitDispatch(block.Id);
+                EnqueueCommitDispatch(block.Id, urgent);
                 break;
             case TerrainBlockState.Visible:
                 EnqueueDisplayedRefreshForCurrentState(block);
@@ -4339,7 +4406,7 @@ public partial class TerrainLodManager : Node3D
 
                     if (block.IsCollisionDispatchEligible(_currentTimeSeconds))
                     {
-                        EnqueueCollisionDispatch(block.Id);
+                        EnqueueCollisionDispatch(block.Id, urgent);
                     }
                 }
                 break;
@@ -4350,14 +4417,14 @@ public partial class TerrainLodManager : Node3D
         }
     }
 
-    private void EnqueueCreateDispatch(TerrainBlockId blockId)
+    private void EnqueueCreateDispatch(TerrainBlockId blockId, bool urgent = false)
     {
         if (IsShuttingDown)
         {
             return;
         }
 
-        EnqueueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, blockId, farthestFirst: false);
+        EnqueueBlockDispatch(_createDispatcherQueue, _createDispatchTokens, blockId, farthestFirst: false, urgent);
     }
 
     private void EnqueueFieldBuildDispatch(TerrainBlockId blockId, bool urgent = false)
@@ -4489,8 +4556,14 @@ public partial class TerrainLodManager : Node3D
     private BlockDispatchPriority BuildDispatchPriority(TerrainBlockId blockId, bool farthestFirst, bool urgent, int token)
     {
         float distance = TerrainMetrics.DistanceSquaredToBlock(_config, blockId, _lastViewerPosition);
+        int priorityClass = urgent ? 0 : (_startupBlocks.Contains(blockId) && IsStartupBoostActive() && !farthestFirst ? 1 : 2);
+        if (!farthestFirst && ShouldFastLanePromotion(blockId))
+        {
+            priorityClass = -1;
+        }
+
         return new BlockDispatchPriority(
-            urgent ? 0 : (_startupBlocks.Contains(blockId) && IsStartupBoostActive() && !farthestFirst ? 1 : 2),
+            priorityClass,
             blockId.Lod,
             farthestFirst ? -distance : distance,
             token);
@@ -4506,6 +4579,11 @@ public partial class TerrainLodManager : Node3D
         if (blockId.Lod > GetMaxCollisionLod())
         {
             return false;
+        }
+
+        if (DoesBlockOverlapNearPlayerGuarantee(blockId))
+        {
+            return true;
         }
 
         float referenceSpan = GetLocalCoverageReferenceSpan();
@@ -5043,6 +5121,12 @@ public partial class TerrainLodManager : Node3D
         bool physicsReady = true;
         string visualReason = "ready";
         string physicsReason = "ready";
+        bool relaxNearPlayerVisualCoverage =
+            outgoingBlockId.Lod == FinestTerrainLod + 1 &&
+            DoesBlockOverlapNearPlayerGuarantee(outgoingBlockId);
+        bool nearPlayerVisualReady = true;
+        string nearPlayerVisualReason = "ready";
+        bool hasNearPlayerSuccessor = false;
 
         foreach (TerrainBlockId successorId in successors)
         {
@@ -5055,6 +5139,13 @@ public partial class TerrainLodManager : Node3D
 
             successorIdsBuilder.Append(successorId);
             successorLodsBuilder.Append(successorId.Lod);
+            bool overlapsNearPlayerGuarantee =
+                relaxNearPlayerVisualCoverage &&
+                DoesBlockOverlapNearPlayerGuarantee(successorId);
+            if (overlapsNearPlayerGuarantee)
+            {
+                hasNearPlayerSuccessor = true;
+            }
 
             if (!_blocks.TryGetValue(successorId, out TerrainBlockData successor))
             {
@@ -5069,6 +5160,12 @@ public partial class TerrainLodManager : Node3D
                 {
                     physicsReady = false;
                     physicsReason = "successor_missing";
+                }
+
+                if (overlapsNearPlayerGuarantee && nearPlayerVisualReady)
+                {
+                    nearPlayerVisualReady = false;
+                    nearPlayerVisualReason = "near_player_successor_missing";
                 }
 
                 continue;
@@ -5099,6 +5196,12 @@ public partial class TerrainLodManager : Node3D
                 {
                     physicsReady = false;
                     physicsReason = "successor_not_visible";
+                }
+
+                if (overlapsNearPlayerGuarantee && nearPlayerVisualReady)
+                {
+                    nearPlayerVisualReady = false;
+                    nearPlayerVisualReason = "near_player_successor_not_visible";
                 }
 
                 continue;
@@ -5136,6 +5239,14 @@ public partial class TerrainLodManager : Node3D
                 physicsReady = false;
                 physicsReason = "successor_collision_missing";
             }
+        }
+
+        if (relaxNearPlayerVisualCoverage && hasNearPlayerSuccessor)
+        {
+            visualReady = nearPlayerVisualReady;
+            visualReason = nearPlayerVisualReady
+                ? "near_player_visual_coverage_ready"
+                : nearPlayerVisualReason;
         }
 
         return new TerrainLodSuccessorCoverageStatus(
@@ -6270,6 +6381,182 @@ public partial class TerrainLodManager : Node3D
                block.Renderer.HasVisuals;
     }
 
+    private int GetNearPlayerGuaranteeRadius()
+    {
+        return Mathf.Max(0, NearPlayerGuaranteeRadiusXZ);
+    }
+
+    private float GetNearPlayerGuaranteeHorizontalRadius()
+    {
+        float finestSpan = TerrainMetrics.GetBlockSpan(_config, FinestTerrainLod);
+        return (GetNearPlayerGuaranteeRadius() + 0.5f) * finestSpan;
+    }
+
+    private float GetNearPlayerGuaranteeVerticalPadding()
+    {
+        float finestSpan = TerrainMetrics.GetBlockSpan(_config, FinestTerrainLod);
+        return Mathf.Max(finestSpan, Mathf.Max(1, NearPlayerGuaranteeVerticalPaddingBlocks) * finestSpan);
+    }
+
+    private HashSet<TerrainBlockId> BuildNearPlayerGuaranteedFinestSet(Vector3 viewerPosition)
+    {
+        HashSet<TerrainBlockId> guaranteed = new();
+        float horizontalRadius = GetNearPlayerGuaranteeHorizontalRadius();
+        if (horizontalRadius <= 0.0f)
+        {
+            _nearPlayerGuaranteeBounds = default;
+            return guaranteed;
+        }
+
+        TerrainBlockId minHorizontalBlock = TerrainMetrics.GetBlockForWorldPosition(
+            _config,
+            FinestTerrainLod,
+            new Vector3(viewerPosition.X - horizontalRadius, viewerPosition.Y, viewerPosition.Z - horizontalRadius));
+        TerrainBlockId maxHorizontalBlock = TerrainMetrics.GetBlockForWorldPosition(
+            _config,
+            FinestTerrainLod,
+            new Vector3(viewerPosition.X + horizontalRadius, viewerPosition.Y, viewerPosition.Z + horizontalRadius));
+        float finestSpan = TerrainMetrics.GetBlockSpan(_config, FinestTerrainLod);
+        float centerSurfaceY = _mesher.SampleSurfaceHeight(viewerPosition.X, viewerPosition.Z);
+        float minSurfaceY = Mathf.Min(viewerPosition.Y, centerSurfaceY);
+        float maxSurfaceY = Mathf.Max(viewerPosition.Y, centerSurfaceY);
+        for (int z = minHorizontalBlock.Index.Z; z <= maxHorizontalBlock.Index.Z; z++)
+        {
+            for (int x = minHorizontalBlock.Index.X; x <= maxHorizontalBlock.Index.X; x++)
+            {
+                TerrainBlockId sampleBlock = new(FinestTerrainLod, new Vector3I(x, 0, z));
+                Vector3 sampleOrigin = TerrainMetrics.GetBlockOrigin(_config, sampleBlock);
+                float sampleX = sampleOrigin.X + (finestSpan * 0.5f);
+                float sampleZ = sampleOrigin.Z + (finestSpan * 0.5f);
+                float surfaceY = _mesher.SampleSurfaceHeight(sampleX, sampleZ);
+                minSurfaceY = Mathf.Min(minSurfaceY, surfaceY);
+                maxSurfaceY = Mathf.Max(maxSurfaceY, surfaceY);
+            }
+        }
+
+        float verticalPadding = GetNearPlayerGuaranteeVerticalPadding();
+        float minY = minSurfaceY - verticalPadding;
+        float maxY = maxSurfaceY + verticalPadding;
+        _nearPlayerGuaranteeBounds = new Aabb(
+            new Vector3(viewerPosition.X - horizontalRadius, minY, viewerPosition.Z - horizontalRadius),
+            new Vector3(horizontalRadius * 2.0f, Mathf.Max(finestSpan, maxY - minY), horizontalRadius * 2.0f));
+        foreach (TerrainBlockId blockId in EnumerateBlocksOverlappingBounds(_nearPlayerGuaranteeBounds, FinestTerrainLod))
+        {
+            guaranteed.Add(blockId);
+        }
+
+        return guaranteed;
+    }
+
+    private static void ReplaceSet(HashSet<TerrainBlockId> destination, IEnumerable<TerrainBlockId> source)
+    {
+        destination.Clear();
+        foreach (TerrainBlockId blockId in source)
+        {
+            destination.Add(blockId);
+        }
+    }
+
+    private bool IsNearPlayerGuaranteedBlock(TerrainBlockId blockId)
+    {
+        return blockId.Lod == FinestTerrainLod && _nearPlayerGuaranteedBlocks.Contains(blockId);
+    }
+
+    private bool ShouldFastLanePromotion(TerrainBlockId blockId)
+    {
+        return blockId.Lod == FinestTerrainLod &&
+               (IsNearPlayerGuaranteedBlock(blockId) ||
+                DoesBlockOverlapNearPlayerGuarantee(GetParentBlock(blockId)));
+    }
+
+    private bool DoesBlockOverlapNearPlayerGuarantee(TerrainBlockId blockId)
+    {
+        return _nearPlayerGuaranteeBounds.Size != Vector3.Zero &&
+               TryIntersectBounds(TerrainMetrics.GetBlockBounds(_config, blockId), _nearPlayerGuaranteeBounds, out _);
+    }
+
+    private void FastLaneNearPlayerGuaranteedPromotions()
+    {
+        foreach (TerrainBlockId blockId in _desiredBlocks)
+        {
+            if (!ShouldFastLanePromotion(blockId))
+            {
+                continue;
+            }
+
+            if (!_blocks.TryGetValue(blockId, out TerrainBlockData block))
+            {
+                EnqueueCreateDispatch(blockId, urgent: true);
+                continue;
+            }
+
+            switch (block.State)
+            {
+                case TerrainBlockState.Requested:
+                    if (!block.FieldBuildRunning)
+                    {
+                        EnqueueFieldBuildDispatch(block.Id, urgent: true);
+                    }
+
+                    break;
+                case TerrainBlockState.FieldReady:
+                    if (!block.MeshBuildRunning)
+                    {
+                        EnqueueMeshBuildDispatch(block.Id, urgent: true);
+                    }
+
+                    break;
+                case TerrainBlockState.MeshReady:
+                    EnqueueCommitDispatch(block.Id, urgent: true);
+                    break;
+                case TerrainBlockState.Visible:
+                case TerrainBlockState.Releasable:
+                    if (block.Renderer != null &&
+                        IsInstanceValid(block.Renderer) &&
+                        block.TriangleCount > 0 &&
+                        ShouldIncludeCollision(block.Id) &&
+                        !block.Renderer.HasCollision &&
+                        !block.CollisionPending)
+                    {
+                        block.MarkCollisionPending();
+                    }
+
+                    if (block.CollisionPending && block.IsCollisionDispatchEligible(_currentTimeSeconds))
+                    {
+                        EnqueueCollisionDispatch(block.Id, urgent: true);
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    private void TryHideNearPlayerGuaranteedSupersededParents()
+    {
+        if (_nearPlayerGuaranteedBlocks.Count == 0)
+        {
+            return;
+        }
+
+        HashSet<TerrainBlockId> candidates = new();
+        foreach (TerrainBlockId blockId in _nearPlayerGuaranteedBlocks)
+        {
+            TerrainBlockId current = blockId;
+            while (current.Lod < GetCoarsestLod())
+            {
+                current = GetParentBlock(current);
+                candidates.Add(current);
+            }
+        }
+
+        List<TerrainBlockId> ordered = new(candidates);
+        ordered.Sort(CompareTerrainBlockIds);
+        foreach (TerrainBlockId candidate in ordered)
+        {
+            TryHideSupersededBlock(candidate);
+        }
+    }
+
     private void TryHideSupersededCoverageAround(TerrainBlockId blockId)
     {
         TryHideSupersededBlock(blockId);
@@ -6392,7 +6679,7 @@ public partial class TerrainLodManager : Node3D
         _lastCommitCount++;
         if (includeCollision)
         {
-            EnqueueCollisionDispatch(block.Id);
+            EnqueueCollisionDispatch(block.Id, urgent: ShouldFastLanePromotion(block.Id));
         }
 
         _lastCommitSummary = $"{block.Id} tri {block.TriangleCount} {(includeCollision ? "collision_queued" : "visual_only")}";
